@@ -1,0 +1,49 @@
+using System;
+
+namespace CodeBrix.Audio.Wave.SampleProviders; //was previously: NAudio.Wave.SampleProviders;
+
+/// <summary>
+/// Very simple sample provider supporting adjustable gain
+/// </summary>
+public class VolumeSampleProvider : ISampleProvider
+{
+    private readonly ISampleProvider source;
+
+    /// <summary>
+    /// Initializes a new instance of VolumeSampleProvider
+    /// </summary>
+    /// <param name="source">Source sample source</param>
+    public VolumeSampleProvider(ISampleProvider source)
+    {
+        this.source = source;
+        Volume = 1.0f;
+    }
+
+    /// <summary>
+    /// WaveFormat
+    /// </summary>
+    public WaveFormat WaveFormat => source.WaveFormat;
+
+    /// <summary>
+    /// Reads samples from this sample provider into a span
+    /// </summary>
+    /// <param name="buffer">Sample buffer to read into</param>
+    /// <returns>The number of samples read</returns>
+    public int Read(Span<float> buffer)
+    {
+        int samplesRead = source.Read(buffer);
+        if (Volume != 1f)
+        {
+            for (int n = 0; n < samplesRead; n++)
+            {
+                buffer[n] *= Volume;
+            }
+        }
+        return samplesRead;
+    }
+
+    /// <summary>
+    /// Allows adjusting the volume, 1.0f = full volume
+    /// </summary>
+    public float Volume { get; set; }
+}

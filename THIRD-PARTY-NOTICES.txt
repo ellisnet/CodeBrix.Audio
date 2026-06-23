@@ -1,0 +1,150 @@
+THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
+
+CodeBrix.Audio is a fully managed, cross-platform audio file library for .NET
+that reads WAV and MP3 waveform audio, reads and writes Standard MIDI Files,
+reads MP3 ID3v2 tags, and exposes DSP primitives for audio analysis.
+
+CodeBrix.Audio incorporates source code adapted from the open-source projects
+listed below. All incorporated source is distributed under the MIT License,
+which is compatible with the MIT License of CodeBrix.Audio itself. The original
+copyright notices and permission notices are reproduced in full below, as the
+MIT License requires them to travel with the source.
+
+For every incorporated file, the C# `namespace` line carries a provenance
+comment of the form `//was previously: <original.namespace>;` recording the
+upstream namespace the file was adapted from. The original namespaces were
+renamed to the `CodeBrix.Audio.*` namespace hierarchy; framework-selection
+`#if`/`#else` conditional-compilation branches that never execute on .NET 10
+were stripped to the live branch; nullable-reference-type annotations were
+removed to match the CodeBrix family convention; and XML documentation comments
+were added where the upstream public members lacked them.
+
+================================================================================
+1. NAudio
+================================================================================
+
+Project:    NAudio
+Source URL: https://github.com/naudio/NAudio
+Version:    3.0.0 (pre-release / "preview" line; main branch as of 2026-06)
+Authors:    Mark Heath and NAudio contributors
+License:    MIT
+
+Incorporated source (production):
+  Adapted from the NAudio.Core and NAudio.Midi projects. The portions brought
+  into CodeBrix.Audio are limited to the fully managed, cross-platform file
+  handling, codec, DSP, and MIDI code:
+    - WAV reading/writing and the wave-stream / wave-format / sample-provider
+      / wave-provider plumbing (NAudio.Core/Wave/*).
+    - MP3 frame parsing and the managed MP3 file-reader plumbing, including
+      ID3v2 tag reading (NAudio.Core/FileFormats/Mp3/*).
+    - G.711 A-law / mu-law (and related) codecs required by the WAV read path
+      (NAudio.Core/Codecs/*).
+    - DSP primitives for analysis: FFT, biquad filters, envelope follower,
+      voice-activity detection, and supporting math/utility types
+      (NAudio.Core/Dsp/*, NAudio.Core/Utils/*).
+    - Standard MIDI File reading and writing: MidiFile, the MidiEvent type
+      hierarchy, and MidiEventCollection (NAudio.Midi/*).
+
+Incorporated source (tests):
+    The test project under tests/CodeBrix.Audio.Tests contains test files and
+    test helpers adapted from the NAudio.Core.Tests project (MIT). They were
+    converted from NUnit to xUnit v3 + SilverAssertions and re-namespaced to
+    CodeBrix.Audio.Tests.*. Test code is not redistributed in the NuGet package.
+
+Modifications made during the port:
+    - Namespaces renamed from NAudio.* to CodeBrix.Audio.* (see provenance
+      comments on each file's namespace line).
+    - Windows-only and other platform-specific NAudio projects (NAudio.WinMM,
+      NAudio.Wasapi, NAudio.Asio, NAudio.Dmo, NAudio.Alsa, NAudio.WinForms,
+      etc.) were NOT incorporated; CodeBrix.Audio contains no audio-device
+      playback or recording code.
+    - NAudio's ACM/DMO-based MP3 decoding (Windows-only) was NOT incorporated;
+      MP3 decoding is provided by the managed NLayer decoder (see entry 2).
+    - NAudio.Core file-format parsers and engines unrelated to the supported
+      feature set (SoundFont/SFZ parsing, the sampler/synthesis engine,
+      sequencing, and effects) were NOT incorporated.
+    - Framework-selection conditional-compilation branches that do not execute
+      on .NET 10 were stripped; nullable-reference-type annotations removed;
+      file-scoped namespaces applied; XML doc comments added as needed.
+
+----- NAudio MIT License -----
+
+Copyright 2008-2026 Mark Heath
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+================================================================================
+2. NLayer
+================================================================================
+
+Project:    NLayer (and NLayer.NAudioSupport)
+Source URL: https://github.com/naudio/NLayer
+Version:    1.16.0 (NLayer) / 1.4.0 (NLayer.NAudioSupport)
+Authors:    Mark Heath, Andrew Ward & Contributors
+License:    MIT
+
+Incorporated source (production):
+    - The fully managed MPEG-1/2/2.5 Layer I/II/III audio decoder (NLayer/*).
+    - The NAudio integration shim that adapts the NLayer decoder to NAudio's
+      MP3 frame-decompressor interface (NLayer.NAudioSupport/*), enabling
+      cross-platform MP3 reading without ACM/DMO or any native code.
+
+Modifications made during the port:
+    - Namespaces renamed from NLayer.* to CodeBrix.Audio.* (see provenance
+      comments on each file's namespace line).
+    - The NAudio integration shim was rewired to the CodeBrix.Audio MP3
+      frame-decompressor interface adapted from NAudio (entry 1).
+    - Framework-selection conditional-compilation branches that do not execute
+      on .NET 10 were stripped; nullable-reference-type annotations removed;
+      file-scoped namespaces applied; XML doc comments added as needed.
+
+Embedded third-party portions (Fluendo S.A.):
+    Two files in the NLayer-derived Layer III decoder contain portions that are
+    courtesy of Fluendo, S.A., copyright (c) 2005-2012 Fluendo S.A., dual
+    licensed as Ms-PL and MIT. Both licenses are permissive and compatible with
+    the MIT outbound license of CodeBrix.Audio. The Fluendo copyright notice and
+    MIT permission notice are preserved verbatim in the header of each file:
+      - src/CodeBrix.Audio/Mpeg/Decoder/LayerDecoderBase.cs
+      - src/CodeBrix.Audio/Mpeg/Decoder/LayerIIIDecoder.cs
+    The full MIT permission text reproduced in those headers is identical in
+    substance to the NLayer MIT License reproduced below; the Ms-PL alternative
+    is available from https://opensource.org/license/ms-pl-html.
+
+----- NLayer MIT License -----
+
+MIT License
+
+Copyright (c) 2018 Mark Heath, Andrew Ward & Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+
+If you have any questions about any third-party code or services referenced
+here, or if you believe that any third-party code has been included in
+CodeBrix.Audio in error, please open a new issue at:
+https://github.com/ellisnet/CodeBrix.Audio/issues
+
+================================================================================
+
+END OF THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
