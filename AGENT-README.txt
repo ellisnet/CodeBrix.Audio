@@ -25,6 +25,12 @@ NON-GOALS (intentionally NOT in this library):
   - Waveform formats other than WAV and MP3.
   - Audio-to-MIDI transcription (onset/pitch detection). The DSP primitives
     needed to build it are present, but the transcriber itself is future work.
+  - Sample-rate conversion / resampling. The NAudio WDL resampler was not
+    incorporated, so there is no built-in resampler; convert sample rates with
+    your own code or another library if you need it.
+  - General N-source mixing of sample providers. The float MixingSampleProvider
+    (which needed System.Numerics.Tensors) was not incorporated; mixing is
+    available at the IWaveProvider level via MixingWaveProvider32.
 
 
 INSTALLATION
@@ -84,6 +90,117 @@ DSP / analysis primitives (CodeBrix.Audio.Dsp):
 Error model: invalid/corrupt files throw standard exceptions (e.g.
 FormatException, EndOfStreamException, ArgumentException). Readers/writers are
 IDisposable; dispose them (or use `using`) to release the underlying stream.
+
+
+SAMPLE CODE
+--------------------------------------------------------------------------------
+Read a WAV or MP3 file as 32-bit float samples (simplest path):
+
+    using CodeBrix.Audio.Wave;
+
+    using var reader = new AudioFileReader("track.mp3");   // or "clip.wav"
+    // reader.WaveFormat is 32-bit IEEE float; .SampleRate, .Channels available.
+    var buffer = new float[reader.WaveFormat.SampleRate * reader.WaveFormat.Channels];
+    int samplesRead;
+    while ((samplesRead = reader.Read(buffer)) > 0)
+    {
+        // buffer[0..samplesRead] holds interleaved float samples in [-1, 1]
+    }
+    // reader.Volume = 0.5f;  // optional gain applied to returned samples
+
+Read a WAV with the lower-level reader, converting to float samples:
+
+    using var wav = new WaveFileReader("clip.wav");
+    var samples = wav.ToSampleProvider();                  // ISampleProvider (float)
+    var buf = new float[4096];
+    int n = samples.Read(buf);
+
+Write a WAV file:
+
+    var format = new WaveFormat(sampleRate: 44100, bits: 16, channels: 1);
+    using (var writer = new WaveFileWriter("out.wav", format))
+    {
+        float[] mono = GenerateSamples();                  // your samples in [-1, 1]
+        writer.WriteSamples(mono, 0, mono.Length);
+    }
+    // Or pipe an ISampleProvider straight to disk:
+    // WaveFileWriter.CreateWaveFile16("out.wav", someSampleProvider);
+
+Decode MP3 explicitly (fully managed; no native codec needed):
+
+    using var mp3 = new Mp3FileReader("song.mp3");          // WaveStream of PCM
+    var floats = mp3.ToSampleProvider();
+
+Read MP3 ID3v2 metadata:
+
+    using var fs = File.OpenRead("song.mp3");
+    var tag = Id3v2Tag.ReadTag(fs);                         // null if no ID3v2 tag
+    if (tag != null) { /* tag.RawData is the raw tag bytes */ }
+
+Write and read a Standard MIDI File:
+
+    using CodeBrix.Audio.Midi;
+    using System.Linq;
+
+    var events = new MidiEventCollection(midiFileType: 0, deltaTicksPerQuarterNote: 480);
+    var track = events.AddTrack();
+    track.Add(new TempoEvent(microsecondsPerQuarterNote: 500000, absoluteTime: 0)); // 120 BPM
+    track.Add(new NoteOnEvent(absoluteTime: 0, channel: 1, noteNumber: 60,
+                              velocity: 100, duration: 480));                        // middle C
+    events.PrepareForExport();              // REQUIRED before Export (adds note-offs + end-of-track)
+    MidiFile.Export("out.mid", events);
+
+    var midi = new MidiFile("out.mid", strictChecking: false);
+    foreach (var noteOn in midi.Events[0].OfType<NoteOnEvent>())
+        Console.WriteLine($"{noteOn.NoteName} vel={noteOn.Velocity} @ {noteOn.AbsoluteTime}");
+
+DSP / analysis primitives:
+
+    using CodeBrix.Audio.Dsp;
+
+    // FFT magnitude spectrum (size must be a power of two; m = log2(size))
+    const int m = 10, size = 1 << m;
+    var bins = new Complex[size];
+    for (int i = 0; i < size; i++) bins[i].X = samples[i];   // .Y left 0 for real input
+    FastFourierTransform.FFT(forward: true, m, bins);
+    double mag0 = Math.Sqrt(bins[8].X * bins[8].X + bins[8].Y * bins[8].Y);
+
+    // Biquad filter (e.g. isolate a frequency band before onset detection)
+    var lowPass = BiQuadFilter.LowPassFilter(sampleRate: 44100, cutoffFrequency: 1000f, q: 0.707f);
+    float filtered = lowPass.Transform(inputSample);
+
+    // Envelope follower (good basis for drum-hit / onset detection)
+    var env = new EnvelopeFollower(attackMilliseconds: 5f, releaseMilliseconds: 50f, sampleRate: 44100);
+    float amplitude = env.ProcessSample(inputSample);
+
+    // Voice/activity detection (energy-based; needs a quiet stretch first to learn the floor)
+    var vad = new VoiceActivityDetector(sampleRate: 44100);
+    bool active = vad.Process(inputSample);
+
+
+COMMON PITFALLS
+--------------------------------------------------------------------------------
+  - Float vs bytes: WaveFileReader/Mp3FileReader are WaveStreams that yield raw
+    PCM BYTES. To get normalized float samples call .ToSampleProvider(), or just
+    use AudioFileReader (which always exposes 32-bit float).
+  - WAV encodings: AudioFileReader and the float pipeline support PCM and IEEE
+    float WAV only. A-law / mu-law (and other non-PCM) WAV files THROW
+    (InvalidOperationException) - there is no managed codec conversion. (A-law /
+    mu-law decoders exist under CodeBrix.Audio.Codecs but are not auto-wired.)
+  - MP3 coverage: decoding is fully managed (NLayer) and covers MPEG-1/2/2.5
+    Layer I/II/III. There is no Windows ACM/DMO/Media Foundation path.
+  - Dispose readers and writers (use `using`). A WaveFileWriter only flushes a
+    valid RIFF header on Dispose - an undisposed writer produces a corrupt file.
+  - MIDI export: call MidiEventCollection.PrepareForExport() before
+    MidiFile.Export(). A type-0 collection may contain only one track (Export
+    throws otherwise); use type 1 for multi-track files. NoteOnEvent
+    auto-creates its paired note-off.
+  - No resampling: there is no built-in sample-rate converter (see NON-GOALS).
+  - DSP is primitives only: there is no turnkey onset/pitch/beat detector or
+    audio-to-MIDI transcriber - build those on top of the FFT / filters /
+    envelope follower.
+  - Threading: a single reader/stream instance is not thread-safe; give each
+    thread its own reader.
 
 
 CODING CONVENTIONS (CodeBrix family)
