@@ -23,34 +23,13 @@ DSP, and MIDI code was incorporated; all audio-device playback/recording code
 and all Windows-only interop were intentionally left out. See
 THIRD-PARTY-NOTICES.txt for full attribution.
 
-NON-GOALS (intentionally NOT in this library):
-  - Audio playback or recording to/from sound devices. Use CodeBrix's media
-    playback library for that.
-  - MP3 decoding via Windows ACM/DMO. MP3 decoding is fully managed (NLayer).
-  - SoundFont/SFZ parsing, software synthesis/sampling, sequencing, effects.
-  - Waveform formats other than WAV and MP3.
-  - Audio-to-MIDI transcription (onset/pitch detection). The DSP primitives
-    needed to build it are present, but the transcriber itself is future work.
-  - Sample-rate conversion / resampling. The NAudio WDL resampler was not
-    incorporated, so there is no built-in resampler; convert sample rates with
-    your own code or another library if you need it.
-  - General N-source mixing of sample providers. The float MixingSampleProvider
-    (which needed System.Numerics.Tensors) was not incorporated; mixing is
-    available at the IWaveProvider level via MixingWaveProvider32.
-
-  (These NON-GOALS describe the CodeBrix.Audio assembly. Several of them —
-  playback/recording, SoundFont/synthesis, sequencing, effects, mixing — ARE
-  provided by the bundled CodeBrix.Audio.Engine assembly; see below.)
-
-
 ================================================================================
 CODEBRIX.AUDIO.ENGINE (BUNDLED IN THE SAME PACKAGE)
 ================================================================================
 The CodeBrix.Audio.MitLicenseForever package ships a SECOND assembly,
 CodeBrix.Audio.Engine, alongside CodeBrix.Audio. It is a full cross-platform
-audio ENGINE — the capabilities listed as NON-GOALS above (device playback and
-recording, SoundFont/synthesis, sequencing, effects, editing/mixing) live here,
-plus MIDI, metadata, and visualization.
+audio ENGINE — device playback and recording, SoundFont/synthesis, sequencing,
+effects, and editing/mixing all live here, plus MIDI, metadata, and visualization.
 
   - Namespaces: CodeBrix.Audio.Engine.* — entirely separate from
     CodeBrix.Audio.*. The two assemblies share no types, and there is deliberate
@@ -94,7 +73,9 @@ Target framework: .NET 10.0 or higher.
 
 KEY NAMESPACES
 --------------------------------------------------------------------------------
-  using CodeBrix.Audio.Wave;       // readers/writers, WaveFormat, MP3 frames, ID3
+  using CodeBrix.Audio.Wave;       // readers/writers, WaveFormat, MP3 frames, ID3,
+                                   //   playback (WaveOutEvent, SharedAudioOutput)
+  using CodeBrix.Audio.Playback;   // long-running WAV/MP3 file player (AudioFilePlayer)
   using CodeBrix.Audio.Midi;       // MIDI file read/write + event hierarchy
   using CodeBrix.Audio.Dsp;        // FFT, biquad filters, analysis primitives
 
@@ -115,6 +96,25 @@ Reading audio (WAV or MP3):
 
 Writing audio:
   - WaveFileWriter        : writes PCM/IEEE-float samples to a .wav file.
+
+Playback (cross-platform, via the bundled engine):
+  - WaveOutEvent          : plays an IWaveProvider/ISampleProvider to the default
+                            output device (Init/Play/Pause/Stop/Volume/PlaybackStopped).
+                            NAudio-shaped, but cross-platform (Windows/macOS/Linux).
+                            Every instance is a VOICE in one shared output device
+                            (not a device of its own), so overlapping many sounds is
+                            cheap mixing rather than many device opens. Best for short,
+                            possibly-overlapping sound effects.
+  - AudioFilePlayer       : (namespace CodeBrix.Audio.Playback) a long-running WAV/MP3
+                            file player with media-transport controls — Load, Play/Pause/
+                            Stop, Seek to a timecode, Volume, and readable Position and
+                            Duration (TimeSpan) for a scrubber/tracker UI. Streams from
+                            disk (low memory for long tracks) and mixes into the same
+                            SharedAudioOutput. A friendly wrapper over the engine's
+                            SoundPlayer, so consumers never touch CodeBrix.Audio.Engine.*.
+  - SharedAudioOutput     : the one shared output WaveOutEvent and AudioFilePlayer mix
+                            into. Optional: Configure(sampleRate[, channels]) once at
+                            start to pin the format; Shutdown() to release it.
 
 WaveFormat:
   - WaveFormat            : sample rate, channel count, bit depth, encoding.
@@ -173,6 +173,34 @@ Write a WAV file:
     }
     // Or pipe an ISampleProvider straight to disk:
     // WaveFileWriter.CreateWaveFile16("out.wav", someSampleProvider);
+
+Play a sound to the speakers (cross-platform, via the bundled engine):
+
+    using CodeBrix.Audio.Wave;
+
+    var player = new WaveOutEvent();
+    player.Init(new WaveFileReader("clip.wav"));   // any IWaveProvider/ISampleProvider
+    player.PlaybackStopped += (s, e) => { /* ended; e.Exception is null on normal end */ };
+    player.Play();                                 // Play / Pause / Stop; player.Volume = 0.5f;
+    // ... player.Dispose() when finished.
+
+    // Overlap many short sounds cheaply — each WaveOutEvent is a voice in ONE shared
+    // output device, not a separate device. Apps that overlap many sounds should pin
+    // the output format ONCE at start-up so no source is rejected for a rate mismatch:
+    SharedAudioOutput.Configure(sampleRate: 48000);   // call before the first Play()
+
+Play a long audio file with transport / seek (a media player):
+
+    using CodeBrix.Audio.Playback;
+
+    var media = new AudioFilePlayer();
+    media.Load("song.mp3");                  // .wav or .mp3; Duration is available now
+    media.PlaybackEnded += (s, e) => { /* reached the natural end */ };
+    media.Play();
+    // media.Position and media.Duration are TimeSpans → drive a scrubber/tracker UI.
+    // media.Seek(TimeSpan.FromSeconds(83));  // jump to 1:23
+    // media.Volume = 0.7f;  media.Pause();  media.Stop();  media.IsLooping = true;
+    // media.Dispose() when finished.
 
 Decode MP3 explicitly (fully managed; no native codec needed):
 
@@ -243,7 +271,17 @@ COMMON PITFALLS
     MidiFile.Export(). A type-0 collection may contain only one track (Export
     throws otherwise); use type 1 for multi-track files. NoteOnEvent
     auto-creates its paired note-off.
-  - No resampling: there is no built-in sample-rate converter (see NON-GOALS).
+  - No resampling in the managed CodeBrix.Audio layer: it has no built-in
+    sample-rate converter. (The bundled Engine does resample — e.g. AudioFilePlayer
+    plays a file at any rate; only the WaveOutEvent SFX path requires a rate match.)
+  - Shared playback output: every WaveOutEvent is a voice in ONE shared device
+    (32-bit float; stereo; sample rate adopted from the first sound played, or pinned
+    with SharedAudioOutput.Configure). Because there is no resampler, a source whose
+    sample rate differs from the running output is rejected by Init (rather than played
+    at the wrong pitch) — pre-convert it, or standardise your sound-effect rate. Mono
+    and stereo sources are matched to the output automatically. The audio callback runs
+    on a real-time thread, so a source's Read should not block or do disk I/O (preload
+    short, frequently-triggered effects into memory).
   - DSP is primitives only: there is no turnkey onset/pitch/beat detector or
     audio-to-MIDI transcriber - build those on top of the FFT / filters /
     envelope follower.
