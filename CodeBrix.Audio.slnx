@@ -8,6 +8,8 @@
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="tests/CodeBrix.Audio.Tests/CodeBrix.Audio.Tests.csproj" />
+    <Project Path="tests/CodeBrix.Audio.Engine.Tests/CodeBrix.Audio.Engine.Tests.csproj" />
   </Folder>
   <Project Path="src/CodeBrix.Audio/CodeBrix.Audio.csproj" />
+  <Project Path="src/CodeBrix.Audio.Engine/CodeBrix.Audio.Engine.csproj" />
 </Solution>

@@ -53,18 +53,18 @@
     <Product>CodeBrix.Audio</Product>
     <Title>CodeBrix.Audio</Title>
     <Authors>Jeremy Ellis</Authors>
-    <Description>A fully managed, cross-platform audio file library for .NET. Reads WAV and MP3 waveform audio, reads and writes Standard MIDI Files, reads MP3 ID3v2 tags, and exposes a set of DSP primitives (FFT, biquad filters, envelope follower, voice-activity detection) for audio analysis. Works the same on Windows, macOS, and Linux with no native dependencies.</Description>
+    <Description>CodeBrix.Audio is a fully managed, cross-platform audio file library for .NET: it reads WAV and MP3 waveform audio, reads and writes Standard MIDI Files, reads MP3 ID3v2 tags, and exposes a set of DSP primitives (FFT, biquad filters, envelope follower, voice-activity detection) for audio analysis. This package also bundles CodeBrix.Audio.Engine, a cross-platform audio engine — playback, recording, effects, editing/mixing, MIDI, synthesis, and visualization — built on a bundled native miniaudio backend for Windows, macOS, and Linux.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ellisnet/CodeBrix.Audio</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ellisnet/CodeBrix.Audio</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageIcon>icon-codebrix-128.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Copyright>Copyright (c) Mark Heath, Andrew Ward and NAudio/NLayer contributors. Copyright (c) 2026 Jeremy Ellis and contributors.</Copyright>
+    <Copyright>Copyright (c) 2026 Jeremy Ellis and contributors.</Copyright>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
-    <PackageTags>audio;wav;mp3;midi;waveform;dsp;id3;CodeBrix</PackageTags>
+    <PackageTags>audio;wav;mp3;midi;waveform;dsp;id3;playback;recording;engine;miniaudio;synthesis;CodeBrix</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
@@ -72,6 +72,36 @@
     <None Include="..\..\README.md" Pack="true" PackagePath="" />
     <None Include="..\..\AGENT-README.txt" Pack="true" PackagePath="" />
     <None Include="..\..\THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <!--
+    Bundle the CodeBrix.Audio.Engine assembly (vendored SoundFlow v1.4.1) into THIS
+    single CodeBrix.Audio.MitLicenseForever package. The Engine is referenced privately
+    so it is never surfaced as a NuGet dependency; its built assembly + XML docs are
+    injected into lib/, and its native miniaudio runtimes are packed under
+    runtimes/<rid>/native/. The standard NuGet native-asset resolution plus the Engine's
+    own DllImportResolver (Backends/MiniAudio/Native.cs) load the right binary per platform.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\CodeBrix.Audio.Engine\CodeBrix.Audio.Engine.csproj" PrivateAssets="all" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludeEngineAssemblyInPackage</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+
+  <Target Name="IncludeEngineAssemblyInPackage">
+    <ItemGroup>
+      <BuildOutputInPackage Include="$(OutputPath)CodeBrix.Audio.Engine.dll" />
+      <BuildOutputInPackage Include="$(OutputPath)CodeBrix.Audio.Engine.xml"
+                            Condition="Exists('$(OutputPath)CodeBrix.Audio.Engine.xml')" />
+    </ItemGroup>
+  </Target>
+
+  <ItemGroup>
+    <None Include="..\CodeBrix.Audio.Engine\Backends\MiniAudio\runtimes\**\*.*"
+          Pack="true"
+          PackagePath="runtimes\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

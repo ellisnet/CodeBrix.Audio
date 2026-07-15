@@ -1,23 +1,31 @@
 THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 
-CodeBrix.Audio is a fully managed, cross-platform audio file library for .NET
-that reads WAV and MP3 waveform audio, reads and writes Standard MIDI Files,
-reads MP3 ID3v2 tags, and exposes DSP primitives for audio analysis.
+The CodeBrix.Audio.MitLicenseForever NuGet package ships two assemblies:
 
-CodeBrix.Audio incorporates source code adapted from the open-source projects
-listed below. All incorporated source is distributed under the MIT License,
-which is compatible with the MIT License of CodeBrix.Audio itself. The original
-copyright notices and permission notices are reproduced in full below, as the
-MIT License requires them to travel with the source.
+  * CodeBrix.Audio        — a fully managed, cross-platform audio FILE library
+                            (WAV/MP3 reading, Standard MIDI File read/write,
+                            MP3 ID3v2 tags, DSP primitives). Contains no native
+                            code. Adapted from NAudio and NLayer (entries 1-2).
+  * CodeBrix.Audio.Engine — a cross-platform audio ENGINE (playback, recording,
+                            effects, editing/mixing, MIDI, synthesis,
+                            visualization) with a bundled native miniaudio
+                            backend for Windows, macOS, and Linux. Vendored from
+                            SoundFlow and miniaudio (entries 3-4).
 
-For every incorporated file, the C# `namespace` line carries a provenance
-comment of the form `//was previously: <original.namespace>;` recording the
-upstream namespace the file was adapted from. The original namespaces were
-renamed to the `CodeBrix.Audio.*` namespace hierarchy; framework-selection
-`#if`/`#else` conditional-compilation branches that never execute on .NET 10
-were stripped to the live branch; nullable-reference-type annotations were
-removed to match the CodeBrix family convention; and XML documentation comments
-were added where the upstream public members lacked them.
+Both assemblies incorporate source code (and, for the Engine, a native library)
+adapted from the open-source projects listed below. Every incorporated project
+is distributed under a license — MIT, or the public-domain Unlicense / MIT-0 —
+that is permissive and compatible with the MIT License of CodeBrix.Audio itself.
+The original copyright and permission notices are reproduced in full below, as
+those licenses require them to travel with the software.
+
+For every incorporated SOURCE file, the C# `namespace` line carries a provenance
+comment of the form `//was previously: <original.namespace>` recording the
+upstream namespace it was adapted from. The exact modifications differ per
+component (namespaces are always renamed to a `CodeBrix.Audio.*` hierarchy; other
+changes — conditional-compilation stripping, nullable-annotation changes,
+doc-comment additions — are made only where noted). See the "Modifications" note
+in each entry below for specifics.
 
 ================================================================================
 1. NAudio
@@ -129,6 +137,143 @@ furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+3. SoundFlow  (vendored as CodeBrix.Audio.Engine)
+================================================================================
+
+Project:    SoundFlow
+Source URL: https://github.com/LSXPrime/SoundFlow
+Version:    1.4.1 (release/v1.4.1, commit a0d1be1)
+Authors:    LSXPrime and SoundFlow contributors
+License:    MIT
+
+Incorporated source (production):
+    SoundFlow's entire core library (its `Src` project) was vendored verbatim to
+    form the CodeBrix.Audio.Engine assembly: the cross-platform audio engine and
+    its miniaudio backend, audio components and providers, modifiers/effects, the
+    editing/mixing engine, metadata (audio-tag, MIDI, and SoundFont reading and
+    writing), the MIDI stack, the synthesis / SoundFont engine, the security
+    features (watermarking, encryption, fingerprinting), and visualization.
+
+    SoundFlow's OPTIONAL add-on projects were NOT incorporated: the WebRTC audio
+    processing extension (Extensions/SoundFlow.Extensions.WebRtc.Apm), the FFmpeg
+    codec (Codecs/SoundFlow.Codecs.FFMpeg), and the PortMidi backend
+    (Midi/SoundFlow.Midi.PortMidi), together with their native libraries. The
+    ONLY native dependency carried into CodeBrix.Audio.Engine is the miniaudio
+    backend (see entry 4).
+
+Modifications made during the port:
+    - Namespaces renamed from SoundFlow.* to CodeBrix.Audio.Engine.* (see the
+      `//was previously:` provenance comment on each file's namespace line).
+    - Target framework moved from net8.0 to net10.0. SoundFlow's other project
+      settings were kept as-is (nullable reference types enabled, implicit usings,
+      unsafe blocks, trim/AOT analyzers) so future re-syncs from upstream stay
+      mechanical: NO nullable annotations were stripped and NO doc comments were
+      added (unlike the NAudio/NLayer port in entries 1-2).
+    - The native backend library was renamed from "miniaudio" to
+      "codebrix_miniaudio" — the P/Invoke library name in Backends/MiniAudio/
+      Native.cs and the CMake LIBRARY_NAME — so the shipped binary never clashes
+      with a stock miniaudio.* that a consuming application might also load.
+    - SoundFlow's native build inputs (its Native/miniaudio-backend C wrapper and
+      CMake project) were vendored under native/miniaudio and pruned to the
+      platforms we ship (Windows, macOS, Linux). The six shipped RIDs are win-x64,
+      win-arm64, linux-x64, linux-arm64, osx-x64, osx-arm64.
+
+Native binaries currently shipped:
+    The codebrix_miniaudio.{dll,so,dylib} binaries committed under
+    src/CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/ are SoundFlow v1.4.1's
+    own prebuilt miniaudio libraries, renamed. They are a stopgap; the sources in
+    native/miniaudio allow rebuilding equivalents from scratch (see entry 4 and
+    native/miniaudio/README.txt).
+
+----- SoundFlow MIT License -----
+
+MIT License
+
+Copyright (c) 2025 LSXPrime
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+================================================================================
+4. miniaudio  (native backend of CodeBrix.Audio.Engine)
+================================================================================
+
+Project:    miniaudio (single-header C audio playback/capture library)
+Source URL: https://github.com/mackron/miniaudio
+Version:    v0.11.24 (development branch), commit
+            80cf7b2deb1c9930fdf0726b3a20ab5e47095067
+Author:     David Reid (mackron)
+License:    Dual-licensed — choose either Public Domain (Unlicense) OR
+            MIT No Attribution (MIT-0). Maximally permissive.
+
+Incorporated:
+    - miniaudio.h is vendored VERBATIM at native/miniaudio/miniaudio-80cf7b2/
+      (the folder name records the exact upstream commit). It is compiled — via
+      SoundFlow's thin MIT-licensed C wrapper native/miniaudio/library.c +
+      library.h (see entry 3) — into the codebrix_miniaudio native library that
+      CodeBrix.Audio.Engine's MiniAudio backend P/Invokes into.
+    - The prebuilt binaries shipped today were built by SoundFlow from this same
+      miniaudio commit.
+
+Modifications:
+    - miniaudio.h itself is UNMODIFIED. The only change is that the build sources
+      it from an in-repo vendored copy rather than a git submodule; see
+      native/miniaudio/README.txt.
+
+----- miniaudio License (SoundFlow and CodeBrix build under this grant) -----
+
+This software is available as a choice of the following licenses. Choose
+whichever you prefer.
+
+===============================================================================
+ALTERNATIVE 1 - Public Domain (www.unlicense.org)
+===============================================================================
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute this
+software, either in source code form or as a compiled binary, for any purpose,
+commercial or non-commercial, and by any means.
+
+In jurisdictions that recognize copyright laws, the author or authors of this
+software dedicate any and all copyright interest in the software to the public
+domain. We make this dedication for the benefit of the public at large and to
+the detriment of our heirs and successors. We intend this dedication to be an
+overt act of relinquishment in perpetuity of all present and future rights to
+this software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <http://unlicense.org/>
+
+===============================================================================
+ALTERNATIVE 2 - MIT No Attribution
+===============================================================================
+Copyright 2025 David Reid
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,

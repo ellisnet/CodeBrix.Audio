@@ -8,8 +8,14 @@ OVERVIEW
 CodeBrix.Audio is a fully managed, cross-platform audio file library for .NET.
 It reads WAV and MP3 waveform audio, reads and writes Standard MIDI Files,
 reads MP3 ID3v2 metadata tags, and exposes a set of DSP primitives for audio
-analysis. It contains no native code and no platform-specific interop, so it
-behaves identically on Windows, macOS, and Linux.
+analysis. The CodeBrix.Audio assembly contains no native code and no
+platform-specific interop, so it behaves identically on Windows, macOS, and Linux.
+
+NOTE: the CodeBrix.Audio.MitLicenseForever package ALSO bundles a second
+assembly, CodeBrix.Audio.Engine — a full audio engine WITH a bundled native
+backend — documented in its own section below ("CODEBRIX.AUDIO.ENGINE"). Unless a
+passage says otherwise, the rest of this document describes the CodeBrix.Audio
+assembly.
 
 The library is adapted from the open-source NAudio and NLayer projects (both
 MIT-licensed). Only the fully managed, cross-platform file-handling, codec,
@@ -31,6 +37,48 @@ NON-GOALS (intentionally NOT in this library):
   - General N-source mixing of sample providers. The float MixingSampleProvider
     (which needed System.Numerics.Tensors) was not incorporated; mixing is
     available at the IWaveProvider level via MixingWaveProvider32.
+
+  (These NON-GOALS describe the CodeBrix.Audio assembly. Several of them —
+  playback/recording, SoundFont/synthesis, sequencing, effects, mixing — ARE
+  provided by the bundled CodeBrix.Audio.Engine assembly; see below.)
+
+
+================================================================================
+CODEBRIX.AUDIO.ENGINE (BUNDLED IN THE SAME PACKAGE)
+================================================================================
+The CodeBrix.Audio.MitLicenseForever package ships a SECOND assembly,
+CodeBrix.Audio.Engine, alongside CodeBrix.Audio. It is a full cross-platform
+audio ENGINE — the capabilities listed as NON-GOALS above (device playback and
+recording, SoundFont/synthesis, sequencing, effects, editing/mixing) live here,
+plus MIDI, metadata, and visualization.
+
+  - Namespaces: CodeBrix.Audio.Engine.* — entirely separate from
+    CodeBrix.Audio.*. The two assemblies share no types, and there is deliberate
+    feature overlap (both have MIDI, WAV/MP3 reading, and an FFT). Picking which
+    library to use for a given task is left to the consumer.
+  - Native dependency: unlike CodeBrix.Audio, the Engine P/Invokes a bundled
+    native library, codebrix_miniaudio (built from miniaudio), shipped for
+    win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, and osx-arm64. The right
+    binary is selected at runtime by the DllImportResolver in
+    Backends/MiniAudio/Native.cs.
+  - Provenance: vendored verbatim from SoundFlow v1.4.1 (LSXPrime/SoundFlow, MIT),
+    with namespaces renamed SoundFlow.* -> CodeBrix.Audio.Engine.* (each file's
+    namespace line carries a `//was previously:` comment). See
+    THIRD-PARTY-NOTICES.txt entries 3-4 and native/miniaudio/README.txt. The
+    native build inputs live under native/miniaudio (miniaudio.h is vendored
+    in-repo at native/miniaudio/miniaudio-80cf7b2/).
+
+CONVENTIONS EXCEPTION: CodeBrix.Audio.Engine intentionally does NOT follow the
+CodeBrix family CODING CONVENTIONS listed below. As a large verbatim vendoring
+(~35k lines) it keeps SoundFlow's original project settings so upstream re-syncs
+stay mechanical:
+  - Nullable reference types are ON (the code uses `?` and `!`); ImplicitUsings
+    is ON; AllowUnsafeBlocks is ON.
+  - Do NOT hand-edit Engine source to match the family style. To update the
+    Engine, re-vendor from a newer SoundFlow tag and re-apply the namespace
+    rename rather than rewriting in place.
+The CODING CONVENTIONS section below applies to the CodeBrix.Audio assembly and
+its tests, NOT to CodeBrix.Audio.Engine.
 
 
 INSTALLATION

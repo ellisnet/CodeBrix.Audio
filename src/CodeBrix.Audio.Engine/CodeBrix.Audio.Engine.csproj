@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    CodeBrix.Audio.Engine — a cross-platform audio engine (playback, recording,
+    effects, editing/mixing, MIDI, synthesis, metadata, visualization) vendored
+    verbatim from SoundFlow v1.4.1 (LSXPrime/SoundFlow, MIT). Namespaces were
+    rebranded SoundFlow.* -> CodeBrix.Audio.Engine.* (see the //was previously:
+    comment on each namespace line). Full provenance and license text live in
+    THIRD-PARTY-NOTICES.txt at the repo root.
+
+    This project INTENTIONALLY diverges from the CodeBrix.Audio family conventions
+    (which are NRT-off, no ImplicitUsings, CS1591-fixed-at-source). Because this is
+    a large verbatim vendoring, it keeps SoundFlow's original project settings
+    (Nullable/ImplicitUsings/AllowUnsafeBlocks) so future re-syncs from upstream
+    stay mechanical rather than requiring a rewrite of ~35k lines.
+
+    It is NOT independently packable: it ships inside the single
+    CodeBrix.Audio.MitLicenseForever package alongside CodeBrix.Audio, wired up by
+    src/CodeBrix.Audio/CodeBrix.Audio.csproj.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>CodeBrix.Audio.Engine</AssemblyName>
+    <RootNamespace>CodeBrix.Audio.Engine</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!-- Date-stamped version, matching CodeBrix.Audio so both assemblies bundled in the
+       CodeBrix.Audio.MitLicenseForever package share one version. See the header of
+       src/CodeBrix.Audio/CodeBrix.Audio.csproj for the 1.<years-since-2026>.<day>.<minute> scheme. -->
+  <PropertyGroup>
+    <_VersionBaseYear>2026</_VersionBaseYear>
+    <_VersionYears>$([MSBuild]::Subtract($([System.DateTime]::UtcNow.Year), $(_VersionBaseYear)))</_VersionYears>
+    <_VersionDayOfYear>$([System.DateTime]::UtcNow.DayOfYear)</_VersionDayOfYear>
+    <_VersionMinuteOfDay>$([System.Convert]::ToInt32($([System.Math]::Floor($([System.DateTime]::UtcNow.TimeOfDay.TotalMinutes)))))</_VersionMinuteOfDay>
+    <BuildVersion>1.$(_VersionYears).$(_VersionDayOfYear).$(_VersionMinuteOfDay)</BuildVersion>
+    <Version>$(BuildVersion)</Version>
+    <AssemblyVersion>$(BuildVersion)</AssemblyVersion>
+    <FileVersion>$(BuildVersion)</FileVersion>
+  </PropertyGroup>
+
+  <!--
+    Native miniaudio wrapper binaries (renamed codebrix_miniaudio.* from SoundFlow's
+    prebuilt libminiaudio.*). Copied to output under runtimes/<rid>/native/ for local
+    dev + test; the DllImportResolver in Backends/MiniAudio/Native.cs loads them from
+    there. Packed into the NuGet package by CodeBrix.Audio.csproj, not here (Pack=false).
+    Remove-then-Include so the explicit metadata does not collide with the SDK default
+    None glob.
+  -->
+  <ItemGroup>
+    <None Remove="Backends\MiniAudio\runtimes\**\*.*" />
+    <None Include="Backends\MiniAudio\runtimes\**\*.*"
+          Link="runtimes\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          Pack="false" />
+  </ItemGroup>
+
+</Project>

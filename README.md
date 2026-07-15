@@ -1,7 +1,7 @@
 # CodeBrix.Audio
 
-A fully managed, cross-platform audio file library for .NET. CodeBrix.Audio reads WAV and MP3 waveform audio, reads and writes Standard MIDI Files, reads MP3 ID3v2 tags, and exposes a set of DSP primitives (FFT, biquad filters, envelope follower, voice-activity detection) for audio analysis — all with no native dependencies, so it behaves identically on Windows, macOS, and Linux.
-CodeBrix.Audio has no dependencies other than .NET, and is provided as a .NET 10 library and associated `CodeBrix.Audio.MitLicenseForever` NuGet package.
+A fully managed, cross-platform audio file library for .NET. CodeBrix.Audio reads WAV and MP3 waveform audio, reads and writes Standard MIDI Files, reads MP3 ID3v2 tags, and exposes a set of DSP primitives (FFT, biquad filters, envelope follower, voice-activity detection) for audio analysis — and it behaves identically on Windows, macOS, and Linux.
+The managed CodeBrix.Audio library has no dependencies other than .NET. It is provided as a .NET 10 library in the `CodeBrix.Audio.MitLicenseForever` NuGet package — which now also bundles **CodeBrix.Audio.Engine**, a cross-platform audio engine with a native backend (see below).
 
 CodeBrix.Audio supports applications and assemblies that target Microsoft .NET version 10.0 and later.
 Microsoft .NET version 10.0 is a Long-Term Supported (LTS) version of .NET, and was released on Nov 11, 2025; and will be actively supported by Microsoft until Nov 14, 2028.
@@ -36,6 +36,14 @@ using CodeBrix.Audio.Midi;
 var midi = new MidiFile("song.mid", strictChecking: false);
 MidiFile.Export("song-copy.mid", midi.Events);
 ```
+
+## CodeBrix.Audio.Engine (bundled audio engine)
+
+The same `CodeBrix.Audio.MitLicenseForever` package also ships **CodeBrix.Audio.Engine**, a full cross-platform audio engine: audio playback and recording, effects, editing/mixing, MIDI, synthesis, and visualization. Its types live under the `CodeBrix.Audio.Engine.*` namespaces (separate from `CodeBrix.Audio.*`).
+
+Unlike the managed `CodeBrix.Audio` library, the Engine has a **native dependency**: a bundled `codebrix_miniaudio` backend (built from [miniaudio](https://github.com/mackron/miniaudio)) shipped for Windows, macOS, and Linux on x64 and ARM64. The correct native binary is selected automatically at runtime.
+
+CodeBrix.Audio.Engine is vendored from the MIT-licensed [SoundFlow](https://github.com/LSXPrime/SoundFlow) project (v1.4.1). See `THIRD-PARTY-NOTICES.txt` for full attribution and license terms.
 
 ## License
 
