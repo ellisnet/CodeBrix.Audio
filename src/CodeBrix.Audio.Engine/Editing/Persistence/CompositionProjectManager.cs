@@ -831,9 +831,23 @@ public static class CompositionProjectManager
         {
             if (effect is null) continue;
             var effectType = effect.GetType();
+
+            // Reflect over the registry-resolved type so that GetProperties() runs against a type
+            // whose public properties are guaranteed to be preserved under trimming/NativeAOT.
+            // Effects must be registered to round-trip; an unregistered type could not be
+            // reconstructed on load, so we skip it here rather than silently persist unusable data.
+            var registeredType = TypeRegistry.ResolveType(effectType);
+            if (registeredType == null)
+            {
+                Log.Warning(
+                    $"Effect type '{effectType.FullName}' is not registered in TypeRegistry and cannot be " +
+                    "reliably serialized for NativeAOT/trimmed builds. Register it via TypeRegistry.RegisterType. Skipping.");
+                continue;
+            }
+
             var parameters = new JsonObject();
 
-            foreach (var prop in effectType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            foreach (var prop in registeredType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (prop is not { CanRead: true, CanWrite: true } || prop.GetIndexParameters().Length != 0) continue;
                 if (prop.DeclaringType == typeof(SoundComponent) ||

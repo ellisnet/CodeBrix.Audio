@@ -88,4 +88,24 @@ public static class TypeRegistry
 #pragma warning restore IL2026
 #pragma warning restore IL2057
     }
+
+    /// <summary>
+    /// Resolves the registered <see cref="Type"/> that matches the supplied runtime type.
+    /// The returned type carries trimming annotations guaranteeing its public properties and
+    /// constructors are preserved, making it safe to reflect over in NativeAOT/trimmed builds.
+    /// Returns <c>null</c> if the type is not registered.
+    /// </summary>
+    /// <param name="type">The runtime type (e.g. from <see cref="object.GetType()"/>) to look up.</param>
+    /// <returns>The registered, annotation-carrying <see cref="Type"/>, or null if not registered.</returns>
+    [return: DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties | DynamicallyAccessedMemberTypes.PublicConstructors)]
+    public static Type? ResolveType(Type type)
+    {
+        // Only registry values (populated from typeof(...) literals) are returned, so the linker
+        // can honor the annotation on the return value. Unregistered types return null rather than
+        // flowing an unannotated GetType() result into the annotated return.
+        if (type.FullName != null && Registry.TryGetValue(type.FullName, out var registeredType))
+            return registeredType;
+
+        return null;
+    }
 }
