@@ -8,7 +8,7 @@ namespace CodeBrix.Audio.Engine.Metadata.SoundFont;  //was previously: SoundFlow
 /// <summary>
 /// A parser for reading the metadata structures of a SoundFont 2 file.
 /// </summary>
-internal static class SoundFontParser
+public static class SoundFontParser
 {
     private record RiffChunk(string Id, uint Size, long Position);
 
