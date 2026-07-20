@@ -43,7 +43,7 @@ public static class SoundMetadataWriter
         var tempFilePath = Path.GetTempFileName();
         try
         {
-            var writeResult = await writer.WriteTagsAsync(filePath, tempFilePath, tags);
+            var writeResult = await writer.WriteTagsAsync(filePath, tempFilePath, tags).ConfigureAwait(false);
             if (writeResult.IsFailure) return writeResult;
             
             File.Move(tempFilePath, filePath, true); // Overwrite the original file with the new one
@@ -88,7 +88,7 @@ public static class SoundMetadataWriter
         var tempFilePath = Path.GetTempFileName();
         try
         {
-            var removeResult = await writer.RemoveTagsAsync(filePath, tempFilePath);
+            var removeResult = await writer.RemoveTagsAsync(filePath, tempFilePath).ConfigureAwait(false);
             if (removeResult.IsFailure) return removeResult;
             
             File.Move(tempFilePath, filePath, true);

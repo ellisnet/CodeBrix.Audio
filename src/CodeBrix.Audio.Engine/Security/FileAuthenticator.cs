@@ -28,8 +28,9 @@ public static class FileAuthenticator
 
         try
         {
-            await using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, useAsync: true);
-            return await SignStreamAsync(fileStream, config);
+            var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, useAsync: true);
+            await using var fileStreamScope = fileStream.ConfigureAwait(false);
+            return await SignStreamAsync(fileStream, config).ConfigureAwait(false);
         }
         catch (IOException ex)
         {
@@ -52,7 +53,7 @@ public static class FileAuthenticator
         {
             // Asynchronously compute the hash of the stream.
             using var hashAlgorithm = SHA384.Create();
-            var dataHash = await hashAlgorithm.ComputeHashAsync(stream);
+            var dataHash = await hashAlgorithm.ComputeHashAsync(stream).ConfigureAwait(false);
 
             // Sign the computed hash.
             using var ecdsa = ECDsa.Create();
@@ -88,8 +89,9 @@ public static class FileAuthenticator
 
         try
         {
-            await using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, useAsync: true);
-            return await VerifyStreamAsync(fileStream, signatureBase64, config);
+            var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, BufferSize, useAsync: true);
+            await using var fileStreamScope2 = fileStream.ConfigureAwait(false);
+            return await VerifyStreamAsync(fileStream, signatureBase64, config).ConfigureAwait(false);
         }
         catch (IOException ex)
         {
@@ -118,7 +120,7 @@ public static class FileAuthenticator
 
             // Asynchronously compute the hash of the stream.
             using var hashAlgorithm = SHA384.Create();
-            var dataHash = await hashAlgorithm.ComputeHashAsync(stream);
+            var dataHash = await hashAlgorithm.ComputeHashAsync(stream).ConfigureAwait(false);
 
             // Verify the computed hash against the signature.
             using var ecdsa = ECDsa.Create();

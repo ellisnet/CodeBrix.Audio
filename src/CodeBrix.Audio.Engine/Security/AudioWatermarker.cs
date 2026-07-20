@@ -180,7 +180,7 @@ public static class AudioWatermarker
         extractor.Finish();
 
         return payloadResult.Task.IsCompleted
-            ? Result<string>.Ok(await payloadResult.Task)
+            ? Result<string>.Ok(await payloadResult.Task.ConfigureAwait(false))
             : Result<string>.Fail(new Error("No watermark detected or payload incomplete."));
     }
 }

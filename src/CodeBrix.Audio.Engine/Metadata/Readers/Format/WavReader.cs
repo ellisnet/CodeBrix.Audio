@@ -65,7 +65,7 @@ internal class WavReader : BaseSoundFormatReader
                             var chunkBytes = reader.ReadBytes(chunkSize);
                             using var chunkStream = new MemoryStream(chunkBytes);
                             // The Id3V2Reader expects a full tag block, including the header.
-                            var id3Result = await new Id3V2Reader().ReadAsync(chunkStream, options);
+                            var id3Result = await new Id3V2Reader().ReadAsync(chunkStream, options).ConfigureAwait(false);
                             if (id3Result.IsFailure) return Result<SoundFormatInfo>.Fail(id3Result.Error!);
                             
                             var (tags, _) = id3Result.Value;

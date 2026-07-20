@@ -20,7 +20,7 @@ internal class Id3V2Reader
         {
             stream.Position = 0;
             var header = new byte[10];
-            var bytesRead = await stream.ReadAsync(header.AsMemory(0, 10));
+            var bytesRead = await stream.ReadAsync(header.AsMemory(0, 10)).ConfigureAwait(false);
 
             if (bytesRead < 10 || Encoding.ASCII.GetString(header, 0, 3) != "ID3")
             {
@@ -44,7 +44,7 @@ internal class Id3V2Reader
         var startPosition = stream.Position;
         var header = new byte[10];
 
-        var bytesRead = await stream.ReadAsync(header.AsMemory(0, 10));
+        var bytesRead = await stream.ReadAsync(header.AsMemory(0, 10)).ConfigureAwait(false);
         if (bytesRead < 10 || Encoding.ASCII.GetString(header, 0, 3) != "ID3")
         {
             stream.Position = startPosition; // Reset position if no tag found
@@ -62,7 +62,7 @@ internal class Id3V2Reader
             while (stream.Position < tagEndPosition - 10)
             {
                 var frameHeader = new byte[10];
-                if (await stream.ReadAsync(frameHeader.AsMemory(0, 10)) < 10) break;
+                if (await stream.ReadAsync(frameHeader.AsMemory(0, 10)).ConfigureAwait(false) < 10) break;
 
                 var frameId = Encoding.ASCII.GetString(frameHeader, 0, 4);
                 if (frameId.All(c => c == '\0')) break; // Padding
@@ -86,7 +86,7 @@ internal class Id3V2Reader
                 var nextFramePos = stream.Position + frameSize;
 
                 var content = new byte[frameSize];
-                await stream.ReadExactlyAsync(content, 0, frameSize);
+                await stream.ReadExactlyAsync(content, 0, frameSize).ConfigureAwait(false);
 
                 var parseResult = ParseFrame(frameId, content, tags, options);
                 if (parseResult.IsFailure) return Result<(SoundTags?, long)>.Fail(parseResult.Error!);

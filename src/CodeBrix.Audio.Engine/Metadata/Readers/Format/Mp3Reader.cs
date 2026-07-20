@@ -58,20 +58,20 @@ internal class Mp3Reader : BaseSoundFormatReader
         var streamLength = stream.Length;
 
         // Check for an ID3v2 tag to determine the correct audio data starting offset.
-        var (isTagPresent, tagSize) = await Id3V2Reader.TryGetHeaderInfoAsync(stream);
+        var (isTagPresent, tagSize) = await Id3V2Reader.TryGetHeaderInfoAsync(stream).ConfigureAwait(false);
         var audioDataStart = isTagPresent ? tagSize : 0;
 
         // If the user wants to read tags and a tag is present, fully parse it.
         if (options.ReadTags && isTagPresent)
         {
             var id3Reader = new Id3V2Reader();
-            var id3Result = await id3Reader.ReadAsync(stream, options); // This will parse the full tag.
+            var id3Result = await id3Reader.ReadAsync(stream, options).ConfigureAwait(false); // This will parse the full tag.
             if (id3Result.IsFailure) return Result<SoundFormatInfo>.Fail(id3Result.Error!);
             info.Tags = id3Result.Value.Item1;
         }
 
         // If no ID3v2 tags were found, try to read ID3v1 tags from the end of the file.
-        if (info.Tags == null && options.ReadTags) info.Tags = await TryReadId3V1TagAsync(stream);
+        if (info.Tags == null && options.ReadTags) info.Tags = await TryReadId3V1TagAsync(stream).ConfigureAwait(false);
 
         stream.Position = audioDataStart;
 
@@ -79,21 +79,21 @@ internal class Mp3Reader : BaseSoundFormatReader
         var headerBuffer = new byte[4];
         while (stream.Position < streamLength - 4)
         {
-            if (await stream.ReadAsync(headerBuffer.AsMemory(0, 1)) == 0) break;
+            if (await stream.ReadAsync(headerBuffer.AsMemory(0, 1)).ConfigureAwait(false) == 0) break;
             if (headerBuffer[0] != 0xFF) continue;
 
-            if (await stream.ReadAsync(headerBuffer.AsMemory(1, 1)) == 0) break;
+            if (await stream.ReadAsync(headerBuffer.AsMemory(1, 1)).ConfigureAwait(false) == 0) break;
             if ((headerBuffer[1] & 0xE0) != 0xE0) continue;
 
             // Found a sync word, read rest of header and process
-            if (await stream.ReadAsync(headerBuffer.AsMemory(2, 2)) != 2) continue;
+            if (await stream.ReadAsync(headerBuffer.AsMemory(2, 2)).ConfigureAwait(false) != 2) continue;
             var parseResult = ParseFrameHeader(headerBuffer, info);
             if(parseResult.IsFailure) return Result<SoundFormatInfo>.Fail(parseResult.Error!);
 
             // Try to read VBR header regardless of accuracy setting.
             try
             {
-                await TryReadVbrHeaderAsync(stream, headerBuffer, info);
+                await TryReadVbrHeaderAsync(stream, headerBuffer, info).ConfigureAwait(false);
             }
             catch (EndOfStreamException ex)
             {
@@ -206,14 +206,14 @@ internal class Mp3Reader : BaseSoundFormatReader
         stream.Position = originalPos + xingOffset; // Position is after the 4-byte header
 
         var headerSignature = new byte[4];
-        await stream.ReadExactlyAsync(headerSignature, 0, 4);
+        await stream.ReadExactlyAsync(headerSignature, 0, 4).ConfigureAwait(false);
         var xingId = Encoding.ASCII.GetString(headerSignature);
 
         if (xingId is "Xing" or "Info")
         {
             info.BitrateMode = BitrateMode.VBR;
             var flagsBuffer = new byte[4];
-            await stream.ReadExactlyAsync(flagsBuffer, 0, 4);
+            await stream.ReadExactlyAsync(flagsBuffer, 0, 4).ConfigureAwait(false);
             Array.Reverse(flagsBuffer);
             var flags = BitConverter.ToUInt32(flagsBuffer, 0);
 
@@ -224,7 +224,7 @@ internal class Mp3Reader : BaseSoundFormatReader
             if ((flags & 0x01) != 0)
             {
                 var framesBuffer = new byte[4];
-                await stream.ReadExactlyAsync(framesBuffer, 0, 4);
+                await stream.ReadExactlyAsync(framesBuffer, 0, 4).ConfigureAwait(false);
                 Array.Reverse(framesBuffer);
                 totalFrames = BitConverter.ToUInt32(framesBuffer, 0);
             }
@@ -233,7 +233,7 @@ internal class Mp3Reader : BaseSoundFormatReader
             if ((flags & 0x02) != 0)
             {
                 var bytesBuffer = new byte[4];
-                await stream.ReadExactlyAsync(bytesBuffer, 0, 4);
+                await stream.ReadExactlyAsync(bytesBuffer, 0, 4).ConfigureAwait(false);
                 Array.Reverse(bytesBuffer);
                 totalBytes = BitConverter.ToUInt32(bytesBuffer, 0);
             }
@@ -250,7 +250,7 @@ internal class Mp3Reader : BaseSoundFormatReader
         {
             // Check for a VBRI Header
             stream.Position = originalPos + 32; // VBRI header is at a fixed 32-byte offset after the frame header
-            await stream.ReadExactlyAsync(headerSignature, 0, 4);
+            await stream.ReadExactlyAsync(headerSignature, 0, 4).ConfigureAwait(false);
             var vbriId = Encoding.ASCII.GetString(headerSignature);
 
             if (vbriId == "VBRI")
@@ -259,12 +259,12 @@ internal class Mp3Reader : BaseSoundFormatReader
                 stream.Position += 6; // Skip version and delay
 
                 var bytesBuffer = new byte[4];
-                await stream.ReadExactlyAsync(bytesBuffer, 0, 4);
+                await stream.ReadExactlyAsync(bytesBuffer, 0, 4).ConfigureAwait(false);
                 Array.Reverse(bytesBuffer);
                 var totalBytes = BitConverter.ToUInt32(bytesBuffer, 0);
 
                 var framesBuffer = new byte[4];
-                await stream.ReadExactlyAsync(framesBuffer, 0, 4);
+                await stream.ReadExactlyAsync(framesBuffer, 0, 4).ConfigureAwait(false);
                 Array.Reverse(framesBuffer);
                 var totalFrames = BitConverter.ToUInt32(framesBuffer, 0);
 
@@ -290,7 +290,7 @@ internal class Mp3Reader : BaseSoundFormatReader
         {
             stream.Position = stream.Length - 128;
             var buffer = new byte[128];
-            if (await stream.ReadAsync(buffer) < 128) return null;
+            if (await stream.ReadAsync(buffer).ConfigureAwait(false) < 128) return null;
 
             if (Encoding.ASCII.GetString(buffer, 0, 3) != "TAG") return null;
 

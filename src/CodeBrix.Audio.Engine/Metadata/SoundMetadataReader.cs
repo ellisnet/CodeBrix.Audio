@@ -54,7 +54,7 @@ public static class SoundMetadataReader
         try
         {
             var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
-            return await GetReaderAndReadAsync(stream, options, true);
+            return await GetReaderAndReadAsync(stream, options, true).ConfigureAwait(false);
         }
         catch (IOException ex)
         {
@@ -105,7 +105,7 @@ public static class SoundMetadataReader
             
             var header = new byte[12];
             var bytesRead = async
-                ? await stream.ReadAsync(header)
+                ? await stream.ReadAsync(header).ConfigureAwait(false)
                 : stream.Read(header, 0, header.Length);
 
             if (bytesRead < 4)
@@ -126,7 +126,7 @@ public static class SoundMetadataReader
                 {
                     stream.Position = originalPosition + audioDataOffset;
                     var audioHeader = new byte[12];
-                    bytesRead = async ? await stream.ReadAsync(audioHeader) : stream.Read(audioHeader, 0, audioHeader.Length);
+                    bytesRead = async ? await stream.ReadAsync(audioHeader).ConfigureAwait(false) : stream.Read(audioHeader, 0, audioHeader.Length);
                     if (bytesRead >= 4)
                     {
                         // Try to identify the format again from the audio data header.
@@ -142,14 +142,14 @@ public static class SoundMetadataReader
                 return new UnsupportedFormatError("Could not identify format from file header.");
             
             return async
-                ? await reader.ReadAsync(stream, options)
+                ? await reader.ReadAsync(stream, options).ConfigureAwait(false)
                 : reader.Read(stream, options);
         }
         finally
         {
             if (!leaveOpen)
             {
-                if (async) await stream.DisposeAsync();
+                if (async) await stream.DisposeAsync().ConfigureAwait(false);
                 else stream.Dispose();
             }
             else

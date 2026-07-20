@@ -91,13 +91,13 @@ public sealed class NetworkDataProvider : ISoundDataProvider
     {
         try
         {
-            var isHls = await IsHlsUrlAsync(url);
+            var isHls = await IsHlsUrlAsync(url).ConfigureAwait(false);
 
             NetworkDataProviderBase provider = isHls
                 ? new HlsStreamProvider(engine, format, hlsSegmentFormatId, url, _httpClient)
                 : new DirectStreamProvider(engine, format, url, _httpClient, options);
 
-            await provider.InitializeAsync();
+            await provider.InitializeAsync().ConfigureAwait(false);
             
             // Wire up events from the internal provider to this facade's events
             provider.EndOfStreamReached += (_, e) => EndOfStreamReached?.Invoke(this, e);
@@ -168,7 +168,7 @@ public sealed class NetworkDataProvider : ISoundDataProvider
             var request = new HttpRequestMessage(HttpMethod.Head, url);
             // Use a new temp client for this static check to not interfere with the instance client's lifecycle
             using var client = new HttpClient();
-            var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
 
             if (response is { IsSuccessStatusCode: true, Content.Headers.ContentType: not null })
             {
@@ -180,7 +180,7 @@ public sealed class NetworkDataProvider : ISoundDataProvider
                     return true;
             }
 
-            var content = await DownloadPartialContentAsync(client, url, 1024);
+            var content = await DownloadPartialContentAsync(client, url, 1024).ConfigureAwait(false);
             return content != null && content.Contains("#EXT", StringComparison.OrdinalIgnoreCase);
         }
         catch
@@ -195,20 +195,21 @@ public sealed class NetworkDataProvider : ISoundDataProvider
         {
             var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Range = new RangeHeaderValue(0, byteCount - 1);
-            var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             
             // If the server doesn't support partial content or playlist file is too small, retry with the full content
             if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
             {
                 request = new HttpRequestMessage(HttpMethod.Get, url);
-                response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+                response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             }
             
             response.EnsureSuccessStatusCode();
 
-            await using var stream = await response.Content.ReadAsStreamAsync();
+            var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            await using var streamScope = stream.ConfigureAwait(false);
             var buffer = new byte[byteCount];
-            var bytesRead = await stream.ReadAsync(buffer);
+            var bytesRead = await stream.ReadAsync(buffer).ConfigureAwait(false);
             return Encoding.UTF8.GetString(buffer, 0, bytesRead);
         }
         catch
@@ -273,7 +274,7 @@ internal sealed class DirectStreamProvider(AudioEngine engine, AudioFormat? form
     public override async Task InitializeAsync()
     {
         var request = new HttpRequestMessage(HttpMethod.Get, Url);
-        var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+        var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var contentLength = response.Content.Headers.ContentLength;
@@ -284,7 +285,7 @@ internal sealed class DirectStreamProvider(AudioEngine engine, AudioFormat? form
             using (response)
             {
                 var ms = new MemoryStream();
-                await response.Content.CopyToAsync(ms);
+                await response.Content.CopyToAsync(ms).ConfigureAwait(false);
                 ms.Position = 0;
                 _stream = ms;
             }
@@ -406,12 +407,12 @@ internal sealed class HlsStreamProvider(AudioEngine engine, AudioFormat? format,
     public override async Task InitializeAsync()
     {
         _cancellationTokenSource = new CancellationTokenSource();
-        await DownloadAndParsePlaylistAsync(Url, _cancellationTokenSource.Token);
+        await DownloadAndParsePlaylistAsync(Url, _cancellationTokenSource.Token).ConfigureAwait(false);
 
         if (_hlsSegments.Count == 0)
             throw new InvalidOperationException("No segments found in HLS playlist.");
         
-        await DetermineSegmentFormatAsync(_cancellationTokenSource.Token);
+        await DetermineSegmentFormatAsync(_cancellationTokenSource.Token).ConfigureAwait(false);
         SampleFormat = SampleFormat.F32; // Decoded HLS is typically float
         SampleRate = UserProvidedFormat!.Value.SampleRate;
         Length = _isEndList ? (int)(_hlsTotalDuration * SampleRate) : -1;
@@ -430,14 +431,15 @@ internal sealed class HlsStreamProvider(AudioEngine engine, AudioFormat? format,
         var request = new HttpRequestMessage(HttpMethod.Get, firstSegmentUrl);
         request.Headers.Range = new RangeHeaderValue(0, 8192); // 8 KB is plenty for any audio header.
         
-        using var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
-        await using var segmentHeaderStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var segmentHeaderStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var segmentHeaderStreamScope = segmentHeaderStream.ConfigureAwait(false);
         
         // The metadata reader needs a seekable stream.
         var memoryStream = new MemoryStream();
-        await segmentHeaderStream.CopyToAsync(memoryStream, cancellationToken);
+        await segmentHeaderStream.CopyToAsync(memoryStream, cancellationToken).ConfigureAwait(false);
         memoryStream.Position = 0;
 
         using var decoder = Engine.CreateDecoder(memoryStream, out var detectedFormat, UserProvidedFormat);
@@ -534,13 +536,13 @@ internal sealed class HlsStreamProvider(AudioEngine engine, AudioFormat? format,
             {
                 if (!_isEndList && ShouldRefreshPlaylist())
                 {
-                    await DownloadAndParsePlaylistAsync(Url, cancellationToken);
+                    await DownloadAndParsePlaylistAsync(Url, cancellationToken).ConfigureAwait(false);
                 }
 
                 if (_currentSegmentIndex < _hlsSegments.Count)
                 {
                     var segment = _hlsSegments[_currentSegmentIndex];
-                    await DownloadAndBufferSegmentAsync(segment, cancellationToken);
+                    await DownloadAndBufferSegmentAsync(segment, cancellationToken).ConfigureAwait(false);
                     _currentSegmentIndex++;
                 }
                 else if (_isEndList)
@@ -554,7 +556,7 @@ internal sealed class HlsStreamProvider(AudioEngine engine, AudioFormat? format,
                 }
                 else
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(_hlsTargetDuration / 2), cancellationToken);
+                    await Task.Delay(TimeSpan.FromSeconds(_hlsTargetDuration / 2), cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -578,10 +580,11 @@ internal sealed class HlsStreamProvider(AudioEngine engine, AudioFormat? format,
     
     private async Task DownloadAndBufferSegmentAsync(HlsSegment segment, CancellationToken cancellationToken)
     {
-        using var response = await HttpClient.GetAsync(segment.Uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await HttpClient.GetAsync(segment.Uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
-        await using var segmentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var segmentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using var segmentStreamScope = segmentStream.ConfigureAwait(false);
         using var decoder = Engine.CreateDecoder(segmentStream, out _, UserProvidedFormat!.Value);
 
         var buffer = ArrayPool<float>.Shared.Rent(8192);
@@ -608,9 +611,9 @@ internal sealed class HlsStreamProvider(AudioEngine engine, AudioFormat? format,
     
     private async Task DownloadAndParsePlaylistAsync(string playlistUrl, CancellationToken cancellationToken)
     {
-        var response = await HttpClient.GetAsync(playlistUrl, cancellationToken);
+        var response = await HttpClient.GetAsync(playlistUrl, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var content = await response.Content.ReadAsStringAsync(cancellationToken);
+        var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         
         lock (Lock)
         {
@@ -722,10 +725,11 @@ internal sealed class BufferedNetworkStream(int bufferSize = 1 * 1024 * 1024) : 
             var tempBuffer = ArrayPool<byte>.Shared.Rent(16384); // 16KB read buffer
             try
             {
-                await using var sourceStream = await sourceResponse.Content.ReadAsStreamAsync(_cts.Token);
+                var sourceStream = await sourceResponse.Content.ReadAsStreamAsync(_cts.Token).ConfigureAwait(false);
+                await using var sourceStreamScope = sourceStream.ConfigureAwait(false);
                 while (!_cts.IsCancellationRequested)
                 {
-                    var bytesRead = await sourceStream.ReadAsync(tempBuffer, _cts.Token);
+                    var bytesRead = await sourceStream.ReadAsync(tempBuffer, _cts.Token).ConfigureAwait(false);
                     if (bytesRead == 0) break; // End of network stream
                     
                     Write(tempBuffer, 0, bytesRead);

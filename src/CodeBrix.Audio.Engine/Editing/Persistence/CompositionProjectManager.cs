@@ -116,7 +116,7 @@ public static class CompositionProjectManager
                         projectDirectory,
                         mediaAssetsDirectory,
                         options
-                    );
+                    ).ConfigureAwait(false);
                     sourceProviderMap[segment.SourceDataProvider] = sourceRef;
                     if (projectData.SourceReferences.All(sr => sr.Id != sourceRef.Id))
                     {
@@ -179,7 +179,7 @@ public static class CompositionProjectManager
                 if (!midiSequenceMap.TryGetValue(segment.Sequence, out var sourceRef))
                 {
                     sourceRef = await CreateMidiSourceReferenceAsync(segment.Sequence, projectDirectory,
-                        mediaAssetsDirectory);
+                        mediaAssetsDirectory).ConfigureAwait(false);
                     midiSequenceMap[segment.Sequence] = sourceRef;
                     projectData.SourceReferences.Add(sourceRef);
                 }
@@ -197,16 +197,16 @@ public static class CompositionProjectManager
 
         var typeInfo = (JsonTypeInfo<ProjectData>)jsonOptions.GetTypeInfo(typeof(ProjectData));
         var json = JsonSerializer.Serialize(projectData, typeInfo);
-        await File.WriteAllTextAsync(projectFilePath, json);
+        await File.WriteAllTextAsync(projectFilePath, json).ConfigureAwait(false);
 
         // Signing Integration
         if (options.SigningConfiguration != null)
         {
-            var sigResult = await FileAuthenticator.SignFileAsync(projectFilePath, options.SigningConfiguration);
+            var sigResult = await FileAuthenticator.SignFileAsync(projectFilePath, options.SigningConfiguration).ConfigureAwait(false);
             if (sigResult.IsSuccess)
             {
                 var sigPath = projectFilePath + ".sig";
-                await File.WriteAllTextAsync(sigPath, sigResult.Value);
+                await File.WriteAllTextAsync(sigPath, sigResult.Value).ConfigureAwait(false);
             }
             else
             {
@@ -236,8 +236,8 @@ public static class CompositionProjectManager
 
         try
         {
-            var signature = await File.ReadAllTextAsync(sigPath);
-            return await FileAuthenticator.VerifyFileAsync(projectFilePath, signature, config);
+            var signature = await File.ReadAllTextAsync(sigPath).ConfigureAwait(false);
+            return await FileAuthenticator.VerifyFileAsync(projectFilePath, signature, config).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -331,13 +331,13 @@ public static class CompositionProjectManager
                         var encoder = engine.CreateEncoder(stream, "wav", audioFormatForEncoding);
                         encoder.Encode(tempBuffer.AsSpan(0, samplesRead));
                         encoder.Dispose();
-                        await stream.DisposeAsync();
+                        await stream.DisposeAsync().ConfigureAwait(false);
                     }
                     else if (totalSamples == 0)
                     {
                         // Handle empty provider, create an empty WAV file or skip consolidation for it.
                         await File.WriteAllBytesAsync(consolidatedFilePath,
-                            CreateEmptyWavHeader(sourceFormat.SampleRate, sourceFormat.Channels, SampleFormat.F32));
+                            CreateEmptyWavHeader(sourceFormat.SampleRate, sourceFormat.Channels, SampleFormat.F32)).ConfigureAwait(false);
                     }
                     else
                     {
@@ -374,8 +374,8 @@ public static class CompositionProjectManager
 
         var midiFile = sequence.ToMidiFile();
 
-        await using (var fileStream =
-                     new FileStream(consolidatedFilePath, FileMode.Create, FileAccess.Write, FileShare.None))
+        var fileStream = new FileStream(consolidatedFilePath, FileMode.Create, FileAccess.Write, FileShare.None);
+        await using (fileStream.ConfigureAwait(false))
         {
             MidiFileWriter.Write(midiFile, fileStream);
         }
@@ -452,7 +452,7 @@ public static class CompositionProjectManager
                 : CompositionProjectJsonContext.Default
         };
 
-        var json = await File.ReadAllTextAsync(projectFilePath);
+        var json = await File.ReadAllTextAsync(projectFilePath).ConfigureAwait(false);
         var typeInfo = (JsonTypeInfo<ProjectData>)jsonOptions.GetTypeInfo(typeof(ProjectData));
         var projectData = JsonSerializer.Deserialize(json, typeInfo)
                           ?? throw new JsonException("Failed to deserialize project data.");

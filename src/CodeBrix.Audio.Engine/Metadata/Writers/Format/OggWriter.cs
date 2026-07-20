@@ -11,25 +11,27 @@ internal class OggWriter : ISoundFormatWriter
 {
     public async Task<Result> RemoveTagsAsync(string sourcePath, string destinationPath)
     {
-        return await ProcessOggFileAsync(sourcePath, destinationPath, null);
+        return await ProcessOggFileAsync(sourcePath, destinationPath, null).ConfigureAwait(false);
     }
 
     public async Task<Result> WriteTagsAsync(string sourcePath, string destinationPath, SoundTags tags)
     {
-        return await ProcessOggFileAsync(sourcePath, destinationPath, tags);
+        return await ProcessOggFileAsync(sourcePath, destinationPath, tags).ConfigureAwait(false);
     }
 
     private async Task<Result> ProcessOggFileAsync(string sourcePath, string destinationPath, SoundTags? tags)
     {
         try
         {
-            await using var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
-            await using var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
+            await using var sourceStreamScope = sourceStream.ConfigureAwait(false);
+            var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            await using var destStreamScope = destStream.ConfigureAwait(false);
 
             var allPages = new List<OggPage>();
             while (sourceStream.Position < sourceStream.Length)
             {
-                var pageResult = await OggPage.FromStreamAsync(sourceStream);
+                var pageResult = await OggPage.FromStreamAsync(sourceStream).ConfigureAwait(false);
                 if(pageResult.IsFailure) return pageResult;
                 var page = pageResult.Value;
                 if (page == null) break;
@@ -76,7 +78,7 @@ internal class OggWriter : ISoundFormatWriter
             uint pageSequence = 0;
 
             var firstHeaderPage = new OggPage(headerPackets.First(), serialNumber, pageSequence++, 0, 0x02); // BOS
-            await destStream.WriteAsync(firstHeaderPage.ToByteArray());
+            await destStream.WriteAsync(firstHeaderPage.ToByteArray()).ConfigureAwait(false);
             
             if (tags != null)
             {
@@ -99,13 +101,13 @@ internal class OggWriter : ISoundFormatWriter
                     Buffer.BlockCopy(commentData, 0, commentPacket, 1 + vorbisId.Length, commentData.Length);
                 }
                 var newCommentPage = new OggPage(commentPacket, serialNumber, pageSequence++, 0, 0x00);
-                await destStream.WriteAsync(newCommentPage.ToByteArray());
+                await destStream.WriteAsync(newCommentPage.ToByteArray()).ConfigureAwait(false);
             }
 
             foreach (var headerPacket in headerPackets.Skip(1))
             {
                 var setupPage = new OggPage(headerPacket, serialNumber, pageSequence++, 0, 0x00);
-                await destStream.WriteAsync(setupPage.ToByteArray());
+                await destStream.WriteAsync(setupPage.ToByteArray()).ConfigureAwait(false);
             }
 
             for (var i = 0; i < audioPages.Count; i++)
@@ -115,7 +117,7 @@ internal class OggWriter : ISoundFormatWriter
                 audioPage.HeaderType &= 0xFB; // Clear any existing EOS flag
                 if (i == audioPages.Count - 1) audioPage.HeaderType |= 0x04; // Set EOS on the last page
 
-                await destStream.WriteAsync(audioPage.ToByteArray());
+                await destStream.WriteAsync(audioPage.ToByteArray()).ConfigureAwait(false);
             }
             return Result.Ok();
         }
@@ -207,7 +209,7 @@ internal class OggWriter : ISoundFormatWriter
                 if (b4 == -1) return Result<OggPage?>.Ok(null);
 
                 var headerBuffer = new byte[23];
-                await stream.ReadExactlyAsync(headerBuffer);
+                await stream.ReadExactlyAsync(headerBuffer).ConfigureAwait(false);
 
                 var page = new OggPage
                 {
@@ -220,13 +222,13 @@ internal class OggWriter : ISoundFormatWriter
 
                 var pageSegments = headerBuffer[22];
                 var segmentTable = new byte[pageSegments];
-                await stream.ReadExactlyAsync(segmentTable);
+                await stream.ReadExactlyAsync(segmentTable).ConfigureAwait(false);
 
                 var currentPacketBuffer = new MemoryStream();
                 foreach (var segmentLength in segmentTable)
                 {
                     var segmentData = new byte[segmentLength];
-                    await stream.ReadExactlyAsync(segmentData);
+                    await stream.ReadExactlyAsync(segmentData).ConfigureAwait(false);
                     currentPacketBuffer.Write(segmentData, 0, segmentData.Length);
                     if (segmentLength < 255)
                     {

@@ -94,7 +94,7 @@ public static class WatermarkTuner
                     // Simulate a volume reduction attack to test watermark resilience.
                     ApplyVolumeAttack(watermarkedSlice, 0.75f);
                     
-                    var result = await ExtractFromMemory(watermarkedSlice, source.FormatInfo, config);
+                    var result = await ExtractFromMemory(watermarkedSlice, source.FormatInfo, config).ConfigureAwait(false);
 
                     if (result.IsSuccess && result.Value == payload)
                     {
@@ -300,6 +300,6 @@ public static class WatermarkTuner
         {
             FormatInfo = info
         };
-        return await AudioWatermarker.ExtractOwnershipWatermarkAsync(provider, config);
+        return await AudioWatermarker.ExtractOwnershipWatermarkAsync(provider, config).ConfigureAwait(false);
     }
 }

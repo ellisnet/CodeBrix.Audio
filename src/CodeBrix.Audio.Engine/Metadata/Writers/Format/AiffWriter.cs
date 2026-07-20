@@ -11,22 +11,25 @@ internal class AiffWriter : ISoundFormatWriter
 {
     public async Task<Result> RemoveTagsAsync(string sourcePath, string destinationPath)
     {
-        return await ProcessAiffFileAsync(sourcePath, destinationPath, null);
+        return await ProcessAiffFileAsync(sourcePath, destinationPath, null).ConfigureAwait(false);
     }
 
     public async Task<Result> WriteTagsAsync(string sourcePath, string destinationPath, SoundTags tags)
     {
-        return await ProcessAiffFileAsync(sourcePath, destinationPath, tags);
+        return await ProcessAiffFileAsync(sourcePath, destinationPath, tags).ConfigureAwait(false);
     }
 
     private async Task<Result> ProcessAiffFileAsync(string sourcePath, string destinationPath, SoundTags? tags)
     {
         try
         {
-            await using var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
-            await using var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
+            await using var sourceStreamScope = sourceStream.ConfigureAwait(false);
+            var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            await using var destStreamScope = destStream.ConfigureAwait(false);
             using var reader = new BigEndianBinaryReader(sourceStream);
-            await using var writer = new BigEndianBinaryWriter(destStream);
+            var writer = new BigEndianBinaryWriter(destStream);
+            await using var writerScope = writer.ConfigureAwait(false);
             
             // 1. Read and validate "FORM" marker.
             if (sourceStream.Length < 12)
@@ -64,7 +67,7 @@ internal class AiffWriter : ISoundFormatWriter
                     writer.Write(Encoding.ASCII.GetBytes(chunkId));
                     writer.Write(chunkSize);
                     var chunkData = new byte[chunkSize];
-                    await sourceStream.ReadExactlyAsync(chunkData);
+                    await sourceStream.ReadExactlyAsync(chunkData).ConfigureAwait(false);
                     writer.Write(chunkData);
                 }
                 // The padding byte must be skipped on EVERY chunk.

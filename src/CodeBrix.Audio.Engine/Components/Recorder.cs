@@ -218,7 +218,7 @@ public class Recorder : IDisposable
         
         try
         {
-            await Stream.DisposeAsync();
+            await Stream.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -234,7 +234,7 @@ public class Recorder : IDisposable
                 {
                     try
                     {
-                        await SoundMetadataWriter.WriteTagsAsync(FilePath, _tagsToWrite);
+                        await SoundMetadataWriter.WriteTagsAsync(FilePath, _tagsToWrite).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -245,7 +245,7 @@ public class Recorder : IDisposable
                 // 2. Sign File (Authentic Recording)
                 if (SigningConfiguration != null)
                 {
-                    var signResult = await FileAuthenticator.SignFileAsync(FilePath, SigningConfiguration);
+                    var signResult = await FileAuthenticator.SignFileAsync(FilePath, SigningConfiguration).ConfigureAwait(false);
                     if (signResult is { IsFailure: true, Error: not null })
                     {
                         return Result.Fail(signResult.Error);
@@ -254,7 +254,7 @@ public class Recorder : IDisposable
                     var sigPath = FilePath + ".sig";
                     try
                     {
-                        await File.WriteAllTextAsync(sigPath, signResult.Value);
+                        await File.WriteAllTextAsync(sigPath, signResult.Value).ConfigureAwait(false);
                     }
                     catch (UnauthorizedAccessException ex)
                     {

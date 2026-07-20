@@ -21,7 +21,7 @@ internal class OggReader : BaseSoundFormatReader
         try
         {
             // The first page must contain an identification header for the codec.
-            var page = await ReadNextPageAsync(stream);
+            var page = await ReadNextPageAsync(stream).ConfigureAwait(false);
             if (page == null || page.Packets.Count == 0)
                 return new HeaderNotFoundError("Ogg Page");
 
@@ -36,7 +36,7 @@ internal class OggReader : BaseSoundFormatReader
                 return new UnsupportedFormatError("Ogg stream is not a supported Vorbis or Opus stream.");
 
             // The second page should contain the comment header (tags).
-            page = await ReadNextPageAsync(stream);
+            page = await ReadNextPageAsync(stream).ConfigureAwait(false);
             if (page is { Packets.Count: > 0 } && options.ReadTags)
             {
                 var commentPacket = page.Packets[0];
@@ -67,7 +67,7 @@ internal class OggReader : BaseSoundFormatReader
             // Duration Calculation
             if (options.DurationAccuracy == DurationAccuracy.AccurateScan)
             {
-                var lastGranulePosition = await FindLastPageGranuleAsync(stream);
+                var lastGranulePosition = await FindLastPageGranuleAsync(stream).ConfigureAwait(false);
                 if (lastGranulePosition > 0)
                 {
                     // For Opus, the granule position is always based on a 48 kHz clock, for Vorbis it's the PCM sample number.
@@ -115,10 +115,10 @@ internal class OggReader : BaseSoundFormatReader
         var page = new OggPage();
 
         var fourByteBuffer = new byte[4];
-        while (await stream.ReadAsync(fourByteBuffer.AsMemory(0, 1)) > 0)
+        while (await stream.ReadAsync(fourByteBuffer.AsMemory(0, 1)).ConfigureAwait(false) > 0)
         {
             if (fourByteBuffer[0] == 'O')
-                if (await stream.ReadAsync(fourByteBuffer.AsMemory(1, 3)) == 3 &&
+                if (await stream.ReadAsync(fourByteBuffer.AsMemory(1, 3)).ConfigureAwait(false) == 3 &&
                     fourByteBuffer[1] == 'g' && fourByteBuffer[2] == 'g' && fourByteBuffer[3] == 'S')
                 {
                     stream.Position -= 4;
@@ -129,17 +129,17 @@ internal class OggReader : BaseSoundFormatReader
         }
 
         var headerBytes = new byte[27];
-        if (await stream.ReadAsync(headerBytes.AsMemory(0, 27)) < 27) return null;
+        if (await stream.ReadAsync(headerBytes.AsMemory(0, 27)).ConfigureAwait(false) < 27) return null;
 
         page.GranulePosition = BitConverter.ToInt64(headerBytes, 6);
         int pageSegments = headerBytes[26];
         var segmentTable = new byte[pageSegments];
-        await stream.ReadExactlyAsync(segmentTable, 0, pageSegments);
+        await stream.ReadExactlyAsync(segmentTable, 0, pageSegments).ConfigureAwait(false);
 
         foreach (var segmentLength in segmentTable)
         {
             var packetBytes = new byte[segmentLength];
-            await stream.ReadExactlyAsync(packetBytes, 0, segmentLength);
+            await stream.ReadExactlyAsync(packetBytes, 0, segmentLength).ConfigureAwait(false);
             page.Packets.Add(packetBytes);
         }
 
@@ -155,7 +155,7 @@ internal class OggReader : BaseSoundFormatReader
             stream.Seek(-bufferSize, SeekOrigin.End);
 
         var buffer = new byte[bufferSize];
-        var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, bufferSize));
+        var bytesRead = await stream.ReadAsync(buffer.AsMemory(0, bufferSize)).ConfigureAwait(false);
 
         for (var i = bytesRead - 27; i >= 0; i--)
             if (buffer[i] == 'O' && buffer[i + 1] == 'g' && buffer[i + 2] == 'g' && buffer[i + 3] == 'S')

@@ -10,22 +10,25 @@ internal class WavWriter : ISoundFormatWriter
 {
     public async Task<Result> RemoveTagsAsync(string sourcePath, string destinationPath)
     {
-        return await ProcessWavFileAsync(sourcePath, destinationPath, null);
+        return await ProcessWavFileAsync(sourcePath, destinationPath, null).ConfigureAwait(false);
     }
 
     public async Task<Result> WriteTagsAsync(string sourcePath, string destinationPath, SoundTags tags)
     {
-        return await ProcessWavFileAsync(sourcePath, destinationPath, tags);
+        return await ProcessWavFileAsync(sourcePath, destinationPath, tags).ConfigureAwait(false);
     }
     
     private async Task<Result> ProcessWavFileAsync(string sourcePath, string destinationPath, SoundTags? tags)
     {
         try
         {
-            await using var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
-            await using var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
+            await using var sourceStreamScope = sourceStream.ConfigureAwait(false);
+            var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            await using var destStreamScope = destStream.ConfigureAwait(false);
             using var reader = new BinaryReader(sourceStream);
-            await using var writer = new BinaryWriter(destStream);
+            var writer = new BinaryWriter(destStream);
+            await using var writerScope = writer.ConfigureAwait(false);
 
             writer.Write("RIFF"u8.ToArray());
             writer.Write(0); // Placeholder for RIFF chunk size
@@ -50,7 +53,7 @@ internal class WavWriter : ISoundFormatWriter
                     writer.Write(Encoding.ASCII.GetBytes(chunkId));
                     writer.Write(chunkSize);
                     var chunkData = new byte[chunkSize];
-                    await sourceStream.ReadExactlyAsync(chunkData);
+                    await sourceStream.ReadExactlyAsync(chunkData).ConfigureAwait(false);
                     writer.Write(chunkData);
                 }
                 

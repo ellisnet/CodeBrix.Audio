@@ -12,19 +12,20 @@ internal class M4aWriter : ISoundFormatWriter
 
     public async Task<Result> RemoveTagsAsync(string sourcePath, string destinationPath)
     {
-        return await ProcessM4aFileAsync(sourcePath, destinationPath, null);
+        return await ProcessM4aFileAsync(sourcePath, destinationPath, null).ConfigureAwait(false);
     }
 
     public async Task<Result> WriteTagsAsync(string sourcePath, string destinationPath, SoundTags tags)
     {
-        return await ProcessM4aFileAsync(sourcePath, destinationPath, tags);
+        return await ProcessM4aFileAsync(sourcePath, destinationPath, tags).ConfigureAwait(false);
     }
 
     private async Task<Result> ProcessM4aFileAsync(string sourcePath, string destinationPath, SoundTags? tags)
     {
         try
         {
-            await using var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
+            var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
+            await using var sourceStreamScope = sourceStream.ConfigureAwait(false);
             
             var topLevelAtomsResult = MapTopLevelAtoms(sourceStream);
             if(topLevelAtomsResult.IsFailure || topLevelAtomsResult.Value is null) return topLevelAtomsResult;
@@ -57,18 +58,19 @@ internal class M4aWriter : ISoundFormatWriter
             }
 
             // Write the new file
-            await using var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            await using var destStreamScope = destStream.ConfigureAwait(false);
 
             foreach (var atomInfo in topLevelAtoms)
             {
                 if (atomInfo.Type == "moov")
                 {
-                    await destStream.WriteAsync(newMoovData);
+                    await destStream.WriteAsync(newMoovData).ConfigureAwait(false);
                 }
                 else
                 {
                     sourceStream.Position = atomInfo.Position;
-                    await CopyStreamBytesAsync(sourceStream, destStream, atomInfo.Size);
+                    await CopyStreamBytesAsync(sourceStream, destStream, atomInfo.Size).ConfigureAwait(false);
                 }
             }
             return Result.Ok();
@@ -232,9 +234,9 @@ internal class M4aWriter : ISoundFormatWriter
         while (remaining > 0)
         {
             var bytesToRead = (int)Math.Min(remaining, buffer.Length);
-            var bytesRead = await source.ReadAsync(buffer.AsMemory(0, bytesToRead));
+            var bytesRead = await source.ReadAsync(buffer.AsMemory(0, bytesToRead)).ConfigureAwait(false);
             if (bytesRead == 0) break;
-            await destination.WriteAsync(buffer.AsMemory(0, bytesRead));
+            await destination.WriteAsync(buffer.AsMemory(0, bytesRead)).ConfigureAwait(false);
             remaining -= bytesRead;
         }
     }

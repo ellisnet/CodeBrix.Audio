@@ -88,7 +88,7 @@ public static class AudioIdentifier
 
         foreach (var queryHash in queryFingerprint.Hashes)
         {
-            var matches = await store.QueryHashAsync(queryHash.Hash);
+            var matches = await store.QueryHashAsync(queryHash.Hash).ConfigureAwait(false);
             
             foreach (var match in matches)
             {

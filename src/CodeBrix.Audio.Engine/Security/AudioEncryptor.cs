@@ -74,7 +74,7 @@ public static class AudioEncryptor
                 if (bytesAvailable == 0) break;
                 
                 // Write the encrypted block to the destination stream asynchronously
-                await destinationStream.WriteAsync(byteBuffer.AsMemory(0, bytesAvailable));
+                await destinationStream.WriteAsync(byteBuffer.AsMemory(0, bytesAvailable)).ConfigureAwait(false);
             }
         }
         finally
@@ -86,12 +86,12 @@ public static class AudioEncryptor
         // 3. Perform Signing if requested
         if (shouldSign)
         {
-            await destinationStream.FlushAsync();
+            await destinationStream.FlushAsync().ConfigureAwait(false);
             destinationStream.Seek(0, SeekOrigin.Begin); // Rewind for full stream hashing
 
             // If embedding, the current file state has zeros in the signature block.
             // This is exactly what we want to hash.
-            var sigResult = await FileAuthenticator.SignStreamAsync(destinationStream, signingConfig!);
+            var sigResult = await FileAuthenticator.SignStreamAsync(destinationStream, signingConfig!).ConfigureAwait(false);
 
             if (sigResult.IsFailure)
             {
@@ -112,7 +112,8 @@ public static class AudioEncryptor
                 }
 
                 destinationStream.Seek(sigBlockOffset, SeekOrigin.Begin);
-                await using var writer = new BinaryWriter(destinationStream, Encoding.UTF8, true);
+                var writer = new BinaryWriter(destinationStream, Encoding.UTF8, true);
+                await using var writerScope = writer.ConfigureAwait(false);
                 writer.Write(sigBytes.Length);
                 writer.Write(sigBytes);
                 writer.Flush();
@@ -162,11 +163,12 @@ public static class AudioEncryptor
         SignatureConfiguration? signingConfig = null,
         bool embedSignature = false)
     {
-        await using var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-        var detachedSignature = await EncryptAsync(source, fileStream, config, signingConfig, embedSignature);
+        var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+        await using var fileStreamScope = fileStream.ConfigureAwait(false);
+        var detachedSignature = await EncryptAsync(source, fileStream, config, signingConfig, embedSignature).ConfigureAwait(false);
         if (detachedSignature != null)
         {
-            await File.WriteAllTextAsync(destinationPath + ".sig", detachedSignature);
+            await File.WriteAllTextAsync(destinationPath + ".sig", detachedSignature).ConfigureAwait(false);
         }
     }
 
@@ -291,10 +293,10 @@ public static class AudioEncryptor
         try
         {
             var fileStream = new FileStream(sourceFilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            var result = await VerifyAndDecryptAsync(fileStream, key, signingConfig, detachedSignature);
+            var result = await VerifyAndDecryptAsync(fileStream, key, signingConfig, detachedSignature).ConfigureAwait(false);
             
             if (result.IsFailure) 
-                await fileStream.DisposeAsync();
+                await fileStream.DisposeAsync().ConfigureAwait(false);
 
             return result;
         }
@@ -346,13 +348,14 @@ public static class AudioEncryptor
         if (isEmbedded && sigOffset >= 0)
         {
             // We must verify using a stream that "sees" zeros where the signature currently is.
-            await using var zeroingStream = new ZeroingStream(sourceStream, sigOffset, SecureAudioContainer.MaxSignatureSize);
-            verifyResult = await FileAuthenticator.VerifyStreamAsync(zeroingStream, signatureToVerify, signingConfig);
+            var zeroingStream = new ZeroingStream(sourceStream, sigOffset, SecureAudioContainer.MaxSignatureSize);
+            await using var zeroingStreamScope = zeroingStream.ConfigureAwait(false);
+            verifyResult = await FileAuthenticator.VerifyStreamAsync(zeroingStream, signatureToVerify, signingConfig).ConfigureAwait(false);
         }
         else
         {
             // Standard verification
-            verifyResult = await FileAuthenticator.VerifyStreamAsync(sourceStream, signatureToVerify, signingConfig);
+            verifyResult = await FileAuthenticator.VerifyStreamAsync(sourceStream, signatureToVerify, signingConfig).ConfigureAwait(false);
         }
 
         if (verifyResult.IsFailure) 

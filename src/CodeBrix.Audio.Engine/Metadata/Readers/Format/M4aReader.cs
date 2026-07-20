@@ -19,7 +19,7 @@ internal class M4aReader : BaseSoundFormatReader
         
         try
         {
-            var parseResult = await ParseBoxesAsync(new BigEndianBinaryReader(stream), stream.Length, info, options);
+            var parseResult = await ParseBoxesAsync(new BigEndianBinaryReader(stream), stream.Length, info, options).ConfigureAwait(false);
             if (parseResult.IsFailure) return Result<SoundFormatInfo>.Fail(parseResult.Error!);
         
             if (info.SampleRate == 0 || info.Duration.TotalSeconds <= 0)
@@ -71,14 +71,14 @@ internal class M4aReader : BaseSoundFormatReader
                 case "stbl": // Sample Table Box
                 case "udta": // User Data Box
                 case "ilst": // iTunes-style metadata list
-                    var subResult = await ParseBoxesAsync(reader, nextBoxPosition, info, options);
+                    var subResult = await ParseBoxesAsync(reader, nextBoxPosition, info, options).ConfigureAwait(false);
                     if(subResult.IsFailure) return subResult;
                     break;
                 
                 // The 'meta' box has a 4-byte null header before its children
                 case "meta": 
                     reader.ReadBytes(4);
-                    var metaResult = await ParseBoxesAsync(reader, nextBoxPosition, info, options);
+                    var metaResult = await ParseBoxesAsync(reader, nextBoxPosition, info, options).ConfigureAwait(false);
                     if(metaResult.IsFailure) return metaResult;
                     break;
 
@@ -107,7 +107,7 @@ internal class M4aReader : BaseSoundFormatReader
                     {
                         info.Tags ??= new SoundTags();
                         // Subtract 8 for the size/type header of this tag atom.
-                        await ParseTagBoxAsync(reader, boxType, info.Tags, options, (long)boxSize - 8);
+                        await ParseTagBoxAsync(reader, boxType, info.Tags, options, (long)boxSize - 8).ConfigureAwait(false);
                     }
                     break;
             }
@@ -189,7 +189,7 @@ internal class M4aReader : BaseSoundFormatReader
             if (dataSize <= 0) return;
 
             var data = new byte[dataSize];
-            await reader.BaseStream.ReadExactlyAsync(data);
+            await reader.BaseStream.ReadExactlyAsync(data).ConfigureAwait(false);
             
             // The tag VALUE is encoded in UTF-8
             string GetString() => Encoding.UTF8.GetString(data).TrimEnd('\0');

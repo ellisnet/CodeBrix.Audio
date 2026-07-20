@@ -34,30 +34,24 @@ effects, and editing/mixing all live here, plus MIDI, metadata, and visualizatio
   - Namespaces: CodeBrix.Audio.Engine.* — entirely separate from
     CodeBrix.Audio.*. The two assemblies share no types, and there is deliberate
     feature overlap (both have MIDI, WAV/MP3 reading, and an FFT). Picking which
-    library to use for a given task is left to the consumer.
+    library to use for a given task is left to the consumer. For ordinary
+    playback you do NOT need to touch the Engine at all: WaveOutEvent,
+    AudioFilePlayer and SharedAudioOutput in CodeBrix.Audio wrap it for you.
   - Native dependency: unlike CodeBrix.Audio, the Engine P/Invokes a bundled
-    native library, codebrix_miniaudio (built from miniaudio), shipped for
-    win-x64, win-arm64, linux-x64, linux-arm64, osx-x64, and osx-arm64. The right
-    binary is selected at runtime by the DllImportResolver in
-    Backends/MiniAudio/Native.cs.
-  - Provenance: vendored verbatim from SoundFlow v1.4.1 (LSXPrime/SoundFlow, MIT),
-    with namespaces renamed SoundFlow.* -> CodeBrix.Audio.Engine.* (each file's
-    namespace line carries a `//was previously:` comment). See
-    THIRD-PARTY-NOTICES.txt entries 3-4 and native/miniaudio/README.txt. The
-    native build inputs live under native/miniaudio (miniaudio.h is vendored
-    in-repo at native/miniaudio/miniaudio-80cf7b2/).
-
-CONVENTIONS EXCEPTION: CodeBrix.Audio.Engine intentionally does NOT follow the
-CodeBrix family CODING CONVENTIONS listed below. As a large verbatim vendoring
-(~35k lines) it keeps SoundFlow's original project settings so upstream re-syncs
-stay mechanical:
-  - Nullable reference types are ON (the code uses `?` and `!`); ImplicitUsings
-    is ON; AllowUnsafeBlocks is ON.
-  - Do NOT hand-edit Engine source to match the family style. To update the
-    Engine, re-vendor from a newer SoundFlow tag and re-apply the namespace
-    rename rather than rewriting in place.
-The CODING CONVENTIONS section below applies to the CodeBrix.Audio assembly and
-its tests, NOT to CodeBrix.Audio.Engine.
+    native library, codebrix_miniaudio (built from miniaudio). It is shipped for
+    six runtime identifiers — win-x64, win-arm64, linux-x64, linux-arm64,
+    osx-x64, osx-arm64 — and the right one is loaded at runtime with no
+    configuration on your part. What this means for your application:
+      * Those six RIDs are the supported set. An app published for any other RID
+        will start, but will throw as soon as it opens an audio device.
+      * The native payload must travel with your app. A normal framework-
+        dependent or self-contained publish handles this; if you publish
+        single-file, make sure your publish settings keep native libraries
+        available to the host.
+      * No system audio package or system-wide codec is required on Windows,
+        macOS, or Linux — playback is self-contained.
+  - Attribution: derived from SoundFlow (MIT) with the namespaces renamed, and
+    from miniaudio for the native backend. See THIRD-PARTY-NOTICES.txt.
 
 
 INSTALLATION
@@ -287,10 +281,36 @@ COMMON PITFALLS
     envelope follower.
   - Threading: a single reader/stream instance is not thread-safe; give each
     thread its own reader.
+  - UI threads and the Engine's synchronous APIs: a few Engine entry points are
+    synchronous wrappers that do async I/O internally - SoundMetadataReader.Read,
+    SoundMetadataWriter.WriteTags/RemoveTags, Recorder.StopRecording, and anything
+    that opens a source through them (AudioFormat.GetFormatFromStream, the data
+    providers, and therefore AudioFilePlayer.Load). They still do BLOCKING disk or
+    network I/O, so on a UI thread prefer the *Async overloads where they exist, or
+    do the work on a background thread.
+    IMPORTANT if you are pinned to package 1.0.199.38 or earlier: on those versions
+    the same calls can DEADLOCK a UI thread outright - the window never paints, and
+    there is no exception and no log entry to tell you why. It is file-dependent, so
+    it looks intermittent: a read served from the stream buffer completes
+    synchronously and slips through, while an MP3 carrying a large ID3 tag (embedded
+    album art, say) hangs. On those versions, always open audio sources from a
+    background thread and marshal the result back to the UI.
+  - Opening a file is cheap no matter how big it is: AudioFilePlayer streams
+    through a chunked decoder instead of reading the file into memory, so Load
+    reads the headers plus roughly five seconds of audio. A 50 MB WAV opens as
+    fast as a 1 MB MP3 (milliseconds either way), and Duration is available as
+    soon as Load returns. So do not pre-load a media library at start-up - load
+    the one track you are about to play, when you are about to play it.
 
 
 CODING CONVENTIONS (CodeBrix family)
 --------------------------------------------------------------------------------
+Nothing from here to the end of the file is needed to CONSUME the package - the
+rest of this document is for people and agents working ON this repository.
+
+These conventions govern the CodeBrix.Audio assembly and its tests. They do NOT
+govern CodeBrix.Audio.Engine; see MAINTAINING CODEBRIX.AUDIO.ENGINE below.
+
   - Target framework net10.0 only; no multi-targeting.
   - Nullable reference types are OFF. Do NOT add `?` to reference types and do
     NOT use the null-forgiveness `!` operator. Value-type nullables (int?,
@@ -305,6 +325,49 @@ CODING CONVENTIONS (CodeBrix family)
     provenance comment on the namespace line and preserve upstream license
     headers where present.
   - Tests use xUnit v3 + SilverAssertions; see TESTING.
+
+
+MAINTAINING CODEBRIX.AUDIO.ENGINE
+--------------------------------------------------------------------------------
+src/CodeBrix.Audio.Engine/ is a ~35k-line verbatim vendoring of SoundFlow v1.4.1
+(LSXPrime/SoundFlow, MIT) with namespaces renamed SoundFlow.* ->
+CodeBrix.Audio.Engine.* (each namespace line carries a `//was previously:`
+comment). Native build inputs live under native/miniaudio/ (miniaudio.h vendored
+at native/miniaudio/miniaudio-80cf7b2/); see native/miniaudio/README.txt.
+
+It deliberately keeps SoundFlow's own project settings so re-syncs stay
+mechanical: NRT is ON (the code uses `?` and `!`), ImplicitUsings is ON,
+AllowUnsafeBlocks is ON. Do not rewrite Engine source to match family style - to
+take a newer SoundFlow, re-vendor and re-apply the renames rather than editing in
+place.
+
+RE-VENDOR CHECKLIST - three deliberate divergences must be re-applied, or they
+silently regress:
+
+  1. Namespace rename SoundFlow.* -> CodeBrix.Audio.Engine.*, with the
+     `//was previously:` provenance comment on each namespace line.
+
+  2. De-branding. "SoundFlow" is allowed only in comments, license text, and
+     provenance markers - never in a live namespace, type, member, or XML-doc.
+     Includes the type rename SoundFlowJsonContext -> CompositionProjectJsonContext
+     and the string values FactoryId "CodeBrix.MiniAudio.Default", Vorbis
+     VendorString "CodeBrix.Audio", and watermark key "DefaultCodeBrixAudioKey".
+
+  3. ConfigureAwait(false) on EVERY await. Upstream has none, and its metadata
+     layer blocks on its own async reads (BaseSoundFormatReader.Read is
+     `ReadAsync(...).GetAwaiter().GetResult()`), so on a thread with a
+     SynchronizationContext the continuation is posted to the very thread that is
+     blocked waiting for it and the process deadlocks with no exception and no
+     log. Currently 163 call sites across 24 files.
+     Verify with:
+         grep -rn "await " --include=*.cs src/ | grep -v ConfigureAwait
+     Only multi-line awaits whose suffix landed on a later line should remain (at
+     the time of writing, 3 in Editing/Persistence/CompositionProjectManager.cs).
+     Note the two non-obvious forms: the suffix belongs on the end of the awaited
+     EXPRESSION, not the end of the line (awaits appear inside `if` conditions and
+     ternaries), and `await using var x = expr;` has to become `var x = expr;`
+     plus `await using var xScope = x.ConfigureAwait(false);` so that x keeps its
+     original type.
 
 
 ARCHITECTURE

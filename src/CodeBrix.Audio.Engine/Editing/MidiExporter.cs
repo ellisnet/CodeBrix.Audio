@@ -73,7 +73,8 @@ public static class MidiExporter
         }
 
         // 3. Write the file
-        await using var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None);
+        var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None);
+        await using var fileStreamScope = fileStream.ConfigureAwait(false);
         MidiFileWriter.Write(midiFile, fileStream);
     }
 

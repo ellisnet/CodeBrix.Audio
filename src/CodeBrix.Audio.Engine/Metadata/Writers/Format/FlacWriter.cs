@@ -11,8 +11,10 @@ internal class FlacWriter : ISoundFormatWriter
     {
         try
         {
-            await using var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
-            await using var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
+            await using var sourceStreamScope = sourceStream.ConfigureAwait(false);
+            var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            await using var destStreamScope = destStream.ConfigureAwait(false);
             using var reader = new BinaryReader(sourceStream);
 
             // Verify fLaC marker
@@ -49,7 +51,7 @@ internal class FlacWriter : ISoundFormatWriter
             } while (!lastBlock);
             
             // Copy the rest of the file (audio frames)
-            await sourceStream.CopyToAsync(destStream);
+            await sourceStream.CopyToAsync(destStream).ConfigureAwait(false);
             return Result.Ok();
         }
         catch (Exception ex)
@@ -62,8 +64,10 @@ internal class FlacWriter : ISoundFormatWriter
     {
         try
         {
-            await using var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
-            await using var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            var sourceStream = new FileStream(sourcePath, FileMode.Open, FileAccess.Read);
+            await using var sourceStreamScope3 = sourceStream.ConfigureAwait(false);
+            var destStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write);
+            await using var destStreamScope5 = destStream.ConfigureAwait(false);
             using var reader = new BinaryReader(sourceStream);
 
             // Write fLaC marker
@@ -115,7 +119,7 @@ internal class FlacWriter : ISoundFormatWriter
             
             // Copy the audio data
             sourceStream.Position = audioDataStartPos;
-            await sourceStream.CopyToAsync(destStream);
+            await sourceStream.CopyToAsync(destStream).ConfigureAwait(false);
             return Result.Ok();
         }
         catch (Exception ex)
