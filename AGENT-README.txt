@@ -616,80 +616,7 @@ Nothing from here to the end of the file is needed to CONSUME the package - the
 rest of this document is for people and agents working ON this repository.
 
 These conventions govern the CodeBrix.Audio assembly and its tests. They do NOT
-govern CodeBrix.Audio.Engine; see ADDING A CODEC FROM ANOTHER PACKAGE
---------------------------------------------------------------------------------
-CodeBrix.Audio is MIT and stays that way, so a codec under a different licence
-(Opus is BSD-3-Clause) belongs in its own package that depends on this one.
-Everything such a package needs is public API; nothing here has to change to
-accept one.
-
-There are TWO seams, because there are two ways audio gets opened:
-
-  1. PLAYBACK goes through the audio engine, which identifies formats by
-     CONTENT. Supply an ICodecFactory and register it:
-
-         SharedAudioOutput.RegisterCodecFactory(new OpusCodecFactory());
-
-     That reaches AudioFilePlayer, SoundEffectClip, WaveOutEvent and the
-     GameEngine's audio stack. The registration is remembered for the process,
-     so it survives SharedAudioOutput.Shutdown() and is re-applied to every
-     engine started afterwards. A consumer driving its OWN AudioEngine calls
-     engine.RegisterCodecFactory(...) directly (ManagedCodecs.RegisterAll does
-     this for the built-in managed codecs).
-
-  2. READING BY FILE NAME goes through AudioFileReader, which dispatches on
-     EXTENSION. Register a WaveStream factory:
-
-         AudioFileReaderRegistry.Register(".opus", s => new OpusFileReader(s));
-
-     AudioFileReader then opens .opus, as do AudioFileReaderRegistry.OpenFile
-     and anything else built on the registry.
-
-     STREAM OWNERSHIP - the factory is handed a stream it does NOT own. Do not
-     close it, and do not make your reader close it either; the registry opened
-     the file and keeps the handle. OpenFile therefore returns a
-     FileOwningWaveStream pairing the two: disposing it disposes your reader and
-     THEN closes the file, and its .Reader property gets callers back to your
-     concrete type. A reader that takes ownership anyway is tolerated (the second
-     Dispose is a no-op), but a handle nobody closes leaves the file locked on
-     Windows until GC, which surfaces much later as File.Delete/File.Move failing
-     with "used by another process".
-
-Both are idempotent-ish and cheap; call them once at start-up (a static
-Register() entry point on the add-on package is the friendliest shape - do not
-rely on module initializers, which only run once something in the assembly is
-touched).
-
-WHAT TO BUILD ON:
-
-  - ManagedSoundDecoder (public, CodeBrix.Audio.Codecs) is the base class for a
-    managed ISoundDecoder. It handles the part every codec otherwise
-    reimplements: converting the file's channel count and sample rate to what
-    the engine asked for. Derive from it, supply ReadSourceSamples / SeekSource
-    / DisposeCore, and call Initialize(channels, sampleRate, totalFrames) once
-    the file's format is known. VorbisSoundDecoder and FlacSoundDecoder are the
-    two worked examples in this repo.
-  - OggCodecSniffer (public) identifies which codec an Ogg container carries -
-    Vorbis, Opus, Ogg FLAC, or unknown - without disturbing the stream position.
-
-THE OGG FORMAT-ID SHARING RULE (this is the one that bites):
-The metadata layer reports the format identifier "ogg" for EVERY Ogg stream,
-whatever codec is inside. So an Ogg-capable factory is offered Vorbis, Opus and
-Ogg FLAC alike. Two consequences:
-
-  - Your factory MUST check what it was actually handed (OggCodecSniffer) and
-    return NULL for anything else. Returning null lets the engine move on to the
-    next factory; throwing, or accepting and then failing, does not.
-  - Reset the stream position on entry (if stream.CanSeek). The engine does not
-    rewind between factories on the format-id path, so an earlier factory may
-    have moved it.
-
-PRIORITY CONVENTION: the built-in native factory is 0; the managed fallbacks are
--10. An add-on codec for a format the native library cannot decode can sit
-anywhere below 0 - use -10 to match, or lower to defer to the built-ins.
-
-
-MAINTAINING CODEBRIX.AUDIO.ENGINE below.
+govern CodeBrix.Audio.Engine; see MAINTAINING CODEBRIX.AUDIO.ENGINE below.
 
   - Target framework net10.0 only; no multi-targeting.
   - Nullable reference types are OFF. Do NOT add `?` to reference types and do
@@ -809,7 +736,7 @@ AllowUnsafeBlocks is ON. Do not rewrite Engine source to match family style - to
 take a newer SoundFlow, re-vendor and re-apply the renames rather than editing in
 place.
 
-RE-VENDOR CHECKLIST - seven deliberate divergences must be re-applied, or they
+RE-VENDOR CHECKLIST - eight deliberate divergences must be re-applied, or they
 silently regress:
 
   1. Namespace rename SoundFlow.* -> CodeBrix.Audio.Engine.*, with the
@@ -866,6 +793,23 @@ silently regress:
      the last page's granule position is a single 64 KB tail read, so it is fast
      enough to always do. Also in Native.cs: sf_has_vorbis is imported as the
      capability probe (a missing entry point means an older binary, not an error).
+
+  8. OggReader's OpusHead handling: report 48000, and subtract the pre-skip from
+     the duration. Upstream does neither, and both matter more here than they do
+     upstream, because this package's whole Opus story is handing the stream to a
+     separately licensed decoder package.
+       * An Opus stream ALWAYS decodes at 48 kHz. OpusHead's "input sample rate"
+         (offset 12) is the rate the ENCODER was fed - 16000 for a typical
+         messenger voice note, and permitted to be 0 - and RFC 7845 marks it
+         informational. Reporting it is not a cosmetic slip: the data providers
+         build the decoder's TARGET format from SoundFormatInfo.SampleRate, so a
+         16 kHz voice note would have its 48 kHz output resampled as though it
+         were 16 kHz. ffprobe reports 48000 for these files too.
+       * An Ogg Opus granule position counts the pre-skip (offset 10, uint16 LE) -
+         priming samples the decoder discards - so the duration must subtract it
+         or every file reads a few milliseconds long.
+     tests/CodeBrix.Audio.Engine.Tests/OggOpusMetadataTests.cs pins both, against
+     .opus fixtures whose pre-skip and granule are known exactly.
 
 
 ARCHITECTURE
@@ -966,7 +910,15 @@ Test audio: WAV and MP3 fixtures are still built in code (TestAudio.cs). Ogg
 Vorbis and FLAC cannot reasonably be hand-assembled, so those live as files under
 tests/Assets/audio/ - synthesized tones, sweeps, seeded noise and silence
 generated by tools/make_test_fixtures/make_fixtures.sh, NOT third-party audio.
-tests/Assets/audio/AUDIO-FIXTURES.txt says what each one is for.
+tests/Assets/audio/AUDIO-FIXTURES.txt says what each one is for. Two .opus
+fixtures are there for the METADATA reader only - nothing here decodes Opus - and
+one of them is deliberately encoded from 16 kHz so its declared rate and its
+decode rate disagree.
+
+Regenerate the fixtures DELIBERATELY, not as a side effect of adding one file: an
+Ogg muxer assigns a random stream serial number per run, so every .ogg and .opus
+comes out with different bytes even on an identical ffmpeg build. (The .flac and
+.wav files do reproduce byte for byte.)
 
 Test SoundFont: tests/Assets/soundfont/codebrix-test.sf2, built from sine tones
 by tools/make_test_fixtures/make_soundfont.py. NO real SoundFont is committed

@@ -27,11 +27,14 @@ internal class OggReader : BaseSoundFormatReader
 
             var idPacket = page.Packets[0];
 
+            // Encoder priming samples an Opus decoder discards; 0 for every other codec.
+            var opusPreSkip = 0;
+
             // Determine the codec from the identification packet.
             if (idPacket is [0x01, _, _, _, _, _, _, ..] && Encoding.ASCII.GetString(idPacket, 1, 6) == "vorbis")
                 ParseVorbisIdentificationHeader(idPacket, info);
             else if (idPacket.Length >= 19 && Encoding.ASCII.GetString(idPacket, 0, 8) == "OpusHead")
-                ParseOpusIdentificationHeader(idPacket, info);
+                opusPreSkip = ParseOpusIdentificationHeader(idPacket, info);
             else
                 return new UnsupportedFormatError("Ogg stream is not a supported Vorbis or Opus stream.");
 
@@ -76,10 +79,21 @@ internal class OggReader : BaseSoundFormatReader
                 var lastGranulePosition = await FindLastPageGranuleAsync(stream).ConfigureAwait(false);
                 if (lastGranulePosition > 0)
                 {
-                    // For Opus, the granule position is always based on a 48 kHz clock, for Vorbis it's the PCM sample number.
-                    var divisor = info.CodecName == "Opus" ? 48000.0 : info.SampleRate;
-                    if (divisor > 0)
-                        info.Duration = TimeSpan.FromSeconds(lastGranulePosition / divisor);
+                    if (info.CodecName == "Opus")
+                    {
+                        // An Opus granule position is always on a 48 kHz clock, and it COUNTS THE
+                        // PRE-SKIP - the priming samples the encoder needed and the decoder throws
+                        // away. Subtract them or every file reports longer than it plays (a few
+                        // milliseconds, which is enough to leave a transport hanging past the end).
+                        var frames = lastGranulePosition - opusPreSkip;
+                        if (frames > 0)
+                            info.Duration = TimeSpan.FromSeconds(frames / 48000.0);
+                    }
+                    else if (info.SampleRate > 0)
+                    {
+                        // For Vorbis the granule position is the PCM sample number.
+                        info.Duration = TimeSpan.FromSeconds(lastGranulePosition / (double)info.SampleRate);
+                    }
                 }
             }
 
@@ -107,13 +121,27 @@ internal class OggReader : BaseSoundFormatReader
         info.CodecName = "Vorbis";
     }
 
-    private void ParseOpusIdentificationHeader(byte[] packet, SoundFormatInfo info)
+    /// <summary>
+    /// Reads an OpusHead identification packet (RFC 7845 section 5.1) into <paramref name="info"/>.
+    /// </summary>
+    /// <returns>The pre-skip, in 48 kHz samples, for the duration calculation.</returns>
+    private int ParseOpusIdentificationHeader(byte[] packet, SoundFormatInfo info)
     {
-        // Packet starts with "OpusHead" (8 bytes)
+        // Packet starts with "OpusHead" (8 bytes), then version (1) and channel count (1).
         info.CodecName = "Opus";
         info.ChannelCount = packet[9];
-        // Input Sample Rate is a 32-bit little-endian integer at offset 12
-        info.SampleRate = BitConverter.ToInt32(packet, 12);
+
+        // An Opus stream ALWAYS decodes at 48 kHz, whatever it was encoded from. The 32-bit value
+        // at offset 12 is the rate of the audio the ENCODER was handed - 16000 for a typical voice
+        // note, and permitted to be 0 when unknown - which RFC 7845 marks informational and tells
+        // implementations not to use for playback. Reporting it here would hand a decoder a rate
+        // its own output does not have: the data providers build the decoder's target format from
+        // this value, so a 16 kHz voice note would be resampled as though 48 kHz audio were 16 kHz.
+        // Report the decode rate instead, which is also what ffprobe shows for an Opus stream.
+        info.SampleRate = 48000;
+
+        // Pre-skip: unsigned 16-bit little-endian at offset 10, on that same 48 kHz clock.
+        return BitConverter.ToUInt16(packet, 10);
     }
 
     private async Task<OggPage?> ReadNextPageAsync(Stream stream)

@@ -14,7 +14,11 @@
 #     * the .flac files cover 16- and 24-bit, mono and stereo, all four stereo decorrelation
 #       modes, constant / fixed-predictor / LPC / verbatim subframes, and a short final block;
 #     * every .flac ships with the exact .wav it was encoded from, because FLAC is lossless -
-#       a decoder is correct only if it reproduces that PCM sample for sample.
+#       a decoder is correct only if it reproduces that PCM sample for sample;
+#     * the .opus files exist for the METADATA layer, not a decoder - this library does not
+#       decode Opus (it is BSD-3-Clause, so it ships as a separate package). They pin the two
+#       things an Opus header gets wrong if read naively: the rate it declares is not the rate
+#       it decodes at, and its granule positions count priming samples nobody hears.
 #
 # USAGE
 #   cd tools/make_test_fixtures
@@ -22,18 +26,20 @@
 #   OUT_DIR=/tmp/fixtures ./make_fixtures.sh
 #
 # PREREQUISITES (installed by YOU - this script never installs anything)
-#   ffmpeg, built with the libvorbis encoder and the native flac encoder.
+#   ffmpeg, built with the libvorbis and libopus encoders and the native flac encoder.
 #     Debian-based Linux:  sudo apt install ffmpeg
 #     macOS (Homebrew):    brew install ffmpeg
 #     Windows (winget):    winget install Gyan.FFmpeg
-#   Verify with:           ffmpeg -hide_banner -encoders | grep -E 'libvorbis|flac'
+#   Verify with:           ffmpeg -hide_banner -encoders | grep -E 'libvorbis|libopus|flac'
 #
 # NOTE ON REPRODUCIBILITY
-#   Byte-identical output requires the same ffmpeg/libvorbis build; the encoder writes its
-#   version into the Ogg vendor string, and encoder tuning changes between releases. The
-#   AUDIO-FIXTURES.txt manifest records the versions used for the committed files. Fixtures
-#   regenerated with a different ffmpeg remain valid test inputs - they are simply not
-#   byte-identical to the previous ones.
+#   The .flac and .wav files reproduce byte-identically on the same ffmpeg build. The Ogg ones
+#   (.ogg and .opus) never do: an Ogg muxer picks a RANDOM stream serial number for every run,
+#   so re-running this script always changes those bytes even with nothing else different. The
+#   encoder version also lands in the Ogg vendor string, and encoder tuning changes between
+#   releases. The AUDIO-FIXTURES.txt manifest records the version used for the committed files.
+#   Regenerated fixtures remain valid test inputs either way - so regenerate deliberately, not
+#   as a side effect of adding one file, or the diff churns every Ogg fixture in the repo.
 # ==============================================================================================
 
 set -euo pipefail
@@ -62,7 +68,7 @@ fi
 # ffmpeg with SIGPIPE, and - under `set -o pipefail` - fail the check even on a match.)
 FFMPEG_ENCODERS="$(ffmpeg -hide_banner -encoders 2>/dev/null || true)"
 
-for enc in libvorbis flac; do
+for enc in libvorbis libopus flac; do
     if ! printf '%s\n' "$FFMPEG_ENCODERS" | grep -E "^ [A-Z.]+ ${enc}( |\$)" > /dev/null; then
         echo "ERROR: this ffmpeg has no '${enc}' encoder. Install a full ffmpeg build." >&2
         exit 1
@@ -217,7 +223,34 @@ head -c 4000 "$OUT_DIR/flac-tone-stereo-16bit-44100-midside.flac" > "$OUT_DIR/fl
 echo "  flac-truncated.flac"
 
 # ---------------------------------------------------------------------------------------------
-# 3. Manifest
+# 3. OGG / OPUS fixtures - for the METADATA reader, not a decoder
+# ---------------------------------------------------------------------------------------------
+# This library does not decode Opus, but it does READ Opus headers, and two things there are
+# easy to get wrong in a way no Vorbis file would reveal:
+#
+#   * OpusHead's "input sample rate" is the rate the ENCODER was fed. Opus always decodes at
+#     48 kHz. Report the declared rate and a decoder is told its own output is a rate it is not.
+#   * Ogg Opus granule positions run on that 48 kHz clock and INCLUDE the pre-skip - priming
+#     samples the decoder discards - so a duration that does not subtract them runs long.
+#
+# The mono fixture is encoded from 16 kHz precisely so the declared rate and the decode rate
+# DISAGREE (16000 vs 48000), which is the shape of a phone/messenger voice note.
+echo "--- Ogg Opus ---"
+
+tone "$OUT_DIR/opus-tone-mono-from-16000.wav" 440 16000 1 0.25 pcm_s16le
+$FF -i "$OUT_DIR/opus-tone-mono-from-16000.wav" -c:a libopus -b:a 32k \
+    "$OUT_DIR/opus-tone-mono-from-16000.opus"
+rm -f "$OUT_DIR/opus-tone-mono-from-16000.wav"
+echo "  opus-tone-mono-from-16000.opus"
+
+tone "$OUT_DIR/opus-tone-stereo-48000.wav" 440 48000 2 0.25 pcm_s16le
+$FF -i "$OUT_DIR/opus-tone-stereo-48000.wav" -c:a libopus -b:a 96k \
+    "$OUT_DIR/opus-tone-stereo-48000.opus"
+rm -f "$OUT_DIR/opus-tone-stereo-48000.wav"
+echo "  opus-tone-stereo-48000.opus"
+
+# ---------------------------------------------------------------------------------------------
+# 4. Manifest
 # ---------------------------------------------------------------------------------------------
 {
     echo "=============================================================================="
@@ -245,6 +278,13 @@ echo "  flac-truncated.flac"
     echo "                                      and a correct decoder reproduces that PCM"
     echo "                                      sample for sample, because FLAC is lossless"
     echo "  flac-truncated.flac                 truncated stream; must fail cleanly"
+    echo "  opus-tone-mono-from-16000.opus      METADATA fixture (this library does not decode"
+    echo "                                      Opus). Encoded from 16 kHz, so OpusHead declares"
+    echo "                                      16000 while the stream decodes at 48000 - the"
+    echo "                                      voice-note shape, and the case that catches a"
+    echo "                                      reader reporting the declared rate as the real one"
+    echo "  opus-tone-stereo-48000.opus         the everyday Opus case; with the mono file it"
+    echo "                                      pins the pre-skip subtraction in the duration"
     echo
     echo "  flac-tone-mono-16bit-22050          fixed predictors only, independent channels"
     echo "  flac-tone-stereo-16bit-44100-*side  the four stereo decorrelation modes"
@@ -261,7 +301,7 @@ echo "  flac-truncated.flac"
     echo "------------------------------------------------------------------------------"
 } > "$MANIFEST"
 
-(cd "$OUT_DIR" && sha256sum ./*.ogg ./*.flac ./*.wav | sed 's|\./||') >> "$MANIFEST"
+(cd "$OUT_DIR" && sha256sum ./*.ogg ./*.flac ./*.opus ./*.wav | sed 's|\./||') >> "$MANIFEST"
 
 echo
 echo "Manifest: $MANIFEST"

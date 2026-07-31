@@ -30,6 +30,27 @@ internal static class TestAssets
     /// <summary>A FLAC stream cut off mid-frame.</summary>
     public const string FlacTruncated = "flac-truncated.flac";
 
+    /// <summary>
+    /// 0.25 s mono Ogg Opus, encoded from a 16 kHz source: OpusHead declares 16000 while the
+    /// stream decodes at 48 kHz, which is the shape of a messenger voice note.
+    /// </summary>
+    public const string OpusToneMonoFrom16000 = "opus-tone-mono-from-16000.opus";
+
+    /// <summary>0.25 s stereo Ogg Opus encoded from 48 kHz - the everyday case.</summary>
+    public const string OpusToneStereo = "opus-tone-stereo-48000.opus";
+
+    /// <summary>Pre-skip carried by both .opus fixtures, in 48 kHz samples.</summary>
+    public const int OpusFixturePreSkip = 312;
+
+    /// <summary>Final granule position of both .opus fixtures, on the 48 kHz clock.</summary>
+    public const int OpusFixtureLastGranule = 12312;
+
+    /// <summary>
+    /// Playable length of both .opus fixtures: (granule - pre-skip) / 48000. ffmpeg decodes
+    /// exactly 12000 frames from them, which is what makes this the truthful duration.
+    /// </summary>
+    public const double OpusFixtureDurationSeconds = 0.25;
+
     /// <summary>Expected sample rate of <see cref="VorbisToneStereo" />.</summary>
     public const int VorbisToneStereoSampleRate = 44100;
 

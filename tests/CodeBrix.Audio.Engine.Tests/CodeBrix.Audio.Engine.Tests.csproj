@@ -25,7 +25,7 @@
     cannot reasonably be hand-assembled.
   -->
   <ItemGroup>
-    <Content Include="..\Assets\audio\*.ogg;..\Assets\audio\*.flac;..\Assets\audio\*.wav">
+    <Content Include="..\Assets\audio\*.ogg;..\Assets\audio\*.flac;..\Assets\audio\*.opus;..\Assets\audio\*.wav">
       <Link>Assets\audio\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
