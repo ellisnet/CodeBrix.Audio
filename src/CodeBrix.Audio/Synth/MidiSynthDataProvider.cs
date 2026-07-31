@@ -11,7 +11,7 @@ namespace CodeBrix.Audio.Synth;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="SoundFontSynthesizer"/> is explicitly not thread-safe: rendering and note events must not
+/// An <see cref="IMidiSynthesizer"/> is explicitly not thread-safe: rendering and note events must not
 /// overlap. That is a real hazard here, because rendering happens on the engine's real-time audio thread
 /// while transport calls (play, seek, stop) arrive from whatever thread the application uses. Every
 /// entry point on this type takes the same lock, so the two can never interleave.
@@ -35,7 +35,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
 
     /// <summary>Creates a provider rendering the given synthesizer at its own sample rate.</summary>
     /// <param name="synthesizer">The synthesizer to render. Constructed at the output device's rate.</param>
-    internal MidiSynthDataProvider(SoundFontSynthesizer synthesizer)
+    internal MidiSynthDataProvider(IMidiSynthesizer synthesizer)
     {
         if (synthesizer == null)
         {

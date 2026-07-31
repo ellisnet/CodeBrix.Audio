@@ -3,26 +3,29 @@ using System.IO;
 using System.Threading;
 using CodeBrix.Audio.Engine.Components;
 using CodeBrix.Audio.Synth;
+using CodeBrix.Audio.Synth.Sfz;
 using CodeBrix.Audio.Wave;
 using EnginePlaybackState = CodeBrix.Audio.Engine.Enums.PlaybackState;
 
 namespace CodeBrix.Audio.Playback;
 
 /// <summary>
-/// A long-running player for MIDI music rendered through a SoundFont, with the same transport controls
-/// as <see cref="AudioFilePlayer"/>: play/pause/stop, volume, looping, seek to a timecode, and a
-/// readable position and duration.
+/// A long-running player for MIDI music rendered through a SoundFont or an SFZ instrument, with the
+/// same transport controls as <see cref="AudioFilePlayer"/>: play/pause/stop, volume, looping, seek to
+/// a timecode, and a readable position and duration.
 /// </summary>
 /// <remarks>
 /// <para>
 /// This is the counterpart to <see cref="AudioFilePlayer"/> for music that is synthesized rather than
-/// decoded. Load a SoundFont and a MIDI sequence, then drive it exactly as you would a file player. The
-/// music mixes into the process-wide <see cref="SharedAudioOutput"/> alongside everything else.
+/// decoded. Load an instrument - a <c>.sf2</c> SoundFont or a <c>.sfz</c> instrument - and a MIDI
+/// sequence, then drive it exactly as you would a file player. The format decides which synthesizer
+/// renders; the transport is identical either way. The music mixes into the process-wide
+/// <see cref="SharedAudioOutput"/> alongside everything else.
 /// </para>
 /// <para>
-/// SoundFonts are large. Load them through a <see cref="SoundFontCache"/> and share one instance across
-/// every player rather than reloading per track - see the <c>Load</c> overload that takes a
-/// <see cref="SoundFont"/>.
+/// Instruments are large. Load them through a <see cref="SoundFontCache"/> or
+/// <see cref="SfzInstrumentCache"/> and share one instance across every player rather than reloading
+/// per track - see the <c>Load</c> overloads that take an instrument instance.
 /// </para>
 /// <para>
 /// The synthesizer is created at the output device's sample rate, so nothing is resampled. Rendering
@@ -37,7 +40,7 @@ public sealed class MidiMusicPlayer : IDisposable
 {
     private readonly object _lock = new object();
 
-    private SoundFontSynthesizer _synthesizer;
+    private IMidiSynthesizer _synthesizer;
     private MidiSynthDataProvider _provider;
     private SoundPlayer _player;
     private SynchronizationContext _syncContext;
@@ -118,15 +121,19 @@ public sealed class MidiMusicPlayer : IDisposable
         get { lock (_lock) { return _synthesizer == null ? 0 : _synthesizer.ActiveVoiceCount; } }
     }
 
-    /// <summary>Loads a SoundFont and a MIDI file by path, positioned at the start and stopped.</summary>
-    /// <param name="soundFontPath">Path to a <c>.sf2</c> file.</param>
+    /// <summary>
+    /// Loads an instrument and a MIDI file by path, positioned at the start and stopped. The
+    /// instrument's extension decides the synthesizer: <c>.sfz</c> loads an SFZ instrument, anything
+    /// else a SoundFont.
+    /// </summary>
+    /// <param name="instrumentPath">Path to a <c>.sf2</c> or <c>.sfz</c> file.</param>
     /// <param name="midiFilePath">Path to a Standard MIDI File.</param>
     /// <exception cref="ArgumentNullException">Either path is null.</exception>
-    public void Load(string soundFontPath, string midiFilePath)
+    public void Load(string instrumentPath, string midiFilePath)
     {
-        if (soundFontPath == null)
+        if (instrumentPath == null)
         {
-            throw new ArgumentNullException(nameof(soundFontPath));
+            throw new ArgumentNullException(nameof(instrumentPath));
         }
 
         if (midiFilePath == null)
@@ -134,7 +141,14 @@ public sealed class MidiMusicPlayer : IDisposable
             throw new ArgumentNullException(nameof(midiFilePath));
         }
 
-        Load(new SoundFont(soundFontPath), new MidiSequence(midiFilePath));
+        if (string.Equals(Path.GetExtension(instrumentPath), ".sfz", StringComparison.OrdinalIgnoreCase))
+        {
+            Load(new SfzInstrument(instrumentPath), new MidiSequence(midiFilePath));
+        }
+        else
+        {
+            Load(new SoundFont(instrumentPath), new MidiSequence(midiFilePath));
+        }
     }
 
     /// <summary>
@@ -151,6 +165,29 @@ public sealed class MidiMusicPlayer : IDisposable
             throw new ArgumentNullException(nameof(soundFont));
         }
 
+        LoadCore(rate => new SoundFontSynthesizer(soundFont, rate), sequence);
+    }
+
+    /// <summary>
+    /// Loads a shared SFZ instrument and a MIDI sequence. This is the overload to prefer for SFZ: the
+    /// instrument can come from an <see cref="SfzInstrumentCache"/> and be shared across every player
+    /// in the process.
+    /// </summary>
+    /// <param name="instrument">The SFZ instrument to render with.</param>
+    /// <param name="sequence">The sequence to play.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    public void Load(SfzInstrument instrument, MidiSequence sequence)
+    {
+        if (instrument == null)
+        {
+            throw new ArgumentNullException(nameof(instrument));
+        }
+
+        LoadCore(rate => new SfzSynthesizer(instrument, rate), sequence);
+    }
+
+    private void LoadCore(Func<int, IMidiSynthesizer> createSynthesizer, MidiSequence sequence)
+    {
         if (sequence == null)
         {
             throw new ArgumentNullException(nameof(sequence));
@@ -166,12 +203,12 @@ public sealed class MidiMusicPlayer : IDisposable
             var device = SharedAudioOutput.EnsureStarted(48000);
             var deviceRate = SharedAudioOutput.SampleRate;
 
-            SoundFontSynthesizer synthesizer = null;
+            IMidiSynthesizer synthesizer = null;
             MidiSynthDataProvider provider = null;
             SoundPlayer player = null;
             try
             {
-                synthesizer = new SoundFontSynthesizer(soundFont, deviceRate);
+                synthesizer = createSynthesizer(deviceRate);
                 provider = new MidiSynthDataProvider(synthesizer);
                 provider.Start(sequence, _isLooping);
 

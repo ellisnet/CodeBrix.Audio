@@ -44,6 +44,7 @@ internal static class Program
         Write(Path.Combine(outputDirectory, "opcodes.md"), report.BuildOpcodeTable());
         Write(Path.Combine(outputDirectory, "coverage.md"), report.BuildCoverageCurve());
         Write(Path.Combine(outputDirectory, "libraries.md"), report.BuildPerLibraryBreakdown());
+        Write(Path.Combine(outputDirectory, "implemented-coverage.md"), report.BuildImplementedCoverage());
 
         Console.WriteLine();
         Console.WriteLine(report.Summary());
@@ -134,22 +135,9 @@ internal static class Program
 
     // The unit an implementer actually implements. An indexed opcode is one feature however many
     // numbers it appears with, so volume_oncc11 and volume_oncc74 both canonicalise to volume_onccN.
-    private static string Canonical(SfzOpcode opcode)
-    {
-        if (opcode.Index == null)
-        {
-            return opcode.Name;
-        }
-
-        if (opcode.Modulation != null)
-        {
-            return opcode.BaseName == opcode.Name.TrimEnd('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')
-                ? opcode.BaseName + "N"
-                : opcode.BaseName + "_" + opcode.Modulation + "N";
-        }
-
-        return opcode.BaseName + "_N";
-    }
+    // The folding lives in the library now, next to the set of implemented opcodes it is compared
+    // against, so the survey and the engine can never disagree about names.
+    private static string Canonical(SfzOpcode opcode) => SfzSupportedOpcodes.CanonicalNameOf(opcode);
 }
 
 internal sealed class Library
@@ -326,6 +314,50 @@ internal sealed class Report
                 sb.AppendLine($"- {failure}");
             }
         }
+
+        return sb.ToString();
+    }
+
+    // Coverage against what CodeBrix.Audio ACTUALLY implements - SfzSupportedOpcodes, read straight
+    // from the library assembly - rather than a hypothetical top-N. This is the report that says
+    // whether the shipping scope met its target, and it stays correct as the engine grows.
+    internal string BuildImplementedCoverage()
+    {
+        var implemented = new HashSet<string>(SfzSupportedOpcodes.CanonicalNames, StringComparer.Ordinal);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("# SFZ opcode survey — coverage of the implemented engine");
+        sb.AppendLine();
+        sb.AppendLine(Preamble());
+        sb.AppendLine();
+        sb.AppendLine($"Compared against `SfzSupportedOpcodes` from the CodeBrix.Audio assembly this tool was");
+        sb.AppendLine($"built with: **{implemented.Count} implemented opcodes** (canonical, index-folded form).");
+        sb.AppendLine("\"Fully supported\" is strict — every opcode the library uses must be implemented.");
+        sb.AppendLine();
+
+        var fullySupported = _libraries.Count(l => l.Occurrences.Keys.All(implemented.Contains));
+        var percent = 100.0 * fullySupported / _libraries.Count;
+        sb.AppendLine($"**{fullySupported} of {_libraries.Count} libraries ({percent.ToString("F1", CultureInfo.InvariantCulture)}%) are fully supported.**");
+        sb.AppendLine();
+        sb.AppendLine("| Library | Unimplemented opcodes it uses | Which |");
+        sb.AppendLine("|---------|------------------------------:|-------|");
+
+        foreach (var library in _libraries.OrderBy(l => l.Occurrences.Keys.Count(k => !implemented.Contains(k)))
+                                          .ThenBy(l => l.Name, StringComparer.Ordinal))
+        {
+            var missing = library.Occurrences.Keys
+                .Where(k => !implemented.Contains(k))
+                .OrderBy(k => k, StringComparer.Ordinal)
+                .ToList();
+            var which = missing.Count == 0
+                ? "—"
+                : string.Join(", ", missing.Take(12).Select(m => "`" + m + "`")) + (missing.Count > 12 ? ", …" : "");
+            sb.AppendLine($"| {library.Name} | {missing.Count} | {which} |");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("A library with a short list here plays, minus exactly those features; the Debug log of an");
+        sb.AppendLine("`SfzInstrument` load reports the same names in the field (`SfzInstrument.UnsupportedOpcodes`).");
 
         return sb.ToString();
     }

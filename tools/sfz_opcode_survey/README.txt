@@ -38,6 +38,13 @@ WHAT IT WRITES
                 unimplemented opcodes if the top N opcodes were implemented. Plus, for the top
                 50, exactly which opcodes each library still needs.
   libraries.md  Per-library breakdown: files, regions, distinct opcodes, parse problems.
+  implemented-coverage.md
+                Coverage against what CodeBrix.Audio ACTUALLY implements - read from
+                SfzSupportedOpcodes in the library assembly this tool builds against, so it
+                stays truthful as the engine grows. Reports how many libraries are fully
+                supported and exactly which opcodes each remaining library still needs. This
+                is the report that says whether the shipping scope met its target, and the
+                one to re-run over a new library before promising it will play.
 
 THE COUNTING RULE THAT MATTERS
   Opcodes are ranked by the number of LIBRARIES that use them, never by raw occurrence count.
@@ -48,6 +55,15 @@ THE COUNTING RULE THAT MATTERS
   Indexed opcodes are folded to one name: volume_oncc11 and volume_oncc74 both count once, as
   volume_onccN. That is the unit somebody actually implements - _oncc is a mechanism, not one
   opcode per CC number.
+
+  Block indices fold the same way: lfo01_freq and lfo3_freq are both lfoN_freq, eg06_time0 is
+  egN_time_N, eq2_gain_oncc77 is eqN_gain_onccN, var01_mod is varN_mod, and concatenated targets
+  fold with them (lfo01_eq1gain_oncc10 is lfoN_eqNgain_onccN). An LFO is one mechanism however
+  many blocks a file declares. The folding lives in SfzSupportedOpcodes.CanonicalNameOf, shared
+  with the engine, so the survey and the implemented set can never disagree about names. The one
+  deliberate exception: cutoff2/resonance2 keep their names - the second filter is a distinct
+  feature, not an indexed instance of the first. (This folding is why a survey re-run after the
+  opcode-tail work reports 203 distinct opcodes where earlier runs of the same corpus said 233.)
 
 ONLY ROOT FILES ARE COUNTED
   A .sfz that some other file #includes is NOT counted on its own. Only "root" files - the ones

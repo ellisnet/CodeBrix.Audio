@@ -143,7 +143,7 @@ public class SoundFontRendererTests
         var sequence = BuildSingleNoteSequence();
 
         //Act
-        var act = () => SoundFontRenderer.Render(null, sequence);
+        var act = () => SoundFontRenderer.Render((SoundFont)null, sequence);
 
         //Assert
         act.Should().Throw<ArgumentNullException>();

@@ -1,12 +1,13 @@
 using System;
 using System.IO;
+using CodeBrix.Audio.Synth.Sfz;
 using CodeBrix.Audio.Wave;
 
 namespace CodeBrix.Audio.Synth;
 
 /// <summary>
-/// Renders MIDI music through a SoundFont without an audio device - to a buffer, or straight to a WAV
-/// file. Runs as fast as the machine allows rather than in real time.
+/// Renders MIDI music through a SoundFont or an SFZ instrument without an audio device - to a buffer,
+/// or straight to a WAV file. Runs as fast as the machine allows rather than in real time.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -65,7 +66,53 @@ public static class SoundFontRenderer
             throw new ArgumentOutOfRangeException(nameof(tail), tail, "The tail length cannot be negative.");
         }
 
-        var synthesizer = new SoundFontSynthesizer(soundFont, sampleRate);
+        return RenderCore(new SoundFontSynthesizer(soundFont, sampleRate), sequence, sampleRate, tail);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through an SFZ instrument to interleaved stereo float samples.
+    /// </summary>
+    /// <param name="instrument">The SFZ instrument to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="sampleRate">Output sample rate in Hz.</param>
+    /// <param name="tail">
+    /// Extra time rendered after the sequence ends, so release tails decay away instead of being cut
+    /// off. Pass <see cref="TimeSpan.Zero"/> to stop exactly at the end.
+    /// </param>
+    /// <returns>Interleaved stereo samples: left, right, left, right, ...</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="instrument"/> or <paramref name="sequence"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive, or <paramref name="tail"/> is negative.</exception>
+    public static float[] Render(
+        SfzInstrument instrument,
+        MidiSequence sequence,
+        int sampleRate = DefaultSampleRate,
+        TimeSpan tail = default)
+    {
+        if (instrument == null)
+        {
+            throw new ArgumentNullException(nameof(instrument));
+        }
+
+        if (sequence == null)
+        {
+            throw new ArgumentNullException(nameof(sequence));
+        }
+
+        if (sampleRate <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "The sample rate must be positive.");
+        }
+
+        if (tail < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tail), tail, "The tail length cannot be negative.");
+        }
+
+        return RenderCore(new SfzSynthesizer(instrument, sampleRate), sequence, sampleRate, tail);
+    }
+
+    private static float[] RenderCore(IMidiSynthesizer synthesizer, MidiSequence sequence, int sampleRate, TimeSpan tail)
+    {
         var sequencer = new MidiSequencer(synthesizer);
         sequencer.Play(sequence, loop: false);
 
@@ -119,6 +166,34 @@ public static class SoundFontRenderer
     }
 
     /// <summary>
+    /// Renders a whole sequence through an SFZ instrument straight to a 32-bit float stereo WAV file.
+    /// </summary>
+    /// <param name="instrument">The SFZ instrument to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="outputPath">Path of the <c>.wav</c> file to write. Overwritten if it exists.</param>
+    /// <param name="sampleRate">Output sample rate in Hz.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive, or <paramref name="tail"/> is negative.</exception>
+    public static void RenderToWavFile(
+        SfzInstrument instrument,
+        MidiSequence sequence,
+        string outputPath,
+        int sampleRate = DefaultSampleRate,
+        TimeSpan tail = default)
+    {
+        if (outputPath == null)
+        {
+            throw new ArgumentNullException(nameof(outputPath));
+        }
+
+        using (var stream = File.Create(outputPath))
+        {
+            RenderToWavStream(instrument, sequence, stream, sampleRate, tail, leaveOpen: true);
+        }
+    }
+
+    /// <summary>
     /// Renders a whole sequence to a 32-bit float stereo WAV stream.
     /// </summary>
     /// <param name="soundFont">The SoundFont to render with.</param>
@@ -142,7 +217,38 @@ public static class SoundFontRenderer
             throw new ArgumentNullException(nameof(output));
         }
 
-        var samples = Render(soundFont, sequence, sampleRate, tail);
+        WriteWav(Render(soundFont, sequence, sampleRate, tail), output, sampleRate, leaveOpen);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through an SFZ instrument to a 32-bit float stereo WAV stream.
+    /// </summary>
+    /// <param name="instrument">The SFZ instrument to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="output">The stream to write the WAV file to. Must be writable and seekable.</param>
+    /// <param name="sampleRate">Output sample rate in Hz.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <param name="leaveOpen">When <see langword="true"/>, the stream is left open once writing finishes.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive, or <paramref name="tail"/> is negative.</exception>
+    public static void RenderToWavStream(
+        SfzInstrument instrument,
+        MidiSequence sequence,
+        Stream output,
+        int sampleRate = DefaultSampleRate,
+        TimeSpan tail = default,
+        bool leaveOpen = false)
+    {
+        if (output == null)
+        {
+            throw new ArgumentNullException(nameof(output));
+        }
+
+        WriteWav(Render(instrument, sequence, sampleRate, tail), output, sampleRate, leaveOpen);
+    }
+
+    private static void WriteWav(float[] samples, Stream output, int sampleRate, bool leaveOpen)
+    {
         var format = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, 2);
 
         var writer = new WaveFileWriter(new IgnoreDisposeStream(output, leaveOpen), format);

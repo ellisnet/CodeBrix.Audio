@@ -8,8 +8,9 @@ OVERVIEW
 CodeBrix.Audio is a fully managed, cross-platform audio file library for .NET.
 It reads WAV, MP3, Ogg Vorbis and FLAC waveform audio, reads and writes Standard
 MIDI Files, reads MP3 ID3v2 and Vorbis-comment tags, plays audio (media playback
-and sound effects) through the bundled engine, renders SoundFonts and plays MIDI
-music, and exposes a set of DSP primitives for audio analysis. All file DECODING
+and sound effects) through the bundled engine, renders SoundFonts (.sf2) and SFZ
+instruments (.sfz) and plays MIDI music through either, and exposes a set of DSP
+primitives for audio analysis. All file DECODING
 and all SYNTHESIS is managed code with no
 platform-specific interop, so it behaves identically on Windows, macOS, and
 Linux; PLAYBACK goes through the bundled engine and its native backend.
@@ -87,6 +88,13 @@ tool for faithfully reproducing somebody's .sf2.
 Neither was retired in favour of the other. They do different jobs, and the
 Engine's version is vendored SoundFlow code that is deliberately left unedited
 so re-vendoring stays cheap.
+
+SFZ HAS EXACTLY ONE PATH, and it is the first one: CodeBrix.Audio.Synth.Sfz
+(SfzInstrument, SfzSynthesizer). The Engine has no SFZ support at all, so there
+is no wrong turn to take. SfzSynthesizer and SoundFontSynthesizer implement the
+same IMidiSynthesizer contract, which is why MidiSequencer, MidiMusicPlayer and
+SoundFontRenderer drive either format without caring which - consumers choose a
+file format, not an API.
 
 TWO TYPES NAMED FOR MIDI FILES. Same rule, same reason:
 
@@ -220,10 +228,61 @@ PATHS" above first:
                             IsLooping / Position / Duration / PlaybackEnded,
                             shaped exactly like AudioFilePlayer.
 
-SFZ (CodeBrix.Audio.Synth.Sfz):
+SFZ (CodeBrix.Audio.Synth.Sfz) — the .sfz counterparts of the SoundFont types:
+  - SfzInstrument         : a playable SFZ instrument - typed regions, decoded
+                            samples (WAV/FLAC/Ogg via the reader registry, with
+                            wrong-case and backslash paths resolved), modulation
+                            curves, and initial controller state. Loading is
+                            tolerant: missing samples land in .Problems, opcodes
+                            the engine does not implement land in
+                            .UnsupportedOpcodes (and the Debug log, once per
+                            name) - the first thing to check when a library
+                            sounds off. Samples decode eagerly, so memory
+                            follows the library's size.
+  - SfzInstrumentCache    : loads an instrument once and shares it, keyed by
+                            path - the SoundFontCache of SFZ. Use it.
+  - SfzSynthesizer        : the SFZ renderer, a peer of SoundFontSynthesizer on
+                            the same IMidiSynthesizer contract and equally NOT
+                            thread-safe. Implements the SFZ articulation model:
+                            key/velocity/controller/program region selection,
+                            round robins and random layers (deterministic by
+                            seed - see SfzSynthesizerSettings.RandomSeed), key
+                            switches incl. sw_lolast/sw_hilast ranges and
+                            sw_vel=previous, trigger modes incl. release samples
+                            with rt_decay, off groups with fast/normal/timed
+                            chokes (off_time/off_shape), polyphony and
+                            note_polyphony limits, CC-triggered regions, and
+                            key/velocity/controller crossfades (xfin/xfout,
+                            gain or equal-power law).
+                            Per voice: the DAHDSR amplifier envelope with shape
+                            curvature, vel2* velocity timing and ampeg_dynamic
+                            retiming; the filter and pitch envelopes (fileg/
+                            pitcheg); flexible envelopes (egN, incl. the
+                            key-delta portamento idiom); the v1 amplfo/fillfo/
+                            pitchlfo blocks and v2 lfoN LFOs (sub-waveforms,
+                            cross-LFO frequency modulation, EQ routing); two
+                            filters in series; a three-band parametric EQ; ARIA
+                            variators (varNN); stereo width; region delay and
+                            the delay/offset/amp/fil randoms; and the
+                            _onccN/_curveccN/_smoothccN modulation matrix with
+                            the ARIA extended sources (128 pitch bend, 129/130
+                            aftertouch, 131 velocity, 133 note, 134 key gate,
+                            135/136 per-voice randoms, 137 alternate, 140/141
+                            key delta).
+  - SfzRegion             : one region with opcodes resolved and typed, spec
+                            defaults filled in; the block families come typed
+                            too (SfzEqBand, SfzLfo, SfzFlexEg, SfzModEnvelope,
+                            SfzVariator). SfzSupportedOpcodes is the exact
+                            implemented set (canonical, index-folded names -
+                            block indices fold too, so lfo01_freq and lfo3_freq
+                            are both lfoN_freq).
+  - MidiMusicPlayer and SoundFontRenderer take an SfzInstrument wherever they
+    take a SoundFont; MidiMusicPlayer.Load(path, midi) picks the synthesizer by
+    extension.
+
+  The structural layer underneath, for tooling rather than playback:
   - SfzParser             : ParseFile(...) / ParseText(...) read SFZ structure -
-                            headers, opcodes, #define and #include. STRUCTURE
-                            ONLY; SFZ rendering is not implemented yet.
+                            headers, opcodes, #define and #include.
   - SfzFile / SfzSection / SfzOpcode : the parsed result. SfzFile.Resolve(region)
                             applies region -> group -> master -> global
                             inheritance. Unknown opcodes are carried, never
@@ -354,7 +413,29 @@ Render MIDI music to a WAV file with no audio device (bounce / offline export):
                                      tail: TimeSpan.FromSeconds(2));  // let reverb decay
     // Or SoundFontRenderer.Render(...) for interleaved stereo floats in memory.
 
-Read an SFZ file's structure (parsing only - SFZ rendering is not implemented yet):
+Play MIDI music through an SFZ instrument (same transport, other format):
+
+    using CodeBrix.Audio.Playback;
+    using CodeBrix.Audio.Synth;
+    using CodeBrix.Audio.Synth.Sfz;
+
+    // Samples decode once at load: share one instrument across every player.
+    var instruments = new SfzInstrumentCache();
+    var piano = instruments.Get("VirtualPiano.sfz");
+
+    // If a library sounds wrong, look here FIRST: these are the opcodes it uses
+    // that the engine does not implement (canonical names, e.g. "eq1_freq").
+    foreach (var missing in piano.UnsupportedOpcodes) Console.WriteLine(missing);
+    foreach (var problem in piano.Problems) Console.WriteLine(problem);
+
+    var music = new MidiMusicPlayer();
+    music.Load(piano, new MidiSequence("song.mid"));
+    music.Play();
+    // SoundFontRenderer.Render / RenderToWavFile also accept an SfzInstrument
+    // for offline bounces, and SfzSynthesizer can be driven directly with
+    // ProcessMidiMessage / NoteOn / NoteOff / Render for interactive use.
+
+Read an SFZ file's structure (the layer under the engine; right for tooling):
 
     using CodeBrix.Audio.Synth.Sfz;
 
@@ -777,6 +858,20 @@ holds a MeltySynth-derived SF2 parser, object model and voice engine, of which
 only the SoundFont object model and a small playback facade are public. See
 "TWO SOUNDFONT PATHS" above before touching any of it.
 
+The SFZ engine (CodeBrix.Audio.Synth.Sfz) is NOT a port: it was written here,
+from the specification at sfzformat.com, per the porting rule below - sfizz and
+the other open-source players were not read. It reuses the voice-engine SHAPE of
+the MeltySynth core (block rendering, fixed-point oscillators, the anti-pop gain
+ramp) but shares no code with it; the two synthesizers meet only at the
+IMidiSynthesizer contract. SfzSupportedOpcodes is the authoritative implemented
+set, and tools/sfz_opcode_survey reads it to report measured coverage over a
+corpus of real libraries (implemented-coverage.md). As of the opcode-tail work
+that coverage is 16 of 16 corpus libraries at zero unimplemented opcodes.
+Where the spec describes behaviour without a formula, the engine documents its
+approximation in code: the ampeg/off shape opcodes map to power curves via
+2^(shape/2), curves 4-6 are x^2 / sqrt(x) / sqrt(1-x), and the flexible-envelope
+levels run bipolar -1..1 (the corpus' portamento envelopes need the -1).
+
 
 WHAT MAY BE READ WHEN PORTING, AND WHAT MAY BE TAKEN
 --------------------------------------------------------------------------------
@@ -879,6 +974,21 @@ undo by accident:
 
 The tests that merely need the device open (WaveOutEvent, AudioFilePlayer) play silence,
 and should stay that way.
+
+Test SFZ instruments: none are committed. The SFZ engine tests build theirs on
+the fly - SfzTestInstruments writes synthetic WAV samples (constants, sines,
+ramps, a hand-written smpl chunk) plus a test-authored .sfz into a temp
+directory per test. Constant-value samples make gain assertions arithmetic;
+ramp samples make playback speed readable. Two sharp edges those tests learned:
+the synthesizer renders in 64-frame blocks, so consecutive measurements on one
+instance must use block-aligned frame counts or a fresh synthesizer (a partial
+block of earlier audio leaks into the next Render call - same as the SoundFont
+synthesizer); and the anti-pop gain ramp means the first block after any CC
+change still touches the old level, so skip a settling window before measuring.
+A third: a PEAK measurement cannot tell a fade from a steady level - the first
+frames of the window carry the pre-fade signal, so a 5 ms choke and a 200 ms
+fade both "pass". Anything asserting fade behaviour (off_time, smoothing,
+envelope shapes, tremolo depth) must measure RMS over the window instead.
 
 A handful of other tests carry [Fact(Skip = "...")]: NUnit [Explicit] tests
 carried over as skipped, plus two manual performance tests.

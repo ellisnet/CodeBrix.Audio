@@ -94,7 +94,7 @@ public sealed class MidiMusicPlayerTests : IDisposable
         var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
 
         //Act
-        var nullSoundFont = () => player.Load(null, BuildMotifSequence());
+        var nullSoundFont = () => player.Load((SoundFont)null, BuildMotifSequence());
         var nullSequence = () => player.Load(soundFont, null);
 
         //Assert
@@ -154,6 +154,39 @@ public sealed class MidiMusicPlayerTests : IDisposable
         //Assert
         // Getting here having heard five notes is the point; the state check just proves the
         // transport ran rather than the sequence never starting.
+        player.Position.Should().BeGreaterThan(TimeSpan.Zero);
+        player.PlaybackState.Should().Be(PlaybackState.Playing);
+    }
+
+    [Fact]
+    public void plays_the_close_encounters_motif_through_an_sfz_instrument()
+    {
+        Assert.SkipUnless(PlaybackEnabled, PlaybackSkipReason);
+
+        //Arrange - the same five notes, rendered by the OTHER synthesizer: a synthetic SFZ
+        // instrument built from a sine sample, so the whole SFZ chain is what is audible.
+        using var fixture = Sfz.SfzTestInstruments.Create();
+        fixture.WriteSineWav("tone.wav", frequency: 440, frames: 44100);
+        var instrument = fixture.Load("""
+            <region> sample=tone.wav pitch_keycenter=69 loop_mode=loop_continuous ampeg_attack=0.01 ampeg_release=0.08
+            """);
+
+        using var scope = new AudibleTestScope();
+        using var player = new MidiMusicPlayer();
+
+        player.Load(instrument, BuildMotifSequence());
+        player.Volume = 0.7f;
+
+        //Act
+        player.Play();
+
+        var deadline = DateTime.UtcNow + player.Duration + TimeSpan.FromSeconds(2);
+        while (player.Position < player.Duration && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(25);
+        }
+
+        //Assert
         player.Position.Should().BeGreaterThan(TimeSpan.Zero);
         player.PlaybackState.Should().Be(PlaybackState.Playing);
     }

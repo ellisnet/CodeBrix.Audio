@@ -18,7 +18,7 @@ Please update your C#/.NET code and projects to the latest LTS version of Micros
 * Reading MP3 ID3v2 and Ogg/FLAC Vorbis-comment metadata tags.
 * Playing audio: a media player with transport and seeking (`AudioFilePlayer`), and decode-once sound effects that can overlap freely (`SoundEffectClip`).
 * Rendering SoundFonts (`.sf2`) and playing MIDI music: a spec-faithful SoundFont renderer with the full generator **and modulator** model, per-voice LFOs and filter, reverb and chorus — driven by a transport-style player (`MidiMusicPlayer`) or rendered offline to a WAV file (`SoundFontRenderer`).
-* Reading SFZ (`.sfz`) instrument definitions: parsing only for now — headers, opcodes, `#define` and `#include`, with unknown opcodes carried rather than rejected. SFZ rendering is not implemented yet.
+* Playing SFZ (`.sfz`) instruments: a fully managed SFZ engine measured at **zero unimplemented opcodes across a 16-library, 155,000-region corpus** of real free instruments — region selection (key/velocity/controller/program, round robins, random layers, key switches including ranges and `sw_vel`, release triggers with `rt_decay`, exclusive off groups with fast/normal/timed chokes, `polyphony` limits, crossfades), the full modulation stack (amplifier envelope with shapes, `vel2*` and `ampeg_dynamic`; filter, pitch and flexible envelopes; SFZ v1 and v2 LFOs with sub-waveforms and cross-modulation; two filters plus a three-band parametric EQ; ARIA variators, stereo width, per-voice randoms), and the `_onccN`/`_curveccN`/`_smoothccN` CC matrix with `<curve>` support and the ARIA extended sources (velocity, key delta, alternate, per-voice random…). The same `MidiMusicPlayer` and offline renderer drive `.sf2` and `.sfz` interchangeably; unknown opcodes are carried and reported (`SfzInstrument.UnsupportedOpcodes`), never fatal.
 * Audio analysis building blocks: fast Fourier transform, biquad filters, envelope follower, and voice-activity detection.
 
 ## Sample Code
@@ -67,6 +67,23 @@ music.IsLooping = true;
 music.Play();                                   // same transport surface as AudioFilePlayer
 ```
 
+### Play MIDI music through an SFZ instrument
+
+```csharp
+using CodeBrix.Audio.Playback;
+using CodeBrix.Audio.Synth;
+using CodeBrix.Audio.Synth.Sfz;
+
+var instruments = new SfzInstrumentCache();     // samples decode once - load an instrument once, share it
+
+var music = new MidiMusicPlayer();
+music.Load(instruments.Get("VirtualPiano.sfz"), new MidiSequence("song.mid"));
+music.Play();                                   // the same transport drives .sf2 and .sfz alike
+
+// instruments.Get(...).UnsupportedOpcodes lists anything the file asked for that the
+// engine does not implement - the first thing to check if a library sounds off.
+```
+
 ### Render MIDI music to a WAV file, with no audio device
 
 ```csharp
@@ -77,6 +94,8 @@ SoundFontRenderer.RenderToWavFile(
     new MidiSequence("level1.mid"),
     "level1.wav",
     tail: TimeSpan.FromSeconds(2));             // let the reverb decay rather than cutting it
+
+// The same renderer takes an SfzInstrument in place of the SoundFont.
 ```
 
 > **Two SoundFont paths, on purpose.** `CodeBrix.Audio.Synth` is the renderer of record for playing a `.sf2`. The bundled Engine's `CodeBrix.Audio.Engine.Synthesis` is a general-purpose synthesis architecture — oscillators, custom banks, MPE, arpeggiators — that can sample-play SF2 presets but has no modulators, per-voice LFO or per-voice filter. Use the first to reproduce somebody's SoundFont, the second to build an instrument. `AGENT-README.txt` covers the split in detail.

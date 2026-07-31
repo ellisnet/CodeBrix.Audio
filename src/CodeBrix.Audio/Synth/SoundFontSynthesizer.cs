@@ -13,7 +13,7 @@ namespace CodeBrix.Audio.Synth; //was previously: MeltySynth
 /// If you want to send notes and render the waveform in separate threads,
 /// you must make sure that the methods are not called at the same time.
 /// </remarks>
-public sealed class SoundFontSynthesizer : IAudioRenderer
+public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IAudioRenderer only; IMidiSynthesizer added for SFZ parity
 {
     private static readonly int channelCount = 16;
     private static readonly int percussionChannel = 9;

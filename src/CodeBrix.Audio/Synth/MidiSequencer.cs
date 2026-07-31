@@ -13,7 +13,10 @@ namespace CodeBrix.Audio.Synth; //was previously: MeltySynth
 /// </remarks>
 public sealed class MidiSequencer : IAudioRenderer
 {
-    private readonly SoundFontSynthesizer synthesizer;
+    //was previously: the field, constructor, hook delegate and Synthesizer property were typed as the
+    //concrete MeltySynth Synthesizer; they take the IMidiSynthesizer contract now so one sequencer
+    //drives the SoundFont and SFZ synthesizers alike.
+    private readonly IMidiSynthesizer synthesizer;
 
     private float speed;
 
@@ -32,7 +35,7 @@ public sealed class MidiSequencer : IAudioRenderer
     /// Initializes a new instance of the sequencer.
     /// </summary>
     /// <param name="synthesizer">The synthesizer to be used by the sequencer.</param>
-    public MidiSequencer(SoundFontSynthesizer synthesizer)
+    public MidiSequencer(IMidiSynthesizer synthesizer)
     {
         if (synthesizer == null)
         {
@@ -224,7 +227,7 @@ public sealed class MidiSequencer : IAudioRenderer
     /// <summary>
     /// Gets the synthesizer used by the sequencer.
     /// </summary>
-    public SoundFontSynthesizer SoundFontSynthesizer => synthesizer;
+    public IMidiSynthesizer Synthesizer => synthesizer;
 
     /// <summary>
     /// Gets the currently playing MIDI file.
@@ -302,5 +305,5 @@ public sealed class MidiSequencer : IAudioRenderer
     /// <param name="command">The type of the message.</param>
     /// <param name="data1">The first data part of the message.</param>
     /// <param name="data2">The second data part of the message.</param>
-    public delegate void MessageHook(SoundFontSynthesizer synthesizer, int channel, int command, int data1, int data2);
+    public delegate void MessageHook(IMidiSynthesizer synthesizer, int channel, int command, int data1, int data2);
 }

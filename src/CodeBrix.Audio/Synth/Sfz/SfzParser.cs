@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace CodeBrix.Audio.Synth.Sfz;
@@ -163,6 +164,21 @@ public static class SfzParser
             if (resolved == null || !File.Exists(resolved))
             {
                 resolved = ResolveRelative(currentDirectory, included);
+            }
+
+            if (resolved == null || !File.Exists(resolved))
+            {
+                // Windows-authored libraries write #include paths with the wrong case as freely as
+                // they do sample paths; on a case-sensitive file system that must not silently drop
+                // every region the include carries. Same fallback the sample loader uses.
+                var normalized = included.Replace('\\', '/');
+                resolved = rootDirectory != null
+                    ? SfzInstrument.ResolveCaseInsensitive(rootDirectory, normalized)
+                    : null;
+                if (resolved == null && currentDirectory != null && currentDirectory != rootDirectory)
+                {
+                    resolved = SfzInstrument.ResolveCaseInsensitive(currentDirectory, normalized);
+                }
             }
 
             if (resolved == null || !File.Exists(resolved))
@@ -361,8 +377,10 @@ public static class SfzParser
             return value;
         }
 
+        // Longest names first: with $KEY and $KEY2 both defined, replacing $KEY first would turn
+        // $KEY2 into the $KEY value with a stray 2 appended - silent value corruption.
         var builder = new StringBuilder(value);
-        foreach (var pair in file.Defines)
+        foreach (var pair in file.Defines.OrderByDescending(p => p.Key.Length))
         {
             builder.Replace("$" + pair.Key, pair.Value);
         }
@@ -421,11 +439,14 @@ public static class SfzParser
     }
 
     // Real libraries are not consistently UTF-8; a stray byte in a comment must not fail the parse.
+    // A UTF-8 byte-order mark is stripped explicitly: decoded, it becomes U+FEFF glued to the first
+    // token, which would silently swallow a file's first header (and with it, default_path).
     private static string ReadAllTextTolerant(string path)
     {
         var bytes = File.ReadAllBytes(path);
         return new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false)
             .GetString(bytes)
+            .TrimStart('\uFEFF')
             .Replace("\r\n", "\n")
             .Replace('\r', '\n');
     }
