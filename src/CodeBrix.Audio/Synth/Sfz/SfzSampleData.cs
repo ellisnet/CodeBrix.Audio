@@ -59,7 +59,11 @@ internal sealed class SfzSampleData
             long? loopStart = null;
             long? loopEnd = null;
 
-            if (reader is WaveFileReader waveReader)
+            // OpenFile pairs the reader with the file handle it owns; the smpl chunk lives on the
+            // reader itself.
+            var inner = reader is FileOwningWaveStream owning ? owning.Reader : reader;
+
+            if (inner is WaveFileReader waveReader)
             {
                 ReadSmplLoop(waveReader, ref loopStart, ref loopEnd);
             }

@@ -90,7 +90,11 @@ public static class AudioFileReaderRegistry
     /// Opens a file with the reader registered for its extension.
     /// </summary>
     /// <param name="fileName">The audio file to open.</param>
-    /// <returns>A reader over the file; disposing it closes the file.</returns>
+    /// <returns>
+    /// A <see cref="FileOwningWaveStream"/> over the file; disposing it disposes the reader and
+    /// closes the file. Its <see cref="FileOwningWaveStream.Reader"/> is the reader the registered
+    /// factory produced, for callers that need its concrete type.
+    /// </returns>
     /// <exception cref="NotSupportedException">No reader is registered for the extension.</exception>
     public static WaveStream OpenFile(string fileName)
     {
@@ -104,7 +108,9 @@ public static class AudioFileReaderRegistry
 
         try
         {
-            return factory(stream);
+            // A factory is handed a stream it does not own (see Register), so the file handle stays
+            // this method's responsibility - pairing it with the reader is what closes the file.
+            return new FileOwningWaveStream(factory(stream), stream);
         }
         catch (Exception)
         {

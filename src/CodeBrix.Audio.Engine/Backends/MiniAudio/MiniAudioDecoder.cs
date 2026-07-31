@@ -351,7 +351,7 @@ internal sealed unsafe class MiniAudioDecoder : ISoundDecoder
                 }
 
                 var read = _stream.Read(_rentedReadBuffer, 0, size);
-                
+
                 if (read > 0)
                 {
                     fixed (byte* pReadBuffer = _rentedReadBuffer)
@@ -361,7 +361,13 @@ internal sealed unsafe class MiniAudioDecoder : ISoundDecoder
                 }
 
                 pBytesRead = (ulong)read;
-                return MiniAudioResult.Success;
+
+                // A read that returns nothing is the end of the stream, and miniaudio has to be
+                // told so: its Vorbis push-mode loops (decoder init, and the decode itself) only
+                // stop on a non-success result from here. Returning Success with zero bytes leaves
+                // them asking for more data forever - a hang, not an error, and on a truncated file
+                // that is exactly what happens.
+                return read == 0 ? MiniAudioResult.AtEnd : MiniAudioResult.Success;
             }
         }
         catch (Exception)
@@ -382,11 +388,15 @@ internal sealed unsafe class MiniAudioDecoder : ISoundDecoder
                 if (!_stream.CanSeek)
                     return MiniAudioResult.NoDataAvailable;
 
-                // Basic bounds check to prevent seeking past EOF if stream supports Length
-                try 
+                long target;
+                long length;
+                try
                 {
-                    if (byteOffset >= 0 && byteOffset < _stream.Length - 1)
-                        _stream.Seek(byteOffset, point == SeekPoint.FromCurrent ? SeekOrigin.Current : SeekOrigin.Begin);
+                    // FromCurrent carries a RELATIVE offset (and a negative one is normal), so it
+                    // has to be resolved against the current position before it can be compared
+                    // with anything.
+                    target = point == SeekPoint.FromCurrent ? _stream.Position + byteOffset : byteOffset;
+                    length = _stream.Length;
                 }
                 catch (NotSupportedException)
                 {
@@ -395,6 +405,15 @@ internal sealed unsafe class MiniAudioDecoder : ISoundDecoder
                     return MiniAudioResult.InvalidOperation;
                 }
 
+                // A seek that cannot be honoured has to be REPORTED. Skipping the seek and
+                // returning success leaves miniaudio believing it is at the requested offset while
+                // the stream sits wherever it was, so the next read hands it unrelated bytes.
+                // Note that a target of exactly Length is legal: it is the end-of-stream position,
+                // and the read callback reports the end from there.
+                if (target < 0 || target > length)
+                    return MiniAudioResult.BadSeek;
+
+                _stream.Position = target;
                 return MiniAudioResult.Success;
             }
         }

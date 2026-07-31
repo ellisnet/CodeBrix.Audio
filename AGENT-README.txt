@@ -537,6 +537,20 @@ COMMON PITFALLS
     thing other FLAC-to-WAV converters do.
   - Dispose readers and writers (use `using`). A WaveFileWriter only flushes a
     valid RIFF header on Dispose - an undisposed writer produces a corrupt file.
+  - Files opened THROUGH THE READER REGISTRY stay locked until you dispose what
+    you got back. AudioFileReaderRegistry.OpenFile opens the file itself and
+    hands the stream to the registered factory, which by contract does NOT own
+    it - so the registry keeps the handle and returns a FileOwningWaveStream
+    whose Dispose closes the reader and then the file. `using` it. Drop the
+    reference without disposing and on Windows the file stays locked until the
+    finalizer runs, so a later File.Delete or File.Move throws IOException
+    "because it is being used by another process" - and it looks intermittent,
+    because it depends on GC timing. This covers SfzSampleData.Load and
+    AudioFileReader for any extension added with Register (the four built-in
+    extensions take a different path inside AudioFileReader and were never
+    affected). If you need the concrete reader type - WaveFileReader.Chunks, for
+    instance - reach it through the .Reader property rather than casting the
+    returned stream.
   - MIDI export: call MidiEventCollection.PrepareForExport() before
     MidiFile.Export(). A type-0 collection may contain only one track (Export
     throws otherwise); use type 1 for multi-track files. NoteOnEvent
@@ -631,6 +645,16 @@ There are TWO seams, because there are two ways audio gets opened:
      AudioFileReader then opens .opus, as do AudioFileReaderRegistry.OpenFile
      and anything else built on the registry.
 
+     STREAM OWNERSHIP - the factory is handed a stream it does NOT own. Do not
+     close it, and do not make your reader close it either; the registry opened
+     the file and keeps the handle. OpenFile therefore returns a
+     FileOwningWaveStream pairing the two: disposing it disposes your reader and
+     THEN closes the file, and its .Reader property gets callers back to your
+     concrete type. A reader that takes ownership anyway is tolerated (the second
+     Dispose is a no-op), but a handle nobody closes leaves the file locked on
+     Windows until GC, which surfaces much later as File.Delete/File.Move failing
+     with "used by another process".
+
 Both are idempotent-ish and cheap; call them once at start-up (a static
 Register() entry point on the add-on package is the friendliest shape - do not
 rely on module initializers, which only run once something in the assembly is
@@ -713,6 +737,16 @@ There are TWO seams, because there are two ways audio gets opened:
 
      AudioFileReader then opens .opus, as do AudioFileReaderRegistry.OpenFile
      and anything else built on the registry.
+
+     STREAM OWNERSHIP - the factory is handed a stream it does NOT own. Do not
+     close it, and do not make your reader close it either; the registry opened
+     the file and keeps the handle. OpenFile therefore returns a
+     FileOwningWaveStream pairing the two: disposing it disposes your reader and
+     THEN closes the file, and its .Reader property gets callers back to your
+     concrete type. A reader that takes ownership anyway is tolerated (the second
+     Dispose is a no-op), but a handle nobody closes leaves the file locked on
+     Windows until GC, which surfaces much later as File.Delete/File.Move failing
+     with "used by another process".
 
 Both are idempotent-ish and cheap; call them once at start-up (a static
 Register() entry point on the add-on package is the friendliest shape - do not
