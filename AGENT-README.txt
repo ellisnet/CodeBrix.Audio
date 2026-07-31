@@ -736,7 +736,7 @@ AllowUnsafeBlocks is ON. Do not rewrite Engine source to match family style - to
 take a newer SoundFlow, re-vendor and re-apply the renames rather than editing in
 place.
 
-RE-VENDOR CHECKLIST - eight deliberate divergences must be re-applied, or they
+RE-VENDOR CHECKLIST - nine deliberate divergences must be re-applied, or they
 silently regress:
 
   1. Namespace rename SoundFlow.* -> CodeBrix.Audio.Engine.*, with the
@@ -810,6 +810,30 @@ silently regress:
          or every file reads a few milliseconds long.
      tests/CodeBrix.Audio.Engine.Tests/OggOpusMetadataTests.cs pins both, against
      .opus fixtures whose pre-skip and granule are known exactly.
+
+  9. ChunkedDataProvider.Length counts the DECODER's channels, not the file's.
+     Upstream multiplies FormatInfo.Duration by SampleRate and
+     FormatInfo.ChannelCount - mixing units, because SampleRate is already the
+     decoder's while ChannelCount is the FILE's. SoundPlayerBase.Duration then
+     divides that length by the DEVICE's channel count, so every mono file
+     reported exactly half its true duration on a stereo device: a two-minute
+     podcast showed as one minute, and any transport bound to it scrubbed the
+     wrong range. Stereo files hid it, because there the two counts agree.
+     tests/CodeBrix.Audio.Engine.Tests/ChunkedDataProviderTests.cs pins it, mono
+     and stereo, and at a sample rate that forces conversion as well.
+     The same expression appears as a FALLBACK in StreamDataProvider.Length and
+     in AssetDataProvider.Decode, reached when the decoder reports no length of
+     its own - which the native decoder does whenever it runs through read
+     callbacks rather than from memory (see divergence 6). Both were fixed the
+     same way, and BOTH must be re-applied.
+     AssetDataProvider's is the one that really bites: its fallback sizes the
+     buffer the whole asset is decoded into, in a single Decode call, and that
+     code only ever resizes the buffer DOWN. Taken from the file's layout the
+     value does not merely mis-describe the clip, it CUTS IT OFF - a mono sound
+     effect came back half as long, a 22.05 kHz one under a quarter.
+     tests/CodeBrix.Audio.Engine.Tests/ProviderLengthFallbackTests.cs pins both,
+     forcing the path with a test codec that decodes normally but reports a
+     length of 0 (LengthlessCodec.cs).
 
 
 ARCHITECTURE

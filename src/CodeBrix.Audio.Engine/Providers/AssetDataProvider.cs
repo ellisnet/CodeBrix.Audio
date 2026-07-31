@@ -194,9 +194,16 @@ public sealed class AssetDataProvider : ISoundDataProvider
     private float[] Decode(ISoundDecoder decoder)
     {
         SampleFormat = decoder.SampleFormat;
+
+        // Both terms come from the DECODER, not from FormatInfo. This value sizes the buffer that
+        // DecodeKnownLength fills in a single Decode call, and that method only ever resizes the
+        // buffer DOWN - so a value taken from the file's layout truncates the audio rather than
+        // merely mis-describing it. A mono file decoded for a stereo device produces twice the
+        // samples the file's own channel count implies, and a 22.05 kHz file decoded for a 48 kHz
+        // device more than twice again; sized from FormatInfo, a clip would simply end early.
         var length = decoder.Length > 0 || FormatInfo == null
             ? decoder.Length
-            : (int)(FormatInfo.Duration.TotalSeconds * FormatInfo.SampleRate * FormatInfo.ChannelCount);
+            : (int)(FormatInfo.Duration.TotalSeconds * decoder.SampleRate * decoder.Channels);
 
         return length > 0 ? DecodeKnownLength(decoder, length) : DecodeUnknownLength(decoder);
     }

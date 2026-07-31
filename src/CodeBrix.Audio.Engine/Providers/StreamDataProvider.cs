@@ -120,9 +120,17 @@ public sealed class StreamDataProvider : ISoundDataProvider
     public int Position { get; private set; }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The fallback is expressed in the DECODER's units so that it means the same thing as the
+    /// decoder's own length on the line above. Taking the rate and channel count from FormatInfo
+    /// describes the FILE instead, and the two part company whenever the decoder converts: mono
+    /// to a stereo device, or 22.05 kHz to a 48 kHz one. SoundPlayerBase divides this by the
+    /// DEVICE's format to get a duration, so a file's own layout leaking in here shows up as a
+    /// transport reporting a fraction of the real length.
+    /// </remarks>
     public int Length => _decoder.Length > 0 || FormatInfo == null
         ? _decoder.Length
-        : (int)(FormatInfo.Duration.TotalSeconds * FormatInfo.SampleRate * FormatInfo.ChannelCount);
+        : (int)(FormatInfo.Duration.TotalSeconds * SampleRate * _decoder.Channels);
 
     /// <inheritdoc />
     public bool CanSeek => _stream.CanSeek;

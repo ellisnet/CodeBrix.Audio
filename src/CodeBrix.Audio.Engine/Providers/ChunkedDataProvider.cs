@@ -144,7 +144,17 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
     }
     
     /// <inheritdoc />
-    public int Length => FormatInfo != null ? (int)(FormatInfo.Duration.TotalSeconds * SampleRate * FormatInfo.ChannelCount) : _decoder.Length;
+    /// <remarks>
+    /// Every term here is in the DECODER's units, not the file's. <see cref="SampleRate" /> is
+    /// already the decoder's, and the channel count has to match it: the decoder converts to
+    /// whatever the output device asked for, so a mono file feeding a stereo device produces two
+    /// channels, not one. Reading the channel count off <see cref="FormatInfo" /> - the FILE's
+    /// layout - mixed the two, and because SoundPlayerBase divides this length by the DEVICE's
+    /// channel count to get a duration, every mono file reported exactly half its true length:
+    /// a two-minute podcast showed as one minute, and a transport bound to it scrubbed the wrong
+    /// range. Stereo files hid it, because there the two counts agree.
+    /// </remarks>
+    public int Length => FormatInfo != null ? (int)(FormatInfo.Duration.TotalSeconds * SampleRate * _decoder.Channels) : _decoder.Length;
 
     /// <inheritdoc />
     public bool CanSeek { get; }
