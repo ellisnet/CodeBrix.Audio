@@ -119,20 +119,63 @@ win-arm64
   rebuilding from identical sources yields a different SHA256. The hashes here
   identify these exact files, not the source state.
 
-================================================================================
-NOT YET SELF-BUILT
-================================================================================
-
-osx-x64, osx-arm64
+osx-arm64
 --------------------------------------------------------------------------------
-  These two are still SoundFlow v1.4.1's prebuilt miniaudio binaries, renamed to
-  codebrix_miniaudio.dylib (built from miniaudio @ 80cf7b2, but WITHOUT
-  stb_vorbis).
+  Built        : 2026-07-31 04:12:31 UTC
+  How          : tools/build_native_libraries/macos/build.sh  (host build)
+  Host         : macOS 26.5.1 (arm64)
+  Compiler     : Apple clang 21.0.0 (clang-2100.1.1.101)
+  CMake        : 4.4.1 (Homebrew)
+  Build type   : Release
+  Mach-O arch  : arm64
+  Minimum macOS: 11.0
+  Code signing : ad-hoc
+  Size         : 768144 bytes
+  SHA256       : 9fc8369a4fca2df048e9e0dd73e57aa4b514ec966d740ae8dae4f1f3f8a71613
+  Dynamic deps : CoreFoundation.framework CoreAudio.framework
+                 AudioToolbox.framework /usr/lib/libSystem.B.dylib
+  Verified     : exports (27/27), codec coverage, dependency policy, Mach-O arch,
+                 minimum-macOS stamp, ad-hoc signature, and the dlopen + Ogg
+                 decode + length + seek smoke test - all passed natively on the
+                 build host.
 
-  CONSEQUENCE: they cannot decode Ogg Vorbis. On those RIDs .ogg playback falls
-  back to the managed Vorbis decoder in CodeBrix.Audio, so .ogg still works - it
-  just does not use the native path. sf_has_vorbis() is absent from these
-  binaries, which is exactly how the managed side detects the situation.
+osx-x64
+--------------------------------------------------------------------------------
+  Built        : 2026-07-31 04:13:14 UTC
+  How          : tools/build_native_libraries/macos/build.sh  (cross-compiled from
+                 the same Apple Silicon host via -DCMAKE_OSX_ARCHITECTURES=x86_64)
+  Host         : macOS 26.5.1 (arm64)
+  Compiler     : Apple clang 21.0.0 (clang-2100.1.1.101)
+  CMake        : 4.4.1 (Homebrew)
+  Build type   : Release
+  Mach-O arch  : x86_64
+  Minimum macOS: 10.13
+  Code signing : ad-hoc
+  Size         : 811024 bytes
+  SHA256       : ee3d079dbb531e245e639d24107a7b18877199deb590e6ceef7fc5b3696754ac
+  Dynamic deps : CoreFoundation.framework CoreAudio.framework
+                 AudioToolbox.framework /usr/lib/libSystem.B.dylib
+  Verified     : the same gate as osx-arm64. Unlike the cross-compiled win-arm64
+                 binary, the decode smoke test DID run for this one: an x86_64
+                 process runs on Apple Silicon under Rosetta 2, so the dylib was
+                 genuinely loaded and decoded, not only checked statically.
 
-  To replace them, run tools/build_native_libraries/macos/build.sh on an Apple
-  Silicon Mac, then record the results here.
+  Notes on the macOS pair, both from one build.sh run on one machine:
+
+  * MINIMUM macOS IS PINNED, and is the exact analogue of the glibc ceiling on
+    Linux. Left unset, clang stamps the BUILD HOST's OS version into the Mach-O
+    load command and dyld then refuses the dylib on any older system - a binary
+    built on this macOS 26 host would have demanded macOS 26. The floors live in
+    tools/build_native_libraries/pins.env (MACOS_MIN_ARM64 / MACOS_MIN_X64) and
+    the build verifies the file actually carries them.
+
+  * BOTH ARE AD-HOC SIGNED by an explicit codesign step in build.sh. Do not
+    assume the toolchain does it: Apple's linker auto-signs arm64 output but
+    leaves x86_64 unsigned, and the CODE_SIGN_* properties in CMakeLists.txt
+    apply to CMake's Xcode generator only, which is not the generator used here.
+
+  * WHAT THEY REPLACED: SoundFlow v1.4.1's prebuilt miniaudio binaries, renamed
+    to codebrix_miniaudio.dylib. Those were built without stb_vorbis and so could
+    not decode Ogg Vorbis natively - .ogg on macOS fell back to the managed
+    Vorbis decoder in CodeBrix.Audio. These binaries export sf_has_vorbis() and
+    ma_stbvorbis_*, so macOS now uses the native path like every other RID.

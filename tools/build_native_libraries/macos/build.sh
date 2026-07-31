@@ -28,6 +28,13 @@ REPO_ROOT="$(cd "$TOOLS_DIR/../.." && pwd)"
 NATIVE_SRC="$REPO_ROOT/native/miniaudio"
 LIB_NAME=libcodebrix_miniaudio.dylib
 
+if [ ! -f "$TOOLS_DIR/pins.env" ]; then
+    echo "ERROR: $TOOLS_DIR/pins.env was not found - every version pin lives in it." >&2
+    echo "       The root .gitignore has a blanket '*.env' rule that has excluded this file" >&2
+    echo "       from a commit before. Check with:" >&2
+    echo "         git check-ignore -v tools/build_native_libraries/pins.env" >&2
+    exit 1
+fi
 # shellcheck source=../pins.env
 . "$TOOLS_DIR/pins.env"
 
@@ -80,6 +87,29 @@ verify() {
     pass() { echo "  [ok] $1"; }
     fail() { echo "  [FAIL] $1"; failed=1; }
 
+    local expect_arch min_target
+    case "$target_arch" in
+        arm64) expect_arch=arm64;  min_target="$MACOS_MIN_ARM64" ;;
+        x64)   expect_arch=x86_64; min_target="$MACOS_MIN_X64" ;;
+    esac
+
+    # Architecture. osx-x64 is a cross-compile, so the one thing that must never be assumed is
+    # that the file matches the target that was asked for - nothing else here would notice.
+    local got_arch
+    got_arch="$(lipo -archs "$dylib" 2>/dev/null || echo '?')"
+    [ "$got_arch" = "$expect_arch" ] && pass "architecture is $got_arch" \
+                                     || fail "architecture is '$got_arch', expected '$expect_arch'"
+
+    # Minimum macOS - this platform's version of the glibc ceiling. See pins.env.
+    # A target of 10.14 or newer is recorded as LC_BUILD_VERSION/minos; anything older (the
+    # osx-x64 floor is 10.13) uses the legacy LC_VERSION_MIN_MACOSX/version instead. Read both.
+    local minos
+    minos="$(otool -l "$dylib" | awk '/LC_BUILD_VERSION/ {f=1} f && /^ *minos / {print $2; exit}')"
+    [ -n "$minos" ] || minos="$(otool -l "$dylib" |
+        awk '/LC_VERSION_MIN_MACOSX/ {f=1} f && /^ *version / {print $2; exit}')"
+    [ "$minos" = "$min_target" ] && pass "minimum macOS $minos (runs on $minos and newer)" \
+                                 || fail "minimum macOS is ${minos:-unknown}, expected $min_target"
+
     # Mach-O symbols carry a leading underscore; strip it before comparing.
     local exports
     exports="$(nm -gU "$dylib" | awk '{print $3}' | sed 's/^_//')"
@@ -103,14 +133,18 @@ verify() {
 
     # Dependencies: system frameworks and libSystem only. miniaudio loads nothing else at
     # link time - CoreAudio/AudioToolbox are the frameworks CMakeLists.txt links deliberately.
+    # otool -L prints the dylib's own LC_ID_DYLIB first; drop it, or the library is reported as
+    # a dependency of itself and that lands in build-info.txt.
     local deps forbidden
-    deps="$(otool -L "$dylib" | tail -n +2 | awk '{print $1}')"
-    forbidden="$(printf '%s\n' "$deps" | grep -E 'libvorbis|libogg|libFLAC|libasound' || true)"
+    deps="$(otool -L "$dylib" | tail -n +2 | awk '{print $1}' | grep -v "/$LIB_NAME\$" || true)"
+    forbidden="$(printf '%s\n' "$deps" | grep -E 'libasound|libpulse|libjack|libvorbis|libogg|libFLAC' || true)"
     [ -z "$forbidden" ] && pass "dependencies are system-only" || fail "unexpected dependency: $forbidden"
     printf '%s\n' "$deps" | sed 's/^/       /'
 
-    # Ad-hoc code signature - CMakeLists.txt configures it; check it actually happened, because
-    # an unsigned dylib is refused on Apple Silicon.
+    # Ad-hoc code signature. NOTE: CMakeLists.txt's CODE_SIGNING_REQUIRED / CODE_SIGN_IDENTITY
+    # target properties apply to the Xcode generator ONLY and do nothing here; and Apple's linker
+    # auto-signs arm64 output but leaves x86_64 unsigned. build_arch therefore signs explicitly -
+    # this checks that it took, because an unsigned dylib is refused on Apple Silicon.
     if codesign -dv "$dylib" > /dev/null 2>&1; then
         pass "code signature present ($(codesign -dv "$dylib" 2>&1 | grep -m1 '^Signature' || echo 'ad-hoc'))"
     else
@@ -118,26 +152,32 @@ verify() {
     fi
 
     # Decode smoke test. arm64 runs natively; an x86_64 build runs under Rosetta 2 when it is
-    # installed. If it cannot run, that is reported, never silently skipped.
+    # installed. Whether it CAN run is decided up front by probing Rosetta - never by treating a
+    # failure as a skip, which would let a genuine decode regression (or a wrong-arch dylib) be
+    # published behind a friendly message.
     local ogg="$REPO_ROOT/$SMOKE_TEST_OGG"
+    local smoke_dir="/tmp/codebrix-smoke-$target_arch"
     if [ ! -f "$ogg" ]; then
         fail "smoke-test input missing: $ogg (run tools/make_test_fixtures/make_fixtures.sh)"
+    elif [ "$target_arch" = "x64" ] && [ "$HOST_ARCH" = "arm64" ] \
+         && ! arch -x86_64 /usr/bin/true > /dev/null 2>&1; then
+        echo "  [--] decode smoke test not run: this is an x86_64 build on an Apple Silicon host"
+        echo "       and Rosetta 2 is not installed. Install it to make this check run here:"
+        echo "         softwareupdate --install-rosetta"
+        echo "       The static checks above still applied; run the managed test suite on x64"
+        echo "       hardware (or under Rosetta) to exercise the decode path."
     else
         local smoke_arch_flag=""
         [ "$target_arch" = "x64" ] && smoke_arch_flag="-arch x86_64"
         [ "$target_arch" = "arm64" ] && smoke_arch_flag="-arch arm64"
         echo "  --- decode smoke test ---"
+        rm -rf "$smoke_dir" && mkdir -p "$smoke_dir"
         # shellcheck disable=SC2086
-        cc -O2 $smoke_arch_flag -o /tmp/codebrix_smoke_test "$TOOLS_DIR/smoke_test.c"
-        if /tmp/codebrix_smoke_test "$dylib" "$ogg" 2>/tmp/codebrix_smoke_err | sed 's/^/    /'; then
+        cc -O2 $smoke_arch_flag -o "$smoke_dir/smoke_test" "$TOOLS_DIR/smoke_test.c"
+        if "$smoke_dir/smoke_test" "$dylib" "$ogg" 2>"$smoke_dir/err" | sed 's/^/    /'; then
             pass "smoke test"
-        elif [ "$target_arch" = "x64" ] && [ "$HOST_ARCH" = "arm64" ]; then
-            echo "  [--] the x86_64 smoke test could not run on this Apple Silicon host."
-            echo "       Install Rosetta 2 to run it here:  softwareupdate --install-rosetta"
-            echo "       The static checks above still applied; the managed test suite on an"
-            echo "       Intel Mac (or under Rosetta) exercises the decode path."
-            cat /tmp/codebrix_smoke_err | sed 's/^/       /'
         else
+            sed 's/^/    /' < "$smoke_dir/err"
             fail "smoke test"
         fi
     fi
@@ -149,10 +189,10 @@ verify() {
 # Build one architecture
 # ----------------------------------------------------------------------------------------------
 build_arch() {
-    local target_arch="$1" rid osx_arch build_dir out_dir
+    local target_arch="$1" rid osx_arch min_macos build_dir out_dir
     case "$target_arch" in
-        arm64) rid=osx-arm64; osx_arch=arm64 ;;
-        x64)   rid=osx-x64;   osx_arch=x86_64 ;;
+        arm64) rid=osx-arm64; osx_arch=arm64;  min_macos="$MACOS_MIN_ARM64" ;;
+        x64)   rid=osx-x64;   osx_arch=x86_64; min_macos="$MACOS_MIN_X64" ;;
         *) echo "usage: $0 arm64|x64|all" >&2; exit 2 ;;
     esac
     build_dir="/tmp/ma-build-$rid"
@@ -164,6 +204,7 @@ build_arch() {
     echo "=============================================================================="
     echo "  miniaudio  : $MINIAUDIO_VERSION ($MINIAUDIO_COMMIT)"
     echo "  stb_vorbis : $STB_VORBIS_VERSION ($STB_VORBIS_COMMIT)"
+    echo "  min macOS  : $min_macos"
     echo
 
     echo "--- building ---"
@@ -172,11 +213,17 @@ build_arch() {
     # code-signing settings; this script passes only the architecture and build type.
     cmake -S "$NATIVE_SRC" -B "$build_dir" \
           -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}" \
-          -DCMAKE_OSX_ARCHITECTURES="$osx_arch"
+          -DCMAKE_OSX_ARCHITECTURES="$osx_arch" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET="$min_macos"
     cmake --build "$build_dir" --config "${CMAKE_BUILD_TYPE:-Release}" -j "$(sysctl -n hw.ncpu)"
 
     local built="$build_dir/$LIB_NAME"
     [ -f "$built" ] || { echo "ERROR: expected $built, which was not produced." >&2; exit 1; }
+
+    # Ad-hoc sign. Apple's linker does this automatically for arm64 but NOT for x86_64, and
+    # CMakeLists.txt's CODE_SIGN_* properties are Xcode-generator-only, so neither can be relied
+    # on. Signing here keeps both architectures identical; verify() then checks it took.
+    codesign --force --sign - "$built"
 
     echo
     echo "--- verifying ---"
@@ -202,6 +249,7 @@ Compiler       : $(cc --version | head -1)
 CMake          : $(cmake --version | head -1)
 Build type     : ${CMAKE_BUILD_TYPE:-Release}
 Target arch    : $osx_arch
+Minimum macOS  : $min_macos
 
 Sources (all vendored in-repo, nothing fetched at build time)
 ------------------------------------------------------------------------------
@@ -214,7 +262,7 @@ Result
 File           : $LIB_NAME
 Size           : $(stat -f %z "$out_dir/$LIB_NAME") bytes
 SHA256         : $sha
-Dynamic deps   : $(otool -L "$out_dir/$LIB_NAME" | tail -n +2 | awk '{print $1}' | tr '\n' ' ')
+Dynamic deps   : $(otool -L "$out_dir/$LIB_NAME" | tail -n +2 | awk '{print $1}' | grep -v "/$LIB_NAME\$" | tr '\n' ' ')
 Codecs         : WAV, MP3, FLAC, Ogg Vorbis
 EOF
 

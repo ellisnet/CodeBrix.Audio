@@ -78,11 +78,23 @@ Use a fresh build/ directory per arch (or `rm -rf build` between configs).
     output:     build\Release\codebrix_miniaudio.dll
 
   macOS (Apple Silicon host):
-    osx-arm64:  cmake -B build -DCMAKE_OSX_ARCHITECTURES=arm64  -DCMAKE_BUILD_TYPE=Release
-    osx-x64:    cmake -B build -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_BUILD_TYPE=Release
+    osx-arm64:  cmake -B build -DCMAKE_OSX_ARCHITECTURES=arm64  -DCMAKE_BUILD_TYPE=Release \
+                      -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+    osx-x64:    cmake -B build -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_BUILD_TYPE=Release \
+                      -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13
     build:      cmake --build build --config Release
+    sign:       codesign --force --sign - build/libcodebrix_miniaudio.dylib
     output:     build/libcodebrix_miniaudio.dylib
     (or one universal binary: -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64")
+
+    Two macOS-specific traps, both of which macos/build.sh handles and checks -
+    prefer it over the raw commands above for anything you intend to ship:
+      * WITHOUT an explicit CMAKE_OSX_DEPLOYMENT_TARGET, clang stamps in the
+        BUILD HOST's OS version and dyld then refuses the dylib on any older
+        macOS. It is the same class of problem as the Linux glibc floor.
+      * The CODE_SIGN_* properties in CMakeLists.txt apply to CMake's Xcode
+        generator ONLY. Under the default Makefile generator the linker ad-hoc
+        signs arm64 output but leaves x86_64 unsigned, hence the codesign step.
 
   Linux (x64 host):
     linux-x64:  cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -101,16 +113,16 @@ native/ as described above. (No GitHub Actions / CI is used or required.)
 
 THE COMMITTED BINARIES
 --------------------------------------------------------------------------------
-The three LINUX binaries (linux-x64, linux-arm64, linux-riscv64) are built from
-the sources in this folder by tools/build_native_libraries, in manylinux
-containers so they run on old glibc as well as new. They include the Ogg Vorbis
-decoder. See BUILD-PROVENANCE.txt for the exact details of each.
+ALL SEVEN are now built from the sources in this folder by
+tools/build_native_libraries, and every one of them includes the Ogg Vorbis
+decoder, so sf_has_vorbis() is present everywhere and the managed Vorbis decoder
+in CodeBrix.Audio is only a fallback for binaries that lack it. None of
+SoundFlow v1.4.1's prebuilt libraries remain. See BUILD-PROVENANCE.txt for the
+exact toolchain, hashes and verification results of each.
 
-The WINDOWS and macOS binaries are still SoundFlow v1.4.1's own prebuilt
-miniaudio libraries (built from miniaudio @ 80cf7b2), renamed to
-codebrix_miniaudio.*. They predate the Vorbis work and therefore CANNOT decode
-Ogg Vorbis; sf_has_vorbis() is absent from them, which is how the managed side
-detects the situation and falls back to its own Vorbis decoder. Replacing them
-is a matter of running tools/build_native_libraries/windows/build.ps1 on a
-Windows x64 machine and tools/build_native_libraries/macos/build.sh on an Apple
-Silicon Mac, then recording the results in BUILD-PROVENANCE.txt.
+  linux-x64, linux-arm64, linux-riscv64   manylinux containers, so they run on
+                                          old glibc as well as new
+  win-x64, win-arm64                      one Windows x64 host, MSVC
+  osx-arm64, osx-x64                      one Apple Silicon host, minimum macOS
+                                          pinned to 11.0 / 10.13 and ad-hoc
+                                          signed

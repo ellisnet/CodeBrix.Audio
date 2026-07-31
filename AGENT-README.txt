@@ -761,11 +761,13 @@ The native library is built and verified by tools/build_native_libraries — rea
 its README.txt before touching anything native. It builds all three Linux RIDs
 in manylinux containers on one machine (arm64 and riscv64 under emulation) and
 carries host scripts for Windows and macOS; every build must pass a verification
-gate (required exports, codec coverage, dependency policy, and a dlopen + decode
-smoke test) before it is written to output/. native/miniaudio/BUILD-PROVENANCE.txt
-records what produced each shipped binary. The Windows and macOS binaries are
-still SoundFlow's prebuilt ones and therefore have NO Ogg Vorbis decoder; the
-managed fallback covers those platforms until they are rebuilt.
+gate (required exports, codec coverage, dependency policy, compatibility floor,
+target architecture, and a dlopen + decode smoke test) before it is written to
+output/. native/miniaudio/BUILD-PROVENANCE.txt records what produced each shipped
+binary. All seven shipped RIDs are now self-built from the vendored sources and
+all seven include the Ogg Vorbis decoder, so sf_has_vorbis() is present
+everywhere; the managed Vorbis fallback now only covers a binary that lacks it
+(for example a RID added later, before one is built for it).
 
 It deliberately keeps SoundFlow's own project settings so re-syncs stay
 mechanical: NRT is ON (the code uses `?` and `!`), ImplicitUsings is ON,

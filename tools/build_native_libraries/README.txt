@@ -30,8 +30,17 @@ out with a glibc ceiling of 2.17 for x64/arm64, which covers essentially every
 Linux still in service, and 2.34 for riscv64 (nothing older exists on that
 architecture).
 
-macOS and Windows have no equivalent problem, so those two are built natively on
-their own hardware - see the sections below.
+Windows has no equivalent problem, so it is built natively on its own hardware.
+
+macOS DOES have one, and it is solved differently. A Mach-O binary records the
+minimum OS version it will run on, and with no explicit deployment target clang
+stamps in the version of the machine doing the building - so a dylib built on a
+current Mac is refused by dyld on every older one, exactly like the glibc case.
+No container is needed to fix it, just an explicit floor: MACOS_MIN_ARM64 and
+MACOS_MIN_X64 in pins.env are passed to CMake as CMAKE_OSX_DEPLOYMENT_TARGET,
+and macos/build.sh then verifies the built file really carries them. The current
+floors are macOS 11.0 for osx-arm64 (the oldest release that exists for Apple
+Silicon) and 10.13 for osx-x64.
 
 
 ARCHITECTURE MATRIX (7 RIDs)
@@ -153,10 +162,22 @@ macOS HOST, Apple Silicon (builds osx-arm64 and osx-x64)
        brew install cmake      (or download from cmake.org)
        Verify: cmake --version
 
+  3. Rosetta 2, OPTIONAL and only for osx-x64.
+       softwareupdate --install-rosetta
+       Without it the x86_64 decode smoke test cannot run on an Apple Silicon
+       host. build.sh probes for it and says so; the static checks still apply,
+       and nothing is silently skipped.
+
   Both macOS binaries come from the one Apple Silicon machine: osx-x64 is a
   cross-compile via -DCMAKE_OSX_ARCHITECTURES=x86_64. An Intel Mac is not
-  needed. The build ad-hoc code-signs the .dylib, which is what CMakeLists.txt
-  in native/miniaudio already configures.
+  needed.
+
+  build.sh ad-hoc code-signs the .dylib itself, with an explicit codesign call.
+  Do not "simplify" that away on the grounds that CMakeLists.txt configures
+  signing: its CODE_SIGNING_REQUIRED / CODE_SIGN_IDENTITY properties apply to
+  CMake's Xcode generator and do nothing under the Makefile generator used here.
+  Apple's linker ad-hoc signs arm64 output on its own but leaves x86_64
+  unsigned, so without that call the osx-x64 build fails the signature check.
 
 
 ================================================================================
@@ -202,8 +223,10 @@ whole point of the tooling: a binary that compiles is not necessarily a binary
 that works.
 
   1. Required exports - all 27 entry points that
-     src/CodeBrix.Audio.Engine/Backends/MiniAudio/Native.cs binds to, plus
-     sf_has_vorbis. A missing symbol here is a run-time crash later.
+     src/CodeBrix.Audio.Engine/Backends/MiniAudio/Native.cs binds to, including
+     the sf_has_vorbis capability probe. A missing symbol here is a run-time
+     crash later. The list is duplicated in all three build scripts and must
+     stay in step with the [LibraryImport] declarations in Native.cs.
 
   2. Codec coverage - counts of ma_stbvorbis_* (Ogg Vorbis), ma_dr_flac_*,
      ma_dr_mp3_* and ma_dr_wav_* symbols must all be non-zero. Catches a codec
@@ -215,8 +238,19 @@ that works.
      audio backends at run time by design; linking one would force every user to
      have that library installed.
 
-  4. glibc ceiling - reported and recorded (Linux). This is the number that says
-     how old a distro the binary still runs on.
+  4. Compatibility floor - the number that says how old a system the binary
+     still runs on. On Linux this is the glibc ceiling: reported and recorded.
+     On macOS it is the minimum-macOS load command, which is CHECKED, not just
+     reported - it must equal the value pinned in pins.env, so a build on a
+     newer Mac cannot quietly raise the floor. (Windows has no equivalent.)
+
+  4b. Target architecture (macOS, Windows) - the Mach-O arch / PE machine type
+     must match the RID being built. Both platforms cross-compile one of their
+     two RIDs from the other's hardware, and this is the check that catches the
+     wrong file being published under the wrong RID.
+
+  4c. Code signature (macOS) - the .dylib must be ad-hoc signed, because an
+     unsigned one is refused outright on Apple Silicon.
 
   5. Decode smoke test - smoke_test.c dlopen's the freshly built library exactly
      the way .NET does and drives it through the real decode path:
@@ -254,9 +288,11 @@ ADOPTING A BUILT BINARY INTO THE PACKAGE
      for, the opt-in playback tests:
        CODEBRIX_AUDIO_ENGINE_RUN_PLAYBACK_TESTS=1 dotnet test
 
-  4. Ogg Vorbis is only present in binaries built from these sources. Until all
-     seven RIDs are rebuilt, .ogg on the remaining ones is served by the managed
-     Vorbis decoder in CodeBrix.Audio rather than the native path.
+  4. Ogg Vorbis is only present in binaries built from these sources. As of
+     2026-07-31 all seven shipped RIDs are self-built and have it, so the native
+     path is used everywhere; the managed Vorbis decoder in CodeBrix.Audio is now
+     only the fallback for a binary that lacks sf_has_vorbis(). If you add a RID,
+     that fallback is what covers it until you build one.
 
 
 ================================================================================
@@ -282,8 +318,28 @@ Image pull fails / tag no longer exists
 
 The build succeeds but verification fails on missing exports
     Something in native/miniaudio/library.c or library.h was renamed. The
-    required list is in container_build.sh; it must stay in step with the
+    required list is duplicated in container_build.sh, windows/build.ps1 and
+    macos/build.sh - fix all three; they must stay in step with the
     [LibraryImport] entry points in Native.cs.
+
+(macOS) verification fails on "minimum macOS is <version>, expected <version>"
+    The dylib was not built with the deployment target from pins.env. Almost
+    always a stale build directory or a hand-run cmake without
+    -DCMAKE_OSX_DEPLOYMENT_TARGET; build.sh removes /tmp/ma-build-<rid> and
+    passes it on every run, so use build.sh rather than configuring by hand.
+    Do not "fix" this by relaxing the check - the value it guards is the oldest
+    macOS the shipped package will load on.
+
+(macOS) verification fails on "no code signature"
+    The explicit codesign call in build.sh was removed or failed. See the macOS
+    prerequisites above for why the linker and CMakeLists.txt cannot be relied
+    on for this, particularly for osx-x64.
+
+(macOS) "decode smoke test not run ... Rosetta 2 is not installed"
+    Exactly what it says, and it applies only to osx-x64 on Apple Silicon.
+    Install Rosetta (softwareupdate --install-rosetta) and rebuild to get the
+    check, or exercise that RID with the managed test suite on x64 hardware.
+    Note this is reported, never counted as a pass.
 
 (Windows) "pins.env was not found"
     The root .gitignore has a blanket '*.env' rule that has excluded this file
