@@ -15,7 +15,10 @@ public sealed class MiniAudioCodecFactory : ICodecFactory
     public string FactoryId => "CodeBrix.MiniAudio.Default";
 
     /// <inheritdoc />
-    public IReadOnlyCollection<string> SupportedFormatIds { get; } = ["wav", "mp3", "flac"];
+    // "ogg" requires a codebrix_miniaudio binary built with stb_vorbis (see native/miniaudio).
+    // Older binaries fail decoder construction, and the engine then falls through to the next
+    // registered factory for the format - which is how the managed Vorbis codec takes over.
+    public IReadOnlyCollection<string> SupportedFormatIds { get; } = ["wav", "mp3", "flac", "ogg"];
 
     /// <inheritdoc />
     public int Priority => 0; // Low priority, intended as a fallback.

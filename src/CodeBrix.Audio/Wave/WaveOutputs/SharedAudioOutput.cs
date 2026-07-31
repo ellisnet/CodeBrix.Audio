@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using CodeBrix.Audio.Codecs;
 using CodeBrix.Audio.Engine.Abstracts;
 using CodeBrix.Audio.Engine.Abstracts.Devices;
 using CodeBrix.Audio.Engine.Backends.MiniAudio;
 using CodeBrix.Audio.Engine.Enums;
+using CodeBrix.Audio.Engine.Interfaces;
 using CodeBrix.Audio.Engine.Structs;
 
 namespace CodeBrix.Audio.Wave;
@@ -35,6 +37,7 @@ public static class SharedAudioOutput
 {
     private static readonly object Gate = new object();
     private static readonly List<WaveOutEvent> Players = new List<WaveOutEvent>();
+    private static readonly List<ICodecFactory> ExtraCodecFactories = new List<ICodecFactory>();
 
     private static MiniAudioEngine _engine;
     private static AudioPlaybackDevice _device;
@@ -102,6 +105,72 @@ public static class SharedAudioOutput
             _configuredSampleRate = sampleRate;
             _configuredChannels = channels;
         }
+    }
+
+    /// <summary>
+    /// Adds an audio codec to the shared output, so that everything playing through it -
+    /// <see cref="WaveOutEvent"/>, <see cref="CodeBrix.Audio.Playback.AudioFilePlayer"/>,
+    /// <see cref="CodeBrix.Audio.Playback.SoundEffectClip"/> - can decode that format.
+    /// </summary>
+    /// <param name="factory">The codec factory to add.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="factory"/> is null.</exception>
+    /// <remarks>
+    /// <para>
+    /// This is the extension point for add-on packages that carry a decoder CodeBrix.Audio does
+    /// not ship itself - a separately licensed codec, for instance. Call it once at start-up,
+    /// before playing anything:
+    /// </para>
+    /// <code>
+    /// SharedAudioOutput.RegisterCodecFactory(new SomeFormatCodecFactory());
+    /// </code>
+    /// <para>
+    /// The registration is remembered for the lifetime of the process, not just of the current
+    /// device: it is re-applied to every engine the shared output starts, so it survives
+    /// <see cref="Shutdown"/>. Registering the same factory instance twice is harmless - the
+    /// second call is ignored.
+    /// </para>
+    /// <para>
+    /// Codecs registered here are consulted in priority order alongside the built-in ones. A
+    /// factory should return null for a stream it cannot handle rather than throwing, so that the
+    /// remaining factories still get their turn - several formats share one format identifier
+    /// (everything in an Ogg container reports "ogg", whatever codec is inside it), so declining
+    /// cleanly is how they coexist.
+    /// </para>
+    /// </remarks>
+    public static void RegisterCodecFactory(ICodecFactory factory)
+    {
+        if (factory == null)
+        {
+            throw new ArgumentNullException(nameof(factory));
+        }
+
+        lock (Gate)
+        {
+            if (ExtraCodecFactories.Contains(factory))
+            {
+                return;
+            }
+
+            ExtraCodecFactories.Add(factory);
+
+            // A device that is already running gets it immediately; otherwise EnsureStarted
+            // applies the whole list when it builds the engine.
+            if (_running)
+            {
+                _engine.RegisterCodecFactory(factory);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The codec factories added with <see cref="RegisterCodecFactory"/>, in registration order.
+    /// </summary>
+    /// <remarks>
+    /// Does not include the built-in native and managed codecs, which are always present.
+    /// </remarks>
+    public static IReadOnlyList<ICodecFactory> RegisteredCodecFactories
+    {
+        get { lock (Gate) { return ExtraCodecFactories.ToArray(); } }
     }
 
     /// <summary>
@@ -194,6 +263,22 @@ public static class SharedAudioOutput
             AudioPlaybackDevice device;
             try
             {
+                // The managed Ogg Vorbis and FLAC decoders register BELOW the engine's native
+                // factory, so they change nothing where the bundled native library can decode
+                // those formats itself. They matter on a platform whose native binary predates
+                // Ogg Vorbis support, or has none at all: without them an .ogg would simply fail
+                // to open there, which is not a distinction an application should have to know
+                // about.
+                ManagedCodecs.RegisterAll(engine);
+
+                // Then anything an add-on package registered (see RegisterCodecFactory). The list
+                // outlives any single engine, so a codec registered once keeps working across a
+                // Shutdown and restart.
+                foreach (var factory in ExtraCodecFactories)
+                {
+                    engine.RegisterCodecFactory(factory);
+                }
+
                 device = engine.InitializePlaybackDevice(null, format);
                 device.Start();
             }

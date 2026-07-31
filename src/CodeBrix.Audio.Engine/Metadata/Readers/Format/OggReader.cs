@@ -65,7 +65,13 @@ internal class OggReader : BaseSoundFormatReader
             }
 
             // Duration Calculation
-            if (options.DurationAccuracy == DurationAccuracy.AccurateScan)
+            //
+            // This runs for BOTH accuracy settings, unlike the frame-based formats. An Ogg
+            // stream carries no usable first-frame estimate, so honouring FastEstimate here
+            // would mean reporting a duration of zero - which breaks any media transport bound
+            // to it. Reading the granule position of the last page is a single 64 KB tail read,
+            // so it satisfies "fast" as well as "accurate". It does need a seekable stream.
+            if (stream.CanSeek)
             {
                 var lastGranulePosition = await FindLastPageGranuleAsync(stream).ConfigureAwait(false);
                 if (lastGranulePosition > 0)

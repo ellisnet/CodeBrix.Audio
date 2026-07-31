@@ -225,8 +225,15 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
                 sampleOffset = Math.Clamp(sampleOffset, 0, maxLen);
             }
             
-            _decoder.Seek(sampleOffset);
-            
+            // Honour a failed seek: silently keeping our own position while the decoder stays
+            // put desynchronises every position readout (a media scrubber would move while the
+            // audio kept playing from the old spot).
+            if (!_decoder.Seek(sampleOffset))
+            {
+                throw new InvalidOperationException(
+                    $"The decoder could not seek to sample offset {sampleOffset}.");
+            }
+
             // Clear the existing buffer
             _buffer.Clear();
             _isEndOfStream = false;

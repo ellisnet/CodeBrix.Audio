@@ -12,13 +12,24 @@ namespace CodeBrix.Audio.Engine.Backends.MiniAudio;  //was previously: SoundFlow
 /// </summary>
 internal sealed unsafe class MiniAudioDecoder : ISoundDecoder
 {
+    /// <summary>
+    ///     Ogg streams up to this size are handed to the decoder as one block of memory; anything
+    ///     larger streams through the read callbacks instead. 256 MB of Vorbis is on the order of
+    ///     seven hours of audio, so in practice this only rules out pathological inputs.
+    /// </summary>
+    private const long MaxInMemoryOggBytes = 256L * 1024 * 1024;
+
     private readonly nint _decoder;
     private readonly Stream _stream;
-    
+
     // Keep references to delegates to prevent GC collection while native code uses them
     private readonly Native.BufferProcessingCallback _readCallback;
     private readonly Native.SeekCallback _seekCallbackCallback;
-    
+
+    // Non-null when the decoder was initialized from a block of memory we own (see
+    // TryInitializeFromMemory). miniaudio does not copy the data, so it must outlive the decoder.
+    private byte* _ownedData;
+
     private bool _endOfStreamReached;
     private byte[]? _rentedReadBuffer;
     private readonly object _syncLock = new();
@@ -40,15 +51,28 @@ internal sealed unsafe class MiniAudioDecoder : ISoundDecoder
         var configPtr = Native.AllocateDecoderConfig(SampleFormat, (uint)Channels, (uint)SampleRate);
 
         _decoder = Native.AllocateDecoder();
-        
+
         // Store delegates in fields to prevent GC collection
         _readCallback = ReadCallback;
         _seekCallbackCallback = SeekCallback;
 
-        var result = Native.DecoderInit(_readCallback, _seekCallbackCallback, nint.Zero, configPtr, _decoder);
+        // Ogg gets first refusal on the in-memory path: given the whole file, miniaudio drives
+        // stb_vorbis in pull mode, which knows the stream length and seeks directly. Through the
+        // read callbacks it uses push mode instead, where the length reads back as zero and a
+        // backward seek re-decodes from the beginning. If the in-memory attempt does not apply or
+        // does not work, the callback path below still runs, so nothing is lost by trying.
+        var result = TryInitializeFromMemory(configPtr);
+
+        if (result != MiniAudioResult.Success)
+        {
+            ReleaseOwnedData();
+            if (_stream.CanSeek) _stream.Position = 0;
+            result = Native.DecoderInit(_readCallback, _seekCallbackCallback, nint.Zero, configPtr, _decoder);
+        }
+
         Native.Free(configPtr);
 
-        if (result != MiniAudioResult.Success) 
+        if (result != MiniAudioResult.Success)
             throw new MiniaudioException("MiniAudio", result, "Unable to initialize decoder.");
 
         result = Native.DecoderGetLengthInPcmFrames(_decoder, out var length);
@@ -59,6 +83,85 @@ internal sealed unsafe class MiniAudioDecoder : ISoundDecoder
         _endOfStreamReached = false;
     }
     
+    /// <summary>
+    ///     Attempts to open the stream as one block of memory rather than through read callbacks.
+    /// </summary>
+    /// <returns>
+    ///     <see cref="MiniAudioResult.Success" /> when the decoder was initialized this way;
+    ///     any other value means the caller should fall back to the callback path.
+    /// </returns>
+    /// <remarks>
+    ///     Only Ogg streams take this route. Every other format miniaudio decodes reports its
+    ///     length and seeks correctly from callbacks, and streaming them keeps memory flat for
+    ///     long files - which is the entire point of <c>ChunkedDataProvider</c>. Ogg is the
+    ///     exception that has to be bought out of push mode.
+    /// </remarks>
+    private MiniAudioResult TryInitializeFromMemory(nint configPtr)
+    {
+        if (!_stream.CanSeek) return MiniAudioResult.InvalidOperation;
+
+        long length;
+        try
+        {
+            length = _stream.Length;
+        }
+        catch (NotSupportedException)
+        {
+            // Some streams claim CanSeek but refuse Length.
+            return MiniAudioResult.InvalidOperation;
+        }
+
+        if (length is <= 0 or > MaxInMemoryOggBytes) return MiniAudioResult.InvalidOperation;
+
+        _stream.Position = 0;
+        Span<byte> header = stackalloc byte[4];
+        if (_stream.ReadAtLeast(header, 4, throwOnEndOfStream: false) < 4) return MiniAudioResult.InvalidOperation;
+        _stream.Position = 0;
+
+        // "OggS" - the Ogg page capture pattern.
+        if (header[0] != (byte)'O' || header[1] != (byte)'g' || header[2] != (byte)'g' || header[3] != (byte)'S')
+            return MiniAudioResult.InvalidOperation;
+
+        if (!Native.HasVorbis)
+        {
+            // An older native library without stb_vorbis cannot decode this at all. Say so once,
+            // clearly, rather than letting it surface as a bare initialization failure - a
+            // managed Vorbis decoder registered with the engine takes over from here.
+            Log.Info("The loaded codebrix_miniaudio has no Ogg Vorbis decoder; " +
+                     "Ogg playback will use the managed decoder instead.");
+            return MiniAudioResult.InvalidOperation;
+        }
+
+        var buffer = (byte*)NativeMemory.Alloc((nuint)length);
+        try
+        {
+            _stream.ReadExactly(new Span<byte>(buffer, (int)length));
+        }
+        catch (Exception)
+        {
+            NativeMemory.Free(buffer);
+            return MiniAudioResult.IoError;
+        }
+
+        var result = Native.DecoderInitMemory((nint)buffer, (nuint)length, configPtr, _decoder);
+        if (result != MiniAudioResult.Success)
+        {
+            NativeMemory.Free(buffer);
+            return result;
+        }
+
+        // The decoder now holds a pointer into this block, so we own it until Dispose.
+        _ownedData = buffer;
+        return MiniAudioResult.Success;
+    }
+
+    private void ReleaseOwnedData()
+    {
+        if (_ownedData == null) return;
+        NativeMemory.Free(_ownedData);
+        _ownedData = null;
+    }
+
     /// <inheritdoc />
     public int Channels { get; }
     
@@ -185,17 +288,23 @@ internal sealed unsafe class MiniAudioDecoder : ISoundDecoder
     {
         lock (_syncLock)
         {
-            MiniAudioResult miniAudioResult;
-            if (Length == 0)
+            if (IsDisposed || offset < 0) return false;
+
+            // A zero Length is NOT a reason to refuse: miniaudio reports no length for some
+            // formats (notably Vorbis when it is driven in push mode) yet still seeks fine.
+            // Re-query opportunistically - it costs nothing and keeps Length useful - then
+            // let the native decoder decide whether the seek is possible.
+            if (Length == 0 &&
+                Native.DecoderGetLengthInPcmFrames(_decoder, out var length) == MiniAudioResult.Success)
             {
-                miniAudioResult = Native.DecoderGetLengthInPcmFrames(_decoder, out var length);
-                if (miniAudioResult != MiniAudioResult.Success || (int)length == 0) return false;
                 Length = (int)length * Channels;
             }
 
+            var miniAudioResult = Native.DecoderSeekToPcmFrame(_decoder, (ulong)(offset / Channels));
+            if (miniAudioResult != MiniAudioResult.Success) return false;
+
             _endOfStreamReached = false;
-            miniAudioResult = Native.DecoderSeekToPcmFrame(_decoder, (ulong)(offset / Channels));
-            return miniAudioResult == MiniAudioResult.Success;
+            return true;
         }
     }
 
@@ -311,6 +420,10 @@ internal sealed unsafe class MiniAudioDecoder : ISoundDecoder
 
             Native.DecoderUninit(_decoder);
             Native.Free(_decoder);
+
+            // Only safe after DecoderUninit: while the decoder lives it holds pointers into this
+            // block (miniaudio never copies the data it is initialized from).
+            ReleaseOwnedData();
 
             // Keep delegates alive until after Uninit to prevent GC during callback (defensive)
             GC.KeepAlive(_readCallback);

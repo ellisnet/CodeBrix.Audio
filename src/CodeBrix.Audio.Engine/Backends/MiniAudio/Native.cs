@@ -115,6 +115,7 @@ internal static unsafe partial class Native
                     Architecture.X64 => "linux-x64",
                     Architecture.Arm => "linux-arm",
                     Architecture.Arm64 => "linux-arm64",
+                    Architecture.RiscV64 => "linux-riscv64",
                     _ => throw new PlatformNotSupportedException(
                         $"Unsupported Linux architecture: {RuntimeInformation.ProcessArchitecture}")
                 };
@@ -163,6 +164,46 @@ internal static unsafe partial class Native
     
     #endregion
     
+    #region Capabilities
+
+    [LibraryImport(LibraryName, EntryPoint = "sf_has_vorbis")]
+    private static partial int GetHasVorbis();
+
+    private static bool? _hasVorbis;
+
+    /// <summary>
+    /// Whether the native library that actually loaded was built with an Ogg Vorbis decoder
+    /// (stb_vorbis) compiled in.
+    /// </summary>
+    /// <remarks>
+    /// Native libraries built before Vorbis support was added do not export the probe at all,
+    /// so a missing entry point is not an error here - it is the answer, and it means the same
+    /// thing as a zero return. Callers use this to fall back to a managed Vorbis decoder, and
+    /// to explain the situation instead of surfacing an opaque decode failure.
+    /// </remarks>
+    public static bool HasVorbis
+    {
+        get
+        {
+            if (_hasVorbis is { } known) return known;
+
+            bool result;
+            try
+            {
+                result = GetHasVorbis() != 0;
+            }
+            catch (EntryPointNotFoundException)
+            {
+                result = false;
+            }
+
+            _hasVorbis = result;
+            return result;
+        }
+    }
+
+    #endregion
+
     #region Encoder
 
     [LibraryImport(LibraryName, EntryPoint = "ma_encoder_init", StringMarshalling = StringMarshalling.Utf8)]
@@ -182,6 +223,19 @@ internal static unsafe partial class Native
     [LibraryImport(LibraryName, EntryPoint = "ma_decoder_init")]
     public static partial MiniAudioResult DecoderInit(BufferProcessingCallback onRead, SeekCallback onSeekCallback, nint pUserData,
         nint pConfig, nint pDecoder);
+
+    /// <summary>
+    /// Initializes a decoder over a block of memory the caller owns.
+    /// </summary>
+    /// <remarks>
+    /// The memory is NOT copied: it must stay alive and unmoved for as long as the decoder is in
+    /// use. This matters beyond ordinary lifetime hygiene for Ogg Vorbis: given a whole file up
+    /// front, miniaudio drives stb_vorbis in "pull" mode, which knows the stream length and can
+    /// seek directly. Fed through read callbacks instead, it falls back to "push" mode, which
+    /// reports a length of zero and can only seek by decoding forward from the start.
+    /// </remarks>
+    [LibraryImport(LibraryName, EntryPoint = "ma_decoder_init_memory")]
+    public static partial MiniAudioResult DecoderInitMemory(nint pData, nuint dataSize, nint pConfig, nint pDecoder);
 
     [LibraryImport(LibraryName, EntryPoint = "ma_decoder_uninit")]
     public static partial MiniAudioResult DecoderUninit(nint pDecoder);

@@ -166,7 +166,13 @@ public sealed class StreamDataProvider : ISoundDataProvider
         if (sampleOffset < 0 || (Length > 0 && sampleOffset > Length))
             throw new ArgumentOutOfRangeException(nameof(sampleOffset), "Seek position is outside the valid range.");
 
-        _decoder.Seek(sampleOffset);
+        // Honour a failed seek rather than reporting a position the decoder never moved to.
+        if (!_decoder.Seek(sampleOffset))
+        {
+            throw new InvalidOperationException(
+                $"The decoder could not seek to sample offset {sampleOffset}.");
+        }
+
         Position = sampleOffset;
 
         PositionChanged?.Invoke(this, new PositionChangedEventArgs(Position));

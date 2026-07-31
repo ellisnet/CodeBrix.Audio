@@ -3,8 +3,28 @@
 // together with SoundFlow's thin C wrapper (sf_* entry points).
 //
 // Vendored for CodeBrix.Audio.Engine from SoundFlow's Native/miniaudio-backend
-// (LSXPrime/SoundFlow, MIT). Unmodified except for this header comment.
-// See THIRD-PARTY-NOTICES.txt for full provenance.
+// (LSXPrime/SoundFlow, MIT). See THIRD-PARTY-NOTICES.txt for full provenance.
+//
+// CHANGES MADE FOR CODEBRIX.AUDIO.ENGINE (everything else is SoundFlow's file as-is):
+//   * this header comment;
+//   * stb_vorbis is compiled into this translation unit to give miniaudio an Ogg Vorbis
+//     decoder - see the two include sites below;
+//   * sf_has_vorbis(), a capability probe so managed code can tell a Vorbis-capable
+//     binary from an older one (see the end of this file).
+
+// --- Ogg Vorbis support -----------------------------------------------------------------
+// miniaudio ships the glue for stb_vorbis but keeps it switched off unless stb_vorbis has
+// been included into the same translation unit: miniaudio.h keys off the include guard
+// STB_VORBIS_INCLUDE_STB_VORBIS_H (miniaudio.h, "#ifdef STB_VORBIS_INCLUDE_STB_VORBIS_H")
+// and defines MA_HAS_VORBIS when it is present.
+//
+// So the documented pattern is a TWO-STAGE include, and the order matters:
+//   1. HEADER ONLY, before miniaudio's implementation - declarations only, which is what
+//      flips miniaudio's Vorbis glue on;
+//   2. the FULL implementation, after miniaudio's implementation, at the bottom of this file.
+// Doing it the other way round leaves ma_stbvorbis_* referencing an undeclared stb_vorbis.
+#define STB_VORBIS_HEADER_ONLY
+#include "stb_vorbis-31c1ad3/stb_vorbis.c"
 
 #define MINIAUDIO_IMPLEMENTATION
 
@@ -306,3 +326,23 @@ MA_API ma_backend sf_context_get_backend(const ma_context* pContext)
 
     return pContext->backend;
 }
+
+// Added for CodeBrix.Audio.Engine: reports whether THIS binary was built with an Ogg Vorbis
+// decoder compiled in. Managed code probes for the symbol itself - a binary predating the
+// stb_vorbis work does not export it - so a missing symbol and a 0 return both mean
+// "no Vorbis here", and the caller can say so plainly instead of surfacing a decode failure.
+MA_API int sf_has_vorbis(void)
+{
+#ifdef MA_HAS_VORBIS
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+// --- Ogg Vorbis support, stage 2 --------------------------------------------------------
+// The stb_vorbis IMPLEMENTATION must be compiled AFTER miniaudio's own implementation (see
+// the stage-1 include at the top of this file). Undefining STB_VORBIS_HEADER_ONLY and
+// including the file a second time is exactly how stb_vorbis is meant to be used this way.
+#undef STB_VORBIS_HEADER_ONLY
+#include "stb_vorbis-31c1ad3/stb_vorbis.c"

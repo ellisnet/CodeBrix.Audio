@@ -25,10 +25,27 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 set(LIBRARY_NAME "codebrix_miniaudio")
 
 # Building Shared Library
+#
+# NOTE: stb_vorbis-31c1ad3/stb_vorbis.c is deliberately NOT listed here. It is #included
+# into library.c (twice - header-only, then implementation; see the comments in library.c),
+# which is how miniaudio wants its Vorbis decoder wired in. Listing it as a source would
+# compile it a second time as its own translation unit and the link would fail on duplicate
+# symbols. It is still part of the build - just not its own compilation unit.
 add_library(${LIBRARY_NAME} SHARED
         library.c
         library.h
         miniaudio-80cf7b2/miniaudio.h)
+
+# stb_vorbis is third-party C from 2021 and trips a few of GCC/Clang's newer diagnostics
+# (unused values, maybe-uninitialized). Nothing here treats warnings as errors, so the build
+# is unaffected; the suppressions below just keep the log readable. They are scoped to this
+# target rather than being added globally.
+if (NOT MSVC)
+    target_compile_options(${LIBRARY_NAME} PRIVATE
+            -Wno-unused-value
+            -Wno-unused-but-set-variable
+            -Wno-maybe-uninitialized)
+endif ()
 
 # Platform-specific configurations
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")

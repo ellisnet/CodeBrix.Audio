@@ -17,10 +17,53 @@
     </PackageReference>
     <PackageReference Include="SilverAssertions.ApacheLicenseForever" Version="1.0.164.180" />
     <PackageReference Include="CodeBrix.TestMocks.ApacheLicenseForever" Version="1.0.165.1173" />
+    <!--
+      Retained from the upstream MeltySynth test suite, which uses it for the FFT in the
+      Freeverb impulse-response comparison. Test-only; MIT.
+    -->
+    <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CodeBrix.Audio\CodeBrix.Audio.csproj" />
+    <!--
+      CodeBrix.Audio references the Engine privately (it is bundled into the same NuGet package
+      rather than being a dependency), so the Engine's types are not transitively visible here.
+      The tests need them to exercise the codec-factory surface, hence the direct reference.
+    -->
+    <ProjectReference Include="..\..\src\CodeBrix.Audio.Engine\CodeBrix.Audio.Engine.csproj" />
+  </ItemGroup>
+
+  <!--
+    Generated audio fixtures shared with CodeBrix.Audio.Engine.Tests. They are synthesized and
+    encoded by tools/make_test_fixtures/make_fixtures.sh - no third-party audio is bundled. WAV
+    and MP3 cases are still built in code (TestAudio.cs); these files exist because Ogg Vorbis
+    and FLAC cannot reasonably be hand-assembled. Each .flac ships with the .wav it was encoded
+    from, which is the ground truth the lossless round-trip tests compare against.
+  -->
+  <ItemGroup>
+    <Content Include="..\Assets\audio\*.ogg;..\Assets\audio\*.flac;..\Assets\audio\*.wav">
+      <Link>Assets\audio\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    Fixtures for the CodeBrix.Audio.Synth tests.
+
+    The .sf2 is synthesized by tools/make_test_fixtures/make_soundfont.py - no third-party
+    SoundFont is bundled. The reference vectors are Freeverb (public domain) and TinySoundFont
+    (MIT), both carried over from the upstream MeltySynth suite; see THIRD-PARTY-NOTICES.txt.
+  -->
+  <ItemGroup>
+    <Content Include="..\Assets\soundfont\*.sf2">
+      <Link>Assets\soundfont\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\Assets\synth\**\*">
+      <Link>Assets\synth\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

@@ -16,7 +16,11 @@ public class WaveToSampleProvider : SampleProviderConverterBase
     public WaveToSampleProvider(IWaveProvider source)
         : base(source)
     {
-        if (source.WaveFormat.Encoding != WaveFormatEncoding.IeeeFloat)
+        // Resolve WAVE_FORMAT_EXTENSIBLE before judging the encoding: an extensible header is a
+        // wrapper around ordinary IEEE float, and rejecting it on the tag alone locks out files
+        // that are perfectly readable.
+        if (SampleProviderConverters.ResolveExtensible(source.WaveFormat).Encoding
+            != WaveFormatEncoding.IeeeFloat)
         {
             throw new ArgumentException("Must be already floating point");
         }

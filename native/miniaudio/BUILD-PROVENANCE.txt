@@ -1,0 +1,95 @@
+================================================================================
+BUILD-PROVENANCE - what produced each shipped codebrix_miniaudio binary
+================================================================================
+
+One record per binary under
+src/CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/<rid>/native/.
+
+Update this file whenever a binary is replaced. The per-build details it is
+copied from are written by the build scripts to
+tools/build_native_libraries/output/<rid>/build-info.txt.
+
+All binaries are built from the sources vendored in this folder - miniaudio and
+stb_vorbis are in-tree, and no build step reaches outside the repository or
+downloads source. See tools/build_native_libraries/README.txt for how to
+reproduce any of them, and ../../THIRD-PARTY-NOTICES.txt for licensing.
+
+SOURCES COMMON TO EVERY BINARY BELOW
+--------------------------------------------------------------------------------
+  miniaudio    0.11.24   mackron/miniaudio @ 80cf7b2deb1c9930fdf0726b3a20ab5e47095067
+  stb_vorbis   1.22      nothings/stb      @ 31c1ad37456438565541f4919958214b6e762fb4
+  wrapper                native/miniaudio/library.c + library.h
+  codecs                 WAV, MP3, FLAC (miniaudio's built-in dr_* decoders)
+                         + Ogg Vorbis (stb_vorbis, compiled into library.c)
+
+================================================================================
+SELF-BUILT BINARIES
+================================================================================
+
+linux-x64
+--------------------------------------------------------------------------------
+  Built        : 2026-07-30 19:47:03 UTC
+  How          : tools/build_native_libraries/build.sh x64  (container build)
+  Container    : quay.io/pypa/manylinux_2_28_x86_64:2026.07.19-1
+                 @sha256:a61875a2f84cab7df8de222ff12cabc08ff86eb4ad402ac90ba7bdaed9600cca
+                 (AlmaLinux 8.10)
+  Compiler     : GCC 14.2.1 20250110 (Red Hat 14.2.1-11), gcc-toolset-14
+  Build type   : Release
+  Size         : 925008 bytes
+  SHA256       : a845bfa463dea63d2c3fd70120173e80e6e07465c77ae516d0766d92420b4b91
+  glibc ceiling: GLIBC_2.17
+  Dynamic deps : libc.so.6 libdl.so.2 libm.so.6 libpthread.so.0
+  Verified     : exports, codec coverage, dependency policy, dlopen + Ogg decode
+                 + length + seek smoke test (all passed in-container)
+
+linux-arm64
+--------------------------------------------------------------------------------
+  Built        : 2026-07-30 19:49:19 UTC
+  How          : tools/build_native_libraries/build.sh arm64  (container build,
+                 emulated on an x86_64 host via qemu-aarch64 binfmt)
+  Container    : quay.io/pypa/manylinux_2_28_aarch64:2026.07.19-1
+                 @sha256:162c81dfd3efc710732a571717d3c916a6945ebf279e879ddee3243af96fe46f
+                 (AlmaLinux 8.10)
+  Compiler     : GCC 14.2.1 20250110 (Red Hat 14.2.1-11), gcc-toolset-14
+  Build type   : Release
+  Size         : 960272 bytes
+  SHA256       : dba4b368293fa0f4c37761d7927fb451f25631d1eccf78efc23afd39a958590c
+  glibc ceiling: GLIBC_2.17
+  Dynamic deps : libc.so.6 libdl.so.2 libm.so.6 libpthread.so.0
+  Verified     : same gate as linux-x64, run under emulation
+
+linux-riscv64
+--------------------------------------------------------------------------------
+  Built        : 2026-07-30 19:51:19 UTC
+  How          : tools/build_native_libraries/build.sh riscv64  (container build,
+                 emulated on an x86_64 host via qemu-riscv64 binfmt)
+  Container    : quay.io/pypa/manylinux_2_39_riscv64:2026.07.19-1
+                 @sha256:04b3acc69a6cebb10ac1252587d202acce6445d91c783d3f92229bb2b2483069
+                 (Rocky Linux 10.2)
+  Compiler     : GCC 14.3.1 20251022 (Red Hat 14.3.1-4)
+  Build type   : Release
+  Size         : 720184 bytes
+  SHA256       : 944e45d363eec7f590475dec775b88d8559f791bc2b4c5839192ebf223704205
+  glibc ceiling: GLIBC_2.34
+  Dynamic deps : libc.so.6 libm.so.6
+  Verified     : same gate as linux-x64, run under emulation
+  Note         : .NET for linux-riscv64 is still experimental upstream, so this
+                 RID targets experimental SDK builds.
+
+================================================================================
+NOT YET SELF-BUILT
+================================================================================
+
+win-x64, win-arm64, osx-x64, osx-arm64
+--------------------------------------------------------------------------------
+  These four are still SoundFlow v1.4.1's prebuilt miniaudio binaries, renamed to
+  codebrix_miniaudio.* (built from miniaudio @ 80cf7b2, but WITHOUT stb_vorbis).
+
+  CONSEQUENCE: they cannot decode Ogg Vorbis. On those RIDs .ogg playback falls
+  back to the managed Vorbis decoder in CodeBrix.Audio, so .ogg still works - it
+  just does not use the native path. sf_has_vorbis() is absent from these
+  binaries, which is exactly how the managed side detects the situation.
+
+  To replace them, run the scripts in tools/build_native_libraries/windows/ and
+  tools/build_native_libraries/macos/ on a Windows x64 machine and an Apple
+  Silicon Mac, then record the results here.

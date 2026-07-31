@@ -5,15 +5,17 @@ using CodeBrix.Audio.Wave.SampleProviders;
 namespace CodeBrix.Audio.Wave; //was previously: NAudio.Wave;
 
 /// <summary>
-/// Simplifies opening a WAV or MP3 audio file: pass in the file name and the
-/// reader opens it and sets up a conversion path that yields 32-bit IEEE float
-/// PCM samples. It exposes a volume property and implements both
+/// Simplifies opening a WAV, MP3, Ogg Vorbis, or FLAC audio file: pass in the file name
+/// and the reader opens it and sets up a conversion path that yields 32-bit IEEE
+/// float PCM samples. It exposes a volume property and implements both
 /// <see cref="WaveStream"/> and <see cref="ISampleProvider"/>.
 /// </summary>
 /// <remarks>
-/// Only WAV (PCM or IEEE float) and MP3 sources are supported. WAV files using
-/// other encodings (for example A-law or mu-law) are not converted, because
-/// CodeBrix.Audio performs no platform-specific codec conversion.
+/// The format is chosen from the file extension: .wav, .mp3, .ogg, and .flac. WAV
+/// files using encodings other than PCM or IEEE float (for example A-law or mu-law) are
+/// not converted, because CodeBrix.Audio performs no platform-specific codec
+/// conversion. All decoding is fully managed and behaves identically on every
+/// supported operating system.
 /// </remarks>
 public class AudioFileReader : WaveStream, ISampleProvider
 {
@@ -27,7 +29,7 @@ public class AudioFileReader : WaveStream, ISampleProvider
     /// <summary>
     /// Initializes a new instance of <see cref="AudioFileReader"/>.
     /// </summary>
-    /// <param name="fileName">The WAV or MP3 file to open.</param>
+    /// <param name="fileName">The .wav, .mp3, .ogg, or .flac file to open.</param>
     public AudioFileReader(string fileName)
     {
         lockObject = new object();
@@ -40,16 +42,31 @@ public class AudioFileReader : WaveStream, ISampleProvider
     }
 
     /// <summary>
-    /// Creates the reader stream, supporting WAV (PCM / IEEE float) and MP3, and
-    /// ensuring the resulting stream is in a PCM-compatible format.
+    /// Creates the reader stream for the file's format, ensuring the result is in a
+    /// PCM-compatible format.
     /// </summary>
     /// <param name="fileName">The file to open.</param>
     private void CreateReaderStream(string fileName)
     {
+        // Anything registered beyond the built-in formats (see AudioFileReaderRegistry) is opened
+        // through the registry; an add-on package carrying another decoder becomes usable here
+        // without this method having to know about it.
+        if (!IsBuiltInExtension(fileName) && AudioFileReaderRegistry.Supports(fileName))
+        {
+            readerStream = AudioFileReaderRegistry.OpenFile(fileName);
+            return;
+        }
+
         if (fileName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
         {
             readerStream = new WaveFileReader(fileName);
-            if (readerStream.WaveFormat.Encoding != WaveFormatEncoding.Pcm && readerStream.WaveFormat.Encoding != WaveFormatEncoding.IeeeFloat)
+
+            // Resolve WAVE_FORMAT_EXTENSIBLE first: it is a header wrapper around ordinary PCM or
+            // IEEE float, and it is how most 24-bit and 32-bit WAV files are actually written.
+            var effectiveFormat = SampleProviderConverters.ResolveExtensible(readerStream.WaveFormat);
+
+            if (effectiveFormat.Encoding != WaveFormatEncoding.Pcm &&
+                effectiveFormat.Encoding != WaveFormatEncoding.IeeeFloat)
             {
                 throw new InvalidOperationException(
                     "Only PCM and IEEE-float WAV files are supported; this file uses " +
@@ -60,11 +77,35 @@ public class AudioFileReader : WaveStream, ISampleProvider
         {
             readerStream = new Mp3FileReader(fileName);
         }
+        else if (fileName.EndsWith(".ogg", StringComparison.OrdinalIgnoreCase))
+        {
+            readerStream = new OggVorbisFileReader(fileName);
+        }
+        else if (fileName.EndsWith(".flac", StringComparison.OrdinalIgnoreCase))
+        {
+            readerStream = new FlacFileReader(fileName);
+        }
         else
         {
             throw new InvalidOperationException(
-                "Unsupported file format. AudioFileReader supports only .wav and .mp3 files.");
+                "Unsupported file format. AudioFileReader supports " +
+                $"{string.Join(", ", AudioFileReaderRegistry.SupportedExtensions)} files. " +
+                "Other formats can be added with AudioFileReaderRegistry.Register.");
         }
+    }
+
+    /// <summary>
+    /// Whether the extension is one this class handles directly (the WAV branch also validates the
+    /// encoding, which the registry cannot do for it).
+    /// </summary>
+    /// <param name="fileName">The file name to test.</param>
+    /// <returns>True for the built-in formats.</returns>
+    private static bool IsBuiltInExtension(string fileName)
+    {
+        return fileName.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".ogg", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".flac", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

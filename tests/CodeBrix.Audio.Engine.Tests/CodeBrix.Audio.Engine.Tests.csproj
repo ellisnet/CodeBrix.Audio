@@ -22,4 +22,17 @@
     <ProjectReference Include="..\..\src\CodeBrix.Audio.Engine\CodeBrix.Audio.Engine.csproj" />
   </ItemGroup>
 
+  <!--
+    Generated audio fixtures shared with CodeBrix.Audio.Tests. They are synthesized and encoded
+    by tools/make_test_fixtures/make_fixtures.sh - no third-party audio is bundled. WAV and MP3
+    cases are still built in code (TestAudio.cs); these files exist because Ogg Vorbis and FLAC
+    cannot reasonably be hand-assembled.
+  -->
+  <ItemGroup>
+    <Content Include="..\Assets\audio\*.ogg;..\Assets\audio\*.flac;..\Assets\audio\*.wav">
+      <Link>Assets\audio\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

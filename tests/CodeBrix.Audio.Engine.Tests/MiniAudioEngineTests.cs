@@ -66,11 +66,15 @@ public class MiniAudioEngineTests
             $"Opt-in playback test. Set {PlaybackEnvVar}=1 to run it against a real audio device.");
 
         //Arrange
+        // Both test assemblies run as separate processes; this keeps their audible tests from
+        // sounding on top of one another.
+        using var audible = new AudibleTestScope();
+
         using var engine = new MiniAudioEngine();
         var format = AudioFormat.DvdHq;
         using var device = engine.InitializePlaybackDevice(null, format);
         using var stream = new MemoryStream(
-            TestAudio.BuildSineWavPcm16(format.SampleRate, format.Channels, format.SampleRate));
+            TestAudio.BuildCloseEncountersWavPcm16(format.SampleRate, format.Channels));
         using ISoundDataProvider provider = new StreamDataProvider(engine, format, stream);
         using var player = new SoundPlayer(engine, format, provider);
 
@@ -78,7 +82,9 @@ public class MiniAudioEngineTests
         device.Start();
         device.MasterMixer.AddComponent(player);
         player.Play();
-        Thread.Sleep(300);
+
+        // Long enough for all five tones to sound - this test exists to be listened to.
+        Thread.Sleep(TestAudio.CloseEncountersDuration + TimeSpan.FromMilliseconds(250));
         player.Stop();
         device.MasterMixer.RemoveComponent(player);
         device.Stop();

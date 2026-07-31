@@ -130,6 +130,11 @@ MA_API void sf_free_device_infos(struct sf_device_info* deviceInfos, ma_uint32 c
 
 MA_API ma_backend sf_context_get_backend(const ma_context* pContext);
 
+// Added for CodeBrix.Audio.Engine: returns 1 when this binary was built with an Ogg Vorbis
+// decoder (stb_vorbis) compiled in, 0 when it was not. Binaries built before Vorbis support
+// was added do not export this symbol at all, which managed code treats the same as 0.
+MA_API int sf_has_vorbis(void);
+
 #ifdef __cplusplus
 }
 #endif

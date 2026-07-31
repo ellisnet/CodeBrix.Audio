@@ -63,7 +63,9 @@ public class AudioFileReaderTests
     public void Unsupported_extension_throws()
     {
         //Arrange
-        string path = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".flac");
+        // .flac used to be the example of an unsupported extension here; it is supported now, so
+        // this needs an extension the reader genuinely does not handle.
+        string path = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".aac");
         File.WriteAllBytes(path, new byte[] { 0, 1, 2, 3 });
 
         //Act
@@ -71,6 +73,22 @@ public class AudioFileReaderTests
 
         //Assert
         act.Should().Throw<InvalidOperationException>();
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void A_supported_extension_whose_contents_are_not_that_format_throws()
+    {
+        //Arrange
+        string path = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".flac");
+        File.WriteAllBytes(path, new byte[] { 0, 1, 2, 3 });
+
+        //Act
+        Action act = () => new AudioFileReader(path);
+
+        //Assert
+        // The extension picks the reader; the reader then rejects the contents on their own terms.
+        act.Should().Throw<InvalidDataException>();
         File.Delete(path);
     }
 }

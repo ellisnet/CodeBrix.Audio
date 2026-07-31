@@ -3,14 +3,19 @@ THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 The CodeBrix.Audio.MitLicenseForever NuGet package ships two assemblies:
 
   * CodeBrix.Audio        — a fully managed, cross-platform audio FILE library
-                            (WAV/MP3 reading, Standard MIDI File read/write,
-                            MP3 ID3v2 tags, DSP primitives). Contains no native
-                            code. Adapted from NAudio and NLayer (entries 1-2).
+                            (WAV/MP3/Ogg Vorbis/FLAC reading, Standard MIDI File
+                            read/write, MP3 ID3v2 and Vorbis-comment tags, DSP
+                            primitives, SoundFont/MIDI synthesis). Contains no
+                            native code. Adapted from NAudio, NLayer, NVorbis and
+                            MeltySynth (entries 1-2, 5 and 7); its FLAC decoder is
+                            original CodeBrix code written from the format
+                            specification and is not third-party.
   * CodeBrix.Audio.Engine — a cross-platform audio ENGINE (playback, recording,
                             effects, editing/mixing, MIDI, synthesis,
                             visualization) with a bundled native miniaudio
                             backend for Windows, macOS, and Linux. Vendored from
-                            SoundFlow and miniaudio (entries 3-4).
+                            SoundFlow, miniaudio and stb_vorbis (entries 3-4
+                            and 6).
 
 Both assemblies incorporate source code (and, for the Engine, a native library)
 adapted from the open-source projects listed below. Every incorporated project
@@ -185,15 +190,22 @@ Modifications made during the port:
       with a stock miniaudio.* that a consuming application might also load.
     - SoundFlow's native build inputs (its Native/miniaudio-backend C wrapper and
       CMake project) were vendored under native/miniaudio and pruned to the
-      platforms we ship (Windows, macOS, Linux). The six shipped RIDs are win-x64,
-      win-arm64, linux-x64, linux-arm64, osx-x64, osx-arm64.
+      platforms we ship (Windows, macOS, Linux). The seven shipped RIDs are
+      win-x64, win-arm64, linux-x64, linux-arm64, linux-riscv64, osx-x64,
+      osx-arm64.
+    - library.c additionally compiles stb_vorbis into the same translation unit,
+      which is what gives the native backend an Ogg Vorbis decoder (entry 6), and
+      exports sf_has_vorbis() so managed code can tell whether a given binary has
+      one.
 
 Native binaries currently shipped:
-    The codebrix_miniaudio.{dll,so,dylib} binaries committed under
-    src/CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/ are SoundFlow v1.4.1's
-    own prebuilt miniaudio libraries, renamed. They are a stopgap; the sources in
-    native/miniaudio allow rebuilding equivalents from scratch (see entry 4 and
-    native/miniaudio/README.txt).
+    The Linux binaries (linux-x64, linux-arm64, linux-riscv64) are built from the
+    sources in native/miniaudio by tools/build_native_libraries; see
+    native/miniaudio/BUILD-PROVENANCE.txt for exactly what produced each one. The
+    Windows and macOS binaries are still SoundFlow v1.4.1's own prebuilt
+    miniaudio libraries, renamed, and therefore have no Ogg Vorbis decoder; on
+    those platforms .ogg is served by the managed decoder in CodeBrix.Audio
+    instead.
 
 ----- SoundFlow MIT License -----
 
@@ -282,6 +294,259 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+================================================================================
+5. NVorbis  (vendored as the managed Ogg Vorbis decoder in CodeBrix.Audio)
+================================================================================
+
+Project:    NVorbis (a fully managed Xiph.org Ogg Vorbis decoder)
+Source URL: https://github.com/NVorbis/NVorbis
+Version:    1.0.0-rc line, commit abd594e
+Authors:    Andrew Ward and NVorbis contributors
+License:    MIT
+
+Incorporated source (production):
+    NVorbis's entire decoder library (its NVorbis project: the Ogg container
+    reader and page/packet layer, the Vorbis stream decoder, codebooks, floors,
+    residues, mappings, modes, the MDCT, and tag reading) was vendored into
+    CodeBrix.Audio under src/CodeBrix.Audio/Vorbis/. Its test project, sample
+    application and build tooling were not incorporated.
+
+Modifications made during the port:
+    - Namespaces renamed from NVorbis[.*] to CodeBrix.Audio.Vorbis[.*] (see the
+      `//was previously:` provenance comment on each file's namespace line), and
+      converted to file-scoped namespace declarations.
+    - Public types made internal. Consumers reach the decoder through
+      OggVorbisFileReader in CodeBrix.Audio.Wave, exactly as the NLayer-derived
+      MPEG decoder (entry 2) is reached through Mp3FileReader.
+    - Target framework moved from netstandard2.0/2.1 to net10.0; NVorbis's
+      netstandard-only package references (System.Memory, System.ValueTuple,
+      System.Runtime.CompilerServices.Unsafe, Microsoft.Bcl.Numerics) were
+      dropped because all of it is in-box on .NET 10.
+    - No decoding logic was changed. One upstream behaviour is documented rather
+      than modified: seeking into the middle of a Vorbis packet leaves the
+      decoder without the preceding packet's overlap history, so up to one block
+      of audio after a seek can differ from a sequential decode of the same
+      region before the two converge. See the remarks on OggVorbisFileReader.
+
+----- NVorbis MIT License -----
+
+MIT License
+
+Copyright (c) 2020 Andrew Ward
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+6. stb_vorbis  (Ogg Vorbis decoder inside the native backend)
+================================================================================
+
+Project:    stb_vorbis (single-file C Ogg Vorbis decoder, part of the stb
+            single-file public-domain libraries)
+Source URL: https://github.com/nothings/stb
+Version:    stb_vorbis 1.22, taken from commit
+            31c1ad37456438565541f4919958214b6e762fb4
+Author:     Sean Barrett (nothings)
+License:    Dual-licensed — choose either MIT OR Public Domain (Unlicense).
+            Maximally permissive.
+
+Incorporated:
+    - stb_vorbis.c is vendored VERBATIM at native/miniaudio/stb_vorbis-31c1ad3/
+      (the folder name records the exact upstream commit). It is compiled into
+      the codebrix_miniaudio native library through native/miniaudio/library.c,
+      which includes it twice as miniaudio documents: header-only before
+      miniaudio's implementation (which is what switches miniaudio's Vorbis
+      support on) and in full after it.
+    - This is what allows the native decode path - and therefore the AudioPlayer
+      element, the audio engine and anything else that decodes through the
+      engine - to play .ogg files.
+
+Modifications:
+    - stb_vorbis.c itself is UNMODIFIED.
+
+----- stb_vorbis License -----
+
+This software is available under 2 licenses -- choose whichever you prefer.
+
+------------------------------------------------------------------------------
+ALTERNATIVE A - MIT License
+------------------------------------------------------------------------------
+Copyright (c) 2017 Sean Barrett
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+ALTERNATIVE B - Public Domain (www.unlicense.org)
+------------------------------------------------------------------------------
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or distribute this
+software, either in source code form or as a compiled binary, for any purpose,
+commercial or non-commercial, and by any means.
+
+In jurisdictions that recognize copyright laws, the author or authors of this
+software dedicate any and all copyright interest in the software to the public
+domain. We make this dedication for the benefit of the public at large and to
+the detriment of our heirs and successors. We intend this dedication to be an
+overt act of relinquishment in perpetuity of all present and future rights to
+this software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+================================================================================
+NOT THIRD PARTY: components written for CodeBrix.Audio
+================================================================================
+
+For the avoidance of doubt, these carry no third-party rights and are covered by
+================================================================================
+7. MeltySynth  (vendored as the SoundFont renderer in CodeBrix.Audio.Synth)
+================================================================================
+
+Project:    MeltySynth (a SoundFont MIDI synthesizer for C#)
+Source URL: https://github.com/sinshu/meltysynth
+Version:    2.4.1, tag v2.4.1, commit
+            1ad7ba0b9f7324461b08aeca75a220ab1253de56
+Authors:    Nobuaki Tanaka
+License:    MIT
+
+MeltySynth's own license notice credits three upstream projects it derives from,
+so the attribution is a chain of four. All four are MIT, and all four notices are
+reproduced together below exactly as MeltySynth ships them:
+
+    1. MeltySynth        — Copyright (C) 2021 Nobuaki Tanaka
+                           https://github.com/sinshu/meltysynth
+    2. C# Synth Project  — Copyright (C) 2014 Alex Veltsistas
+                           http://csharpsynthproject.codeplex.com
+    3. TinySoundFont     — Copyright (C) 2017, 2018 Bernhard Schelling
+                           https://github.com/schellingb/TinySoundFont
+    4. SFZero            — Copyright (C) 2012 Steve Folta
+                           https://github.com/stevefolta/SFZero
+                           (TinySoundFont is based on it)
+
+Incorporated source (production):
+    MeltySynth's entire library (the SoundFont parser and object model, the
+    generator/modulator model, volume and modulation envelopes, LFOs, the
+    per-voice biquad filter, reverb and chorus, the voice engine, and the MIDI
+    file reader and sequencer) was vendored into CodeBrix.Audio under
+    src/CodeBrix.Audio/Synth/. Its sample applications and build tooling were
+    not incorporated.
+
+    It reached CodeBrix.Audio by way of Doom.Brix, which had vendored it first;
+    that intermediate copy added nothing, so this is a vendoring of MeltySynth
+    itself. MIT code does not acquire GPL obligations by having sat in a GPL-2
+    repository, so nothing about that detour affects this package's license.
+
+Incorporated source (tests):
+    MeltySynth's own test suite was carried across to tests/CodeBrix.Audio.Tests/
+    Synth/ as the regression net for the port, together with its Freeverb
+    (public domain) and TinySoundFont (MIT) reference vectors, which live under
+    tests/Assets/synth/. Five tests that compare against parameter dumps of the
+    GPL-2 TimGM6mb SoundFont were NOT carried across, and neither was that
+    SoundFont nor the dumps: neither may be redistributed from an MIT package.
+
+Modifications made during the port:
+    - Namespaces renamed from MeltySynth to CodeBrix.Audio.Synth (see the
+      `//was previously:` provenance comment on each file's namespace line), and
+      converted to file-scoped namespace declarations.
+    - Six public types renamed, because their MeltySynth names collide with
+      types this package already ships. The collisions are real: two of them
+      would otherwise have been two public types of the same name in one
+      package, differing only by namespace.
+          MidiFile           -> MidiSequence
+          MidiFileLoopType   -> MidiSequenceLoopType
+          MidiFileSequencer  -> MidiSequencer
+          Synthesizer        -> SoundFontSynthesizer
+          SynthesizerSettings-> SoundFontSynthesizerSettings
+          Instrument         -> SoundFontInstrument
+    - Nullable reference annotations removed; CodeBrix.Audio is built with
+      nullable reference types disabled.
+    - No synthesis logic was changed. The port renders identically, which the
+      carried-across test suite is there to demonstrate.
+
+----- MeltySynth MIT License (covering all four projects above) -----
+
+MIT License
+
+C# Synth (http://csharpsynthproject.codeplex.com):
+Copyright (C) 2014 Alex Veltsistas
+
+TinySoundFont (https://github.com/schellingb/TinySoundFont):
+Copyright (C) 2017, 2018 Bernhard Schelling
+Based on SFZero, Copyright (C) 2012 Steve Folta (https://github.com/stevefolta/SFZero)
+
+MeltySynth:
+Copyright (C) 2021 Nobuaki Tanaka
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+
+CodeBrix.Audio's own MIT license:
+
+  * The FLAC decoder (src/CodeBrix.Audio/Flac/ and FlacFileReader) is original
+    code written from the published FLAC format specification. No FLAC reference
+    implementation source was used or adapted. (The native backend contains a
+    separate FLAC decoder, dr_flac, which arrives as part of miniaudio - entry 4.)
+  * The audio test fixtures under tests/Assets/audio/ are synthesized tones,
+    sweeps, seeded noise and silence generated by tools/make_test_fixtures/, not
+    recordings or third-party audio content.
+  * The SoundFont test fixture tests/Assets/soundfont/codebrix-test.sf2 is built
+    from sine tones by tools/make_test_fixtures/make_soundfont.py. It is not a
+    third-party SoundFont, and no third-party SoundFont is bundled: real GM
+    SoundFonts run to tens of megabytes and are variously licensed.
 
 ================================================================================
 

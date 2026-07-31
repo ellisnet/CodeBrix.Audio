@@ -9,17 +9,33 @@ outside this repository: the miniaudio source is vendored in-tree.
 CONTENTS
 --------------------------------------------------------------------------------
   library.c                     SoundFlow's thin C wrapper (sf_* entry points),
-                                compiled together with miniaudio in one TU via
-                                #define MINIAUDIO_IMPLEMENTATION.
+                                compiled together with miniaudio AND stb_vorbis
+                                in one TU via #define MINIAUDIO_IMPLEMENTATION.
+                                Also defines sf_has_vorbis(), the capability
+                                probe managed code uses to tell whether a given
+                                binary has an Ogg Vorbis decoder.
   library.h                     Wrapper header + the C-marshalled config structs.
   miniaudio-80cf7b2/miniaudio.h Vendored miniaudio single-header library,
                                 mackron/miniaudio @ commit 80cf7b2 (v0.11.24),
                                 dual Unlicense / MIT-0. The folder name records
                                 the exact upstream commit it came from.
+  stb_vorbis-31c1ad3/           Vendored stb_vorbis 1.22 (Ogg Vorbis decoder),
+    stb_vorbis.c                nothings/stb @ commit 31c1ad3, dual MIT /
+                                public domain. miniaudio keeps its Vorbis
+                                support switched off unless stb_vorbis is
+                                compiled into the same translation unit, which
+                                is exactly what library.c does.
   CMakeLists.txt                CMake project. Produces:
                                   Windows: codebrix_miniaudio.dll
                                   Linux:   libcodebrix_miniaudio.so
                                   macOS:   libcodebrix_miniaudio.dylib
+  BUILD-PROVENANCE.txt          What produced each shipped binary: date, host,
+                                toolchain, container digest, source commits,
+                                sha256, glibc ceiling.
+
+  See ../../tools/build_native_libraries/README.txt for the build scripts, the
+  full per-platform prerequisites, and the verification gate. That is the
+  document to read first when rebuilding anything here.
 
 PROVENANCE / LICENSES
 --------------------------------------------------------------------------------
@@ -39,15 +55,20 @@ Windows). To make the managed library pick it up, copy it into:
 
   src/CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/<rid>/native/
 
-where <rid> is one of: win-x64, win-arm64, linux-x64, linux-arm64, osx-x64,
-osx-arm64. The DllImportResolver in Backends/MiniAudio/Native.cs loads the
+where <rid> is one of: win-x64, win-arm64, linux-x64, linux-arm64,
+linux-riscv64, osx-x64, osx-arm64. The DllImportResolver in Backends/MiniAudio/Native.cs loads the
 library from that runtimes/<rid>/native/ layout at runtime.
 
-BUILDING ALL SIX RIDS (no CI / GitHub required)
+BUILDING ALL SEVEN RIDS BY HAND (no CI / GitHub required)
+
+NOTE: prefer tools/build_native_libraries, which wraps all of this, adds the
+verification gate, and records provenance. The raw recipes are kept here for
+reference and for one-off experiments.
 --------------------------------------------------------------------------------
 Each RID is just the "BUILDING ONE RID" recipe above with platform/arch flags.
-All six can be produced from three machines — a Windows x64 box, an Apple Silicon
-Mac, and a Linux x64 box — where the second arch on each is a cross-compile.
+All seven can be produced from three machines — a Windows x64 box, an Apple
+Silicon Mac, and a Linux x64 box — where the extra arches on each are
+cross-compiled or emulated.
 Use a fresh build/ directory per arch (or `rm -rf build` between configs).
 
   Windows (x64 host; Visual Studio 2022 with the ARM64 build tools installed):
@@ -80,9 +101,16 @@ native/ as described above. (No GitHub Actions / CI is used or required.)
 
 THE COMMITTED BINARIES
 --------------------------------------------------------------------------------
-The binaries currently committed under src/CodeBrix.Audio.Engine/Backends/
-MiniAudio/runtimes/ are SoundFlow v1.4.1's own prebuilt miniaudio libraries
-(built from miniaudio @ 80cf7b2), renamed to codebrix_miniaudio.*. They are a
-stopgap so the managed library builds and runs today. Rebuilding from the
-sources in this folder — on our own hardware — replaces them with binaries we
-produced ourselves.
+The three LINUX binaries (linux-x64, linux-arm64, linux-riscv64) are built from
+the sources in this folder by tools/build_native_libraries, in manylinux
+containers so they run on old glibc as well as new. They include the Ogg Vorbis
+decoder. See BUILD-PROVENANCE.txt for the exact details of each.
+
+The WINDOWS and macOS binaries are still SoundFlow v1.4.1's own prebuilt
+miniaudio libraries (built from miniaudio @ 80cf7b2), renamed to
+codebrix_miniaudio.*. They predate the Vorbis work and therefore CANNOT decode
+Ogg Vorbis; sf_has_vorbis() is absent from them, which is how the managed side
+detects the situation and falls back to its own Vorbis decoder. Replacing them
+is a matter of running tools/build_native_libraries/windows/build.ps1 on a
+Windows x64 machine and tools/build_native_libraries/macos/build.sh on an Apple
+Silicon Mac, then recording the results in BUILD-PROVENANCE.txt.

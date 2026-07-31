@@ -312,11 +312,42 @@ public class MidiFile
     /// <param name="events">Events to export</param>
     public static void Export(string filename, MidiEventCollection events)
     {
+        using (var stream = File.Create(filename))
+        {
+            Export(stream, events, leaveOpen: true);
+        }
+    }
+
+    /// <summary>
+    /// Exports a MIDI file to a stream.
+    /// </summary>
+    /// <param name="stream">Stream to write to. Must be writable and seekable: track chunk lengths are
+    /// written after the fact, which requires seeking back over the track that was just written.</param>
+    /// <param name="events">Events to export</param>
+    /// <param name="leaveOpen">When <see langword="true"/>, the stream is left open once writing
+    /// finishes; when <see langword="false"/> (the default), it is closed.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> or <paramref name="events"/> is null.</exception>
+    /// <exception cref="ArgumentException">The stream cannot seek, or more than one track was supplied
+    /// for a type 0 file.</exception>
+    public static void Export(Stream stream, MidiEventCollection events, bool leaveOpen = false)
+    {
+        if (stream == null)
+        {
+            throw new ArgumentNullException(nameof(stream));
+        }
+        if (events == null)
+        {
+            throw new ArgumentNullException(nameof(events));
+        }
+        if (!stream.CanSeek)
+        {
+            throw new ArgumentException("The stream must be seekable.", nameof(stream));
+        }
         if (events.MidiFileType == 0 && events.Tracks > 1)
         {
             throw new ArgumentException("Can't export more than one track to a type 0 file");
         }
-        using (var writer = new BinaryWriter(File.Create(filename)))
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen))
         {
             writer.Write(Encoding.UTF8.GetBytes("MThd"));
             writer.Write(SwapUInt32(6)); // chunk size
