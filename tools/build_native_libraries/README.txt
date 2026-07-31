@@ -113,12 +113,34 @@ WINDOWS HOST, x64 (builds win-x64 and win-arm64)
   2. CMake 3.26 or newer.
        winget install Kitware.CMake
        Verify: cmake --version
-       (Visual Studio's bundled CMake also works if it is on PATH.)
+       Visual Studio's bundled CMake also works and does NOT need to be on PATH -
+       build.ps1 finds it inside the VS installation automatically. A separate
+       CMake install is therefore optional if you already have VS.
 
   3. PowerShell 5.1 (in-box) or PowerShell 7+.
 
   No container, no emulator: win-arm64 is a cross-compile from the x64 host,
   which is what the ARM64 build tools component is for.
+
+  build.ps1 checks all of the above for EVERY architecture you asked for before
+  it compiles anything, prints what it found, and lists every missing piece at
+  once with the command that installs it. So `.\build.ps1 all` on a machine
+  without the ARM64 tools tells you immediately, instead of after a successful
+  x64 build.
+
+  IMPORTANT: the ARM64 check reads the filesystem of the SELECTED Visual Studio
+  installation, not `vswhere -requires`. Do not "simplify" it back to vswhere.
+
+  The reason is instance conflation. A machine often has more than one Visual
+  Studio instance - e.g. VS 18 Professional plus a VS 2022 Build Tools install -
+  and `vswhere -requires <component>` searches all of them. It will report the
+  ARM64 component as installed when it is present in some OTHER instance, which
+  says nothing about the one build.ps1 is driving. That is precisely the case on
+  the machine these scripts were last run on, and it is why a build could fail
+  with a raw CMake "Platform='ARM64'" error while vswhere insisted all was well.
+
+  When the check fails, build.ps1 also reports whether another instance has the
+  compiler, so the situation is obvious rather than mysterious.
 
 --------------------------------------------------------------------------------
 macOS HOST, Apple Silicon (builds osx-arm64 and osx-x64)
@@ -262,6 +284,31 @@ The build succeeds but verification fails on missing exports
     Something in native/miniaudio/library.c or library.h was renamed. The
     required list is in container_build.sh; it must stay in step with the
     [LibraryImport] entry points in Native.cs.
+
+(Windows) "pins.env was not found"
+    The root .gitignore has a blanket '*.env' rule that has excluded this file
+    from a commit before. Confirm with:
+      git check-ignore -v tools/build_native_libraries/pins.env
+    If it reports a match, the file is being ignored rather than genuinely
+    absent; re-include it and commit it.
+
+(Windows) cmake configure fails with "The BaseOutputPath/OutputPath property is
+not set ... Platform='ARM64'"
+    The ARM64 build tools are missing from the Visual Studio instance being
+    built with - even if vswhere says otherwise, because it searches every
+    instance on the machine and may be answering about a different one.
+    build.ps1 catches this up front and prints the setup.exe command; if you see
+    the raw CMake error, the pre-flight check was bypassed or removed.
+
+(Windows) the smoke test reports "'smoke_test.exe' is not recognized"
+    The environment has NoDefaultCurrentDirectoryInExePath set, so cmd.exe will
+    not run an executable from the current directory. build.ps1 invokes it as
+    .\smoke_test.exe for exactly this reason - keep the leading .\ .
+
+(Windows) "'vswhere.exe' is not recognized" during the smoke test
+    Harmless noise from VS 18's own vcvarsall.bat; the environment is still
+    initialised correctly. build.ps1 filters this line out of the smoke-test
+    output so it cannot be mistaken for a build failure.
 
 Podman "permission denied" writing output/
     Rootless podman maps your user into the container; the :Z mount flag handles

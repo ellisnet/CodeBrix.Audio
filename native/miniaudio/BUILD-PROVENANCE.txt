@@ -76,20 +76,63 @@ linux-riscv64
   Note         : .NET for linux-riscv64 is still experimental upstream, so this
                  RID targets experimental SDK builds.
 
+win-x64
+--------------------------------------------------------------------------------
+  Built        : 2026-07-31 03:05:11 UTC
+  How          : tools/build_native_libraries/windows/build.ps1 all  (host build)
+  Host         : Microsoft Windows NT 10.0.26200.0 (AMD64)
+  Toolchain    : Visual Studio 18 Professional, MSVC 19.51.36252.0
+                 (toolset 14.51.36231), Windows SDK 10.0.26100.0
+  CMake        : 4.3.1-msvc1 (the copy bundled with Visual Studio)
+  Build type   : Release
+  PE machine   : 8664 (x64)
+  Size         : 737280 bytes
+  SHA256       : cee1e5f9e353071fe6a5ad8c535e39e6df6b9e3231dab1e1d9d8b1d0c655d7bf
+  Dynamic deps : KERNEL32.dll VCRUNTIME140.dll api-ms-win-crt-*.dll
+  Verified     : exports (27/27), codec coverage, dependency policy, and the
+                 LoadLibrary + Ogg decode + length + seek smoke test, all passed
+                 natively on the build host.
+
+win-arm64
+--------------------------------------------------------------------------------
+  Built        : 2026-07-31 03:05:18 UTC
+  How          : tools/build_native_libraries/windows/build.ps1 all  (cross-compiled
+                 from the same x64 host via the MSVC ARM64/ARM64EC build tools)
+  Host         : Microsoft Windows NT 10.0.26200.0 (AMD64)
+  Toolchain    : Visual Studio 18 Professional, MSVC toolset 14.51.36231
+                 (Hostx64 -> arm64), Windows SDK 10.0.26100.0
+  CMake        : 4.3.1-msvc1 (the copy bundled with Visual Studio)
+  Build type   : Release
+  PE machine   : AA64 (ARM64)
+  Size         : 649728 bytes
+  SHA256       : 7e03ba88ba493bfbf786db0d3a5bfca311f446e52e77c1e499f80738f8e2a919
+  Dynamic deps : KERNEL32.dll VCRUNTIME140.dll api-ms-win-crt-*.dll
+  Verified     : exports (27/27), codec coverage, dependency policy and PE machine
+                 type, all passed. The build-time decode smoke test is a native
+                 check and does not apply to a cross-compiled binary - an ARM64
+                 DLL cannot be loaded into the x64 build process - so the decode
+                 path for this RID is exercised by the managed test suite run on
+                 ARM64 hardware.
+
+  Both Windows binaries above come from a single build.ps1 run, so they share one
+  toolset. Note that MSVC embeds timestamps and is not reproducible by default:
+  rebuilding from identical sources yields a different SHA256. The hashes here
+  identify these exact files, not the source state.
+
 ================================================================================
 NOT YET SELF-BUILT
 ================================================================================
 
-win-x64, win-arm64, osx-x64, osx-arm64
+osx-x64, osx-arm64
 --------------------------------------------------------------------------------
-  These four are still SoundFlow v1.4.1's prebuilt miniaudio binaries, renamed to
-  codebrix_miniaudio.* (built from miniaudio @ 80cf7b2, but WITHOUT stb_vorbis).
+  These two are still SoundFlow v1.4.1's prebuilt miniaudio binaries, renamed to
+  codebrix_miniaudio.dylib (built from miniaudio @ 80cf7b2, but WITHOUT
+  stb_vorbis).
 
   CONSEQUENCE: they cannot decode Ogg Vorbis. On those RIDs .ogg playback falls
   back to the managed Vorbis decoder in CodeBrix.Audio, so .ogg still works - it
   just does not use the native path. sf_has_vorbis() is absent from these
   binaries, which is exactly how the managed side detects the situation.
 
-  To replace them, run the scripts in tools/build_native_libraries/windows/ and
-  tools/build_native_libraries/macos/ on a Windows x64 machine and an Apple
+  To replace them, run tools/build_native_libraries/macos/build.sh on an Apple
   Silicon Mac, then record the results here.
