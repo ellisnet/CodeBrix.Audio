@@ -96,6 +96,57 @@ same IMidiSynthesizer contract, which is why MidiSequencer, MidiMusicPlayer and
 SoundFontRenderer drive either format without caring which - consumers choose a
 file format, not an API.
 
+THE TWO MIDI MESSAGE HOOKS — WHICH ONE YOU WANT
+--------------------------------------------------------------------------------
+MidiMusicPlayer exposes two hooks onto the messages a sequence plays. They look
+similar and do opposite things, so this is the same kind of trap as the two
+SoundFont paths above.
+
+  To REACT to the music          ->  .MidiMessageProcessed
+  (a drum hit shaking the             (MidiMessageObserver)
+  screen, a note spawning a           Observe-only. Runs AFTER the message has
+  particle, karaoke, a rhythm         been delivered. It cannot break playback.
+  game)                               THIS IS ALMOST ALWAYS THE ONE YOU WANT.
+
+  To CHANGE the music as it      ->  .MidiMessageFilter
+  plays (transpose, re-channel,       (MidiSequencer.MessageHook)
+  suppress, remap)                    REPLACES delivery. Your hook now owns
+                                      sending the message on.
+
+THE TRAP: MidiSequencer's hook was always a MODIFYING hook — when it is set, the
+sequencer does NOT call the synthesizer itself (MidiSequencer.ProcessEvents). So
+a filter that inspects a message and returns without calling
+ProcessMidiMessage on the synthesizer it was handed SILENCES THE MUSIC
+COMPLETELY. That reads as a bug in the player rather than in the hook, which is
+exactly why the observe-only hook exists next to it — it cannot do this.
+
+Both run on the REAL-TIME AUDIO THREAD, so both must be fast, allocation-free,
+and must never block or touch UI. Do not call back into the player from either
+one; it takes the same lock the audio thread is already holding, and deadlocks.
+Hand data to your own thread and act on it there.
+
+The synthesizer passed to a FILTER is safe to use FROM INSIDE THAT CALL ONLY —
+the lock that serializes it against rendering is held for the duration. Never
+store it for later. To send messages from your own thread, use
+MidiMusicPlayer.SendMidiMessage (and the SetChannel* helpers), which take the
+lock properly. There is deliberately NO property handing back the
+IMidiSynthesizer: it is not thread-safe, and the lock that makes it safe is not
+reachable from outside this library, so such a property could not be used
+correctly.
+
+WHAT THE PLAYER DELIBERATELY DOES NOT GIVE YOU: tempo, time signature and
+markers. MidiSequence does not carry them — it consumes tempo changes while
+merging tracks (they are baked into the message time stamps and dropped) and
+never parses time signature, markers or track names at all. Read those from the
+OTHER MIDI model instead, which parses all of them:
+
+    var file = new MidiFile(path, strictChecking: false);   // CodeBrix.Audio.Midi
+    var bpm  = file.Events[0].OfType<TempoEvent>().First().Tempo;
+    var sig  = file.Events[0].OfType<TimeSignatureEvent>().FirstOrDefault();
+
+Parsing the same file twice — once as MidiSequence to play, once as MidiFile to
+inspect — is the intended pattern. MIDI files are kilobytes; this costs nothing.
+
 TWO TYPES NAMED FOR MIDI FILES. Same rule, same reason:
 
   CodeBrix.Audio.Midi.MidiFile      The editable file model. Read it, edit the
@@ -226,7 +277,24 @@ PATHS" above first:
   - MidiMusicPlayer       : (CodeBrix.Audio.Playback) the transport-style player.
                             Load / Play / Pause / Stop / Seek / Volume /
                             IsLooping / Position / Duration / PlaybackEnded,
-                            shaped exactly like AudioFilePlayer.
+                            shaped exactly like AudioFilePlayer. Plus the
+                            controls a sequence needs that a decoded file does
+                            not:
+                              .Speed              tempo multiplier, 1.0 default;
+                                                  scales tempo without pitch.
+                              .Sequence           the loaded MidiSequence (the
+                                                  only way to reach it after the
+                                                  Load(path, path) overload).
+                              SendMidiMessage()   send alongside the sequence,
+                                                  from any thread, safely.
+                              SetChannelVolume()  CC7 - how a layered
+                                                  arrangement is mixed live.
+                              SetChannelPan()     CC10.
+                              SetChannelProgram() program change.
+                              .MidiMessageProcessed  observe-only note hook.
+                              .MidiMessageFilter     modify/replace hook.
+                            See "THE TWO MIDI MESSAGE HOOKS" below before using
+                            either hook - they are not interchangeable.
 
 SFZ (CodeBrix.Audio.Synth.Sfz) — the .sfz counterparts of the SoundFont types:
   - SfzInstrument         : a playable SFZ instrument - typed regions, decoded
@@ -388,6 +456,36 @@ Play MIDI music through a SoundFont (the same transport as above):
     music.IsLooping = true;
     music.Play();
     // Same surface as AudioFilePlayer: Position, Duration, Seek, Volume, Pause, Stop, Dispose.
+
+React to the notes as they play, and mix a layer live (the game-music surface):
+
+    using CodeBrix.Audio.Playback;
+    using CodeBrix.Audio.Synth;
+
+    var music = new MidiMusicPlayer();
+    music.Load(soundFonts.Get("GeneralUser.sf2"), new MidiSequence("battle.mid"));
+
+    // Observe-only: cannot break playback. Runs on the AUDIO THREAD, so do the
+    // least possible here and let your own thread do the work.
+    music.MidiMessageProcessed = (channel, command, note, velocity) =>
+    {
+        if (command == 0x90 && velocity > 0 && channel == 9)   // channel 10 = drums
+            Volatile.Write(ref _drumHitPending, 1);            // your thread reads this
+    };
+
+    music.Play();
+
+    music.SetChannelVolume(3, 0.0f);   // drop the lead layer out...
+    music.SetChannelVolume(3, 1.0f);   // ...and bring it back
+    music.Speed = 0.75f;               // slow-motion, same pitch
+
+    // Transposing the whole sequence up an octave, with the OTHER hook. Note that
+    // this one owns delivery: forgetting to call ProcessMidiMessage silences it.
+    music.MidiMessageFilter = (synth, channel, command, data1, data2) =>
+        synth.ProcessMidiMessage(
+            channel, command,
+            command is 0x90 or 0x80 ? data1 + 12 : data1,
+            data2);
 
 Build a sequence in code and play it (the bridge between the two MIDI models):
 

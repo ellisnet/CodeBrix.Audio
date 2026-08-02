@@ -17,7 +17,7 @@ Please update your C#/.NET code and projects to the latest LTS version of Micros
 * Reading and writing Standard MIDI Files (`.mid`).
 * Reading MP3 ID3v2 and Ogg/FLAC Vorbis-comment metadata tags.
 * Playing audio: a media player with transport and seeking (`AudioFilePlayer`), and decode-once sound effects that can overlap freely (`SoundEffectClip`).
-* Rendering SoundFonts (`.sf2`) and playing MIDI music: a spec-faithful SoundFont renderer with the full generator **and modulator** model, per-voice LFOs and filter, reverb and chorus — driven by a transport-style player (`MidiMusicPlayer`) or rendered offline to a WAV file (`SoundFontRenderer`).
+* Rendering SoundFonts (`.sf2`) and playing MIDI music: a spec-faithful SoundFont renderer with the full generator **and modulator** model, per-voice LFOs and filter, reverb and chorus — driven by a transport-style player (`MidiMusicPlayer`) or rendered offline to a WAV file (`SoundFontRenderer`). The player carries the controls a sequence needs and a decoded file does not: playback **speed** (tempo without pitch change), **per-channel** volume/pan/program for mixing a layered arrangement live, arbitrary MIDI messages sent safely from any thread, and two message hooks — an observe-only one for driving game events off the notes, and a modifying one for transposing or suppressing them.
 * Playing SFZ (`.sfz`) instruments: a fully managed SFZ engine measured at **zero unimplemented opcodes across a 16-library, 155,000-region corpus** of real free instruments — region selection (key/velocity/controller/program, round robins, random layers, key switches including ranges and `sw_vel`, release triggers with `rt_decay`, exclusive off groups with fast/normal/timed chokes, `polyphony` limits, crossfades), the full modulation stack (amplifier envelope with shapes, `vel2*` and `ampeg_dynamic`; filter, pitch and flexible envelopes; SFZ v1 and v2 LFOs with sub-waveforms and cross-modulation; two filters plus a three-band parametric EQ; ARIA variators, stereo width, per-voice randoms), and the `_onccN`/`_curveccN`/`_smoothccN` CC matrix with `<curve>` support and the ARIA extended sources (velocity, key delta, alternate, per-voice random…). The same `MidiMusicPlayer` and offline renderer drive `.sf2` and `.sfz` interchangeably; unknown opcodes are carried and reported (`SfzInstrument.UnsupportedOpcodes`), never fatal.
 * Audio analysis building blocks: fast Fourier transform, biquad filters, envelope follower, and voice-activity detection.
 
@@ -83,6 +83,30 @@ music.Play();                                   // the same transport drives .sf
 // instruments.Get(...).UnsupportedOpcodes lists anything the file asked for that the
 // engine does not implement - the first thing to check if a library sounds off.
 ```
+
+### React to the music, and mix a layer live
+
+```csharp
+var music = new MidiMusicPlayer();
+music.Load(soundFonts.Get("GeneralUser.sf2"), new MidiSequence("battle.mid"));
+
+// Observe-only: runs on the audio thread and cannot break playback. This is the
+// hook for driving something outside the audio - a screen shake on a drum hit,
+// a particle on a note, a rhythm-game display.
+music.MidiMessageProcessed = (channel, command, note, velocity) =>
+{
+    if (command == 0x90 && velocity > 0 && channel == 9)    // channel 10 = drums
+        Volatile.Write(ref _drumHitPending, 1);             // your own thread reads this
+};
+
+music.Play();
+
+music.SetChannelVolume(3, 0f);   // fade a layer out of the arrangement...
+music.SetChannelVolume(3, 1f);   // ...and back in
+music.Speed = 0.75f;             // slow motion, unchanged pitch
+```
+
+> `MidiMessageFilter` is the other hook — it **replaces** delivery, so it can transpose, re-channel or suppress messages. A filter that forgets to forward the message silences the music; use `MidiMessageProcessed` when you only want to watch. See `AGENT-README.txt`.
 
 ### Render MIDI music to a WAV file, with no audio device
 

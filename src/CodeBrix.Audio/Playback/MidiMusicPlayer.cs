@@ -45,7 +45,10 @@ public sealed class MidiMusicPlayer : IDisposable
     private SoundPlayer _player;
     private SynchronizationContext _syncContext;
     private MidiSequence _sequence;
+    private MidiSequencer.MessageHook _messageFilter;
+    private MidiMessageObserver _messageObserver;
     private float _volume = 1.0f;
+    private float _speed = 1.0f;
     private bool _isLooping;
     private bool _disposed;
 
@@ -119,6 +122,202 @@ public sealed class MidiMusicPlayer : IDisposable
     public int ActiveVoiceCount
     {
         get { lock (_lock) { return _synthesizer == null ? 0 : _synthesizer.ActiveVoiceCount; } }
+    }
+
+    /// <summary>
+    /// The sequence currently loaded, or <see langword="null"/> if nothing is loaded.
+    /// </summary>
+    /// <remarks>
+    /// Chiefly useful after <see cref="Load(string, string)"/>, which builds the sequence itself and
+    /// would otherwise leave the caller without a reference to it.
+    /// </remarks>
+    public MidiSequence Sequence
+    {
+        get { lock (_lock) { return _sequence; } }
+    }
+
+    /// <summary>
+    /// The playback speed multiplier: 1.0 is the sequence's own tempo, 0.5 is half speed, 2.0 is
+    /// double speed. Must not be negative. Persists across loads.
+    /// </summary>
+    /// <remarks>
+    /// This scales the tempo without changing pitch - the synthesizer still renders every note at its
+    /// written frequency, the sequence just advances more slowly or quickly. A value of 0 freezes the
+    /// transport while leaving sounding voices to ring out.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    public float Speed
+    {
+        get { lock (_lock) { return _speed; } }
+        set
+        {
+            if (value < 0.0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), value, "The playback speed must not be negative.");
+            }
+
+            lock (_lock)
+            {
+                _speed = value;
+                if (_provider != null)
+                {
+                    _provider.Speed = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// An observe-only callback raised after each MIDI message is delivered to the synthesizer -
+    /// the hook for making something outside the audio react to the music. Persists across loads.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is almost always the one you want. It cannot change what is played, so there is no way to
+    /// silence the music with it. See <see cref="MidiMessageFilter"/> for the hook that CAN.
+    /// </para>
+    /// <para>
+    /// It runs on the real-time AUDIO THREAD - see <see cref="MidiMessageObserver"/> for the rules
+    /// that come with that. In particular, do not call back into this player from it.
+    /// </para>
+    /// </remarks>
+    public MidiMessageObserver MidiMessageProcessed
+    {
+        get { lock (_lock) { return _messageObserver; } }
+        set
+        {
+            lock (_lock)
+            {
+                _messageObserver = value;
+                if (_provider != null)
+                {
+                    _provider.MessageObserver = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A hook that REPLACES delivery of each MIDI message to the synthesizer, for transposing,
+    /// re-channelling or suppressing messages as they play. Persists across loads.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// READ THIS BEFORE SETTING IT. While this is non-null the player does NOT deliver messages
+    /// itself - your hook owns delivery. A hook that inspects a message and returns without calling
+    /// <see cref="IMidiSynthesizer.ProcessMidiMessage"/> on the synthesizer it was handed silences
+    /// the music completely, which looks like a bug in the player rather than in the hook. To merely
+    /// WATCH messages, use <see cref="MidiMessageProcessed"/>, which cannot do this.
+    /// </para>
+    /// <para>
+    /// The synthesizer passed to the hook is safe to use FROM INSIDE THE HOOK ONLY - the lock that
+    /// serializes it against rendering is held for the duration of the call. Never store it and use
+    /// it later; use <see cref="SendMidiMessage"/> for that, which takes the lock properly.
+    /// </para>
+    /// <para>It runs on the real-time audio thread; the same speed and allocation rules apply.</para>
+    /// </remarks>
+    public MidiSequencer.MessageHook MidiMessageFilter
+    {
+        get { lock (_lock) { return _messageFilter; } }
+        set
+        {
+            lock (_lock)
+            {
+                _messageFilter = value;
+                if (_provider != null)
+                {
+                    _provider.MessageFilter = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sends a MIDI message to the synthesizer alongside the sequence that is playing - the general
+    /// form of the per-channel helpers below.
+    /// </summary>
+    /// <param name="channel">The channel to send to, 0-15.</param>
+    /// <param name="command">The command nibble: 0x80 note-off, 0x90 note-on, 0xB0 control change, 0xC0 program change, 0xE0 pitch bend.</param>
+    /// <param name="data1">The first data byte, 0-127.</param>
+    /// <param name="data2">The second data byte, 0-127. Ignored by commands that take one byte.</param>
+    /// <remarks>
+    /// Safe to call from any thread at any time: the call is serialized against the rendering that
+    /// happens on the audio thread, which is why this exists rather than a property handing back the
+    /// synthesizer itself (an <see cref="IMidiSynthesizer"/> is not thread-safe, and the lock that
+    /// makes it safe here is not reachable from outside). Does nothing when nothing is loaded.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 0-15.</exception>
+    public void SendMidiMessage(int channel, int command, int data1, int data2)
+    {
+        RequireChannel(channel);
+
+        lock (_lock)
+        {
+            if (_disposed || _provider == null)
+            {
+                return;
+            }
+
+            _provider.SendMidiMessage(channel, command, data1, data2);
+        }
+    }
+
+    /// <summary>
+    /// Sets one channel's volume, as MIDI control change 7. This is how a layered arrangement is
+    /// mixed live - fade a channel in or out and the rest of the sequence plays on unchanged.
+    /// </summary>
+    /// <param name="channel">The channel to set, 0-15.</param>
+    /// <param name="volume">The volume, 0.0 (silent) to 1.0 (full). Clamped.</param>
+    /// <remarks>
+    /// The sequence's own control-change 7 messages still apply: a track that automates its volume
+    /// will overwrite what is set here the next time it does so. For a layer the game controls, use a
+    /// channel the sequence does not automate.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 0-15.</exception>
+    public void SetChannelVolume(int channel, float volume)
+    {
+        var clamped = volume < 0.0f ? 0.0f : volume > 1.0f ? 1.0f : volume;
+        SendMidiMessage(channel, 0xB0, 7, (int)(clamped * 127.0f + 0.5f));
+    }
+
+    /// <summary>
+    /// Sets one channel's stereo position, as MIDI control change 10.
+    /// </summary>
+    /// <param name="channel">The channel to set, 0-15.</param>
+    /// <param name="pan">The position, -1.0 (full left) through 0.0 (centre) to 1.0 (full right). Clamped.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 0-15.</exception>
+    public void SetChannelPan(int channel, float pan)
+    {
+        var clamped = pan < -1.0f ? -1.0f : pan > 1.0f ? 1.0f : pan;
+        SendMidiMessage(channel, 0xB0, 10, (int)((clamped + 1.0f) * 0.5f * 127.0f + 0.5f));
+    }
+
+    /// <summary>
+    /// Changes the instrument one channel plays, as a MIDI program change.
+    /// </summary>
+    /// <param name="channel">The channel to set, 0-15.</param>
+    /// <param name="program">The program (patch) number, 0-127.</param>
+    /// <remarks>
+    /// Which instrument a program number selects is the loaded SoundFont's or SFZ instrument's
+    /// business, not this player's. As with volume, the sequence's own program changes still apply.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 0-15, or <paramref name="program"/> is outside 0-127.</exception>
+    public void SetChannelProgram(int channel, int program)
+    {
+        if (program < 0 || program > 127)
+        {
+            throw new ArgumentOutOfRangeException(nameof(program), program, "A MIDI program number must be 0-127.");
+        }
+
+        SendMidiMessage(channel, 0xC0, program, 0);
+    }
+
+    private static void RequireChannel(int channel)
+    {
+        if (channel < 0 || channel > 15)
+        {
+            throw new ArgumentOutOfRangeException(nameof(channel), channel, "A MIDI channel must be 0-15.");
+        }
     }
 
     /// <summary>
@@ -210,6 +409,14 @@ public sealed class MidiMusicPlayer : IDisposable
             {
                 synthesizer = createSynthesizer(deviceRate);
                 provider = new MidiSynthDataProvider(synthesizer);
+
+                // Speed and the two message hooks are properties of the PLAYER, not of any one
+                // sequence, so they survive a load - the provider (and the sequencer inside it) is
+                // rebuilt here and would otherwise come back at its defaults with the hooks lost.
+                provider.Speed = _speed;
+                provider.MessageFilter = _messageFilter;
+                provider.MessageObserver = _messageObserver;
+
                 provider.Start(sequence, _isLooping);
 
                 player = new SoundPlayer(device.Engine, device.Format, provider)

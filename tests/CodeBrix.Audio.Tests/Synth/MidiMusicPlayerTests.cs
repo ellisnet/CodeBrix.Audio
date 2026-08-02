@@ -61,6 +61,116 @@ public sealed class MidiMusicPlayerTests : IDisposable
     }
 
     [Fact]
+    public void speed_defaults_to_one_and_persists_before_a_load()
+    {
+        //Arrange
+        using var player = new MidiMusicPlayer();
+
+        //Act
+        var initial = player.Speed;
+        player.Speed = 0.5f;
+
+        //Assert
+        initial.Should().Be(1.0f);
+        player.Speed.Should().Be(0.5f);
+    }
+
+    [Fact]
+    public void speed_rejects_a_negative_value()
+    {
+        //Arrange
+        using var player = new MidiMusicPlayer();
+
+        //Act
+        var act = () => player.Speed = -0.1f;
+
+        //Assert
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void both_message_hooks_persist_before_a_load()
+    {
+        //Arrange
+        using var player = new MidiMusicPlayer();
+        MidiMessageObserver observer = (_, _, _, _) => { };
+        MidiSequencer.MessageHook filter = (_, _, _, _, _) => { };
+
+        //Act
+        player.MidiMessageProcessed = observer;
+        player.MidiMessageFilter = filter;
+
+        //Assert
+        player.MidiMessageProcessed.Should().BeSameAs(observer);
+        player.MidiMessageFilter.Should().BeSameAs(filter);
+    }
+
+    [Fact]
+    public void the_sequence_is_null_before_a_load()
+    {
+        //Arrange & Act
+        using var player = new MidiMusicPlayer();
+
+        //Assert
+        player.Sequence.Should().BeNull();
+    }
+
+    [Fact]
+    public void sending_midi_is_harmless_when_nothing_is_loaded()
+    {
+        //Arrange
+        using var player = new MidiMusicPlayer();
+
+        //Act
+        var act = () =>
+        {
+            player.SendMidiMessage(0, 0xB0, 7, 100);
+            player.SetChannelVolume(0, 0.5f);
+            player.SetChannelPan(0, -1f);
+            player.SetChannelProgram(0, 42);
+        };
+
+        //Assert
+        act.Should().NotThrow();
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(16)]
+    public void the_per_channel_calls_reject_an_out_of_range_channel(int channel)
+    {
+        //Arrange
+        using var player = new MidiMusicPlayer();
+
+        //Act
+        var send = () => player.SendMidiMessage(channel, 0xB0, 7, 100);
+        var volume = () => player.SetChannelVolume(channel, 1f);
+        var pan = () => player.SetChannelPan(channel, 0f);
+        var program = () => player.SetChannelProgram(channel, 0);
+
+        //Assert
+        send.Should().Throw<ArgumentOutOfRangeException>();
+        volume.Should().Throw<ArgumentOutOfRangeException>();
+        pan.Should().Throw<ArgumentOutOfRangeException>();
+        program.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(128)]
+    public void set_channel_program_rejects_an_out_of_range_program(int program)
+    {
+        //Arrange
+        using var player = new MidiMusicPlayer();
+
+        //Act
+        var act = () => player.SetChannelProgram(0, program);
+
+        //Assert
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
     public void play_throws_when_nothing_is_loaded()
     {
         //Arrange
@@ -257,6 +367,45 @@ public sealed class MidiMusicPlayerTests : IDisposable
         //Assert
         player.Position.Should().Be(TimeSpan.Zero);
         player.PlaybackState.Should().Be(PlaybackState.Stopped);
+    }
+
+    [Fact]
+    public void the_message_observer_reports_the_notes_as_the_motif_plays()
+    {
+        Assert.SkipUnless(PlaybackEnabled, PlaybackSkipReason);
+
+        //Arrange
+        // The end-to-end proof of the observer hook: the same five audible notes, counted as the
+        // synthesizer is told to play them. This is the "note drives something outside the audio"
+        // path a game builds screen shakes and particle spawns on.
+        using var scope = new AudibleTestScope();
+        using var player = new MidiMusicPlayer();
+
+        var notes = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        player.MidiMessageProcessed = (_, command, data1, data2) =>
+        {
+            if (command == 0x90 && data2 > 0)
+            {
+                notes.Enqueue(data1);
+            }
+        };
+
+        var sequence = BuildMotifSequence();
+        player.Load(SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName), sequence);
+        player.Volume = 0.7f;
+
+        //Act
+        player.Play();
+
+        var deadline = DateTime.UtcNow + player.Duration + TimeSpan.FromSeconds(2);
+        while (notes.Count < 5 && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(25);
+        }
+
+        //Assert
+        notes.Should().Equal(79, 81, 77, 65, 72);
+        player.Sequence.Should().BeSameAs(sequence);
     }
 
     /// <summary>

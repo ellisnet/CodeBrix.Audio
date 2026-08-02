@@ -29,6 +29,8 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
     private readonly float[] _right;
 
     private MidiSequence _sequence;
+    private MidiSequencer.MessageHook _messageFilter;
+    private MidiMessageObserver _messageObserver;
     private bool _looping;
     private bool _endRaised;
     private bool _disposed;
@@ -107,6 +109,85 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
     internal TimeSpan CurrentTime
     {
         get { lock (_lock) { return _sequencer.Position; } }
+    }
+
+    /// <summary>The playback speed multiplier the sequencer is running at.</summary>
+    internal float Speed
+    {
+        get { lock (_lock) { return _sequencer.Speed; } }
+        set { lock (_lock) { _sequencer.Speed = value; } }
+    }
+
+    /// <summary>
+    /// The hook that REPLACES delivery of each MIDI message to the synthesizer, or
+    /// <see langword="null"/> for normal delivery.
+    /// </summary>
+    internal MidiSequencer.MessageHook MessageFilter
+    {
+        get { lock (_lock) { return _messageFilter; } }
+        set { lock (_lock) { _messageFilter = value; RefreshHook(); } }
+    }
+
+    /// <summary>
+    /// The observe-only callback invoked after each MIDI message has been delivered, or
+    /// <see langword="null"/> for none.
+    /// </summary>
+    internal MidiMessageObserver MessageObserver
+    {
+        get { lock (_lock) { return _messageObserver; } }
+        set { lock (_lock) { _messageObserver = value; RefreshHook(); } }
+    }
+
+    /// <summary>
+    /// Sends a MIDI message to the synthesizer from an arbitrary thread, serialized against
+    /// rendering.
+    /// </summary>
+    /// <param name="channel">The channel to send to, 0-15.</param>
+    /// <param name="command">The message's command nibble.</param>
+    /// <param name="data1">The first data byte.</param>
+    /// <param name="data2">The second data byte.</param>
+    internal void SendMidiMessage(int channel, int command, int data1, int data2)
+    {
+        lock (_lock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _sequencer.Synthesizer.ProcessMidiMessage(channel, command, data1, data2);
+        }
+    }
+
+    // Keeps the sequencer's single hook slot in step with the two things that can want it. When
+    // neither is set the slot is cleared, so ordinary playback keeps the sequencer's fast path
+    // (it calls the synthesizer directly when no hook is installed).
+    // Callers hold _lock.
+    private void RefreshHook()
+    {
+        _sequencer.OnSendMessage = _messageFilter == null && _messageObserver == null
+            ? null
+            : OnSequencerMessage;
+    }
+
+    // Runs on the audio thread, inside ReadBytes, with _lock already held by this thread.
+    //
+    // MidiSequencer's hook REPLACES delivery rather than observing it - when OnSendMessage is set
+    // the sequencer does not call ProcessMidiMessage itself. So this method has to deliver the
+    // message, and only then tell the observer about it. Getting that backwards silences the music.
+    private void OnSequencerMessage(IMidiSynthesizer synthesizer, int channel, int command, int data1, int data2)
+    {
+        var filter = _messageFilter;
+        if (filter != null)
+        {
+            filter(synthesizer, channel, command, data1, data2);
+        }
+        else
+        {
+            synthesizer.ProcessMidiMessage(channel, command, data1, data2);
+        }
+
+        _messageObserver?.Invoke(channel, command, data1, data2);
     }
 
     /// <summary>Starts the given sequence from its beginning.</summary>
