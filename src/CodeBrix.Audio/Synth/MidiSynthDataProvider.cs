@@ -20,19 +20,32 @@ namespace CodeBrix.Audio.Synth;
 /// The synthesizer is constructed at the device's sample rate, so no resampling happens anywhere in this
 /// path - the engine takes the samples exactly as they are rendered.
 /// </para>
+/// <para>
+/// A non-looping sequence ends the STREAM, not just the note flow: once the last message has been
+/// dispatched and the final voices have finished sounding, <see cref="ReadBytes"/> returns 0. That
+/// zero-length read is the engine's one end-of-stream signal - it is what moves the engine player to
+/// Stopped and ultimately raises <c>MidiMusicPlayer.PlaybackEnded</c>.
+/// </para>
 /// </remarks>
 internal sealed class MidiSynthDataProvider : ISoundDataProvider
 {
+    // A voice the sequence never sends a note-off for (a "stuck" note in a file that relied on the
+    // player simply stopping) can sustain indefinitely, and the stream must still end for such a
+    // file. Ten seconds of ring-out comfortably exceeds any realistic release tail.
+    private const double MaxTailSeconds = 10.0;
+
     private readonly object _lock = new object();
     private readonly MidiSequencer _sequencer;
     private readonly float[] _left;
     private readonly float[] _right;
+    private readonly int _maxTailFrames;
 
     private MidiSequence _sequence;
     private MidiSequencer.MessageHook _messageFilter;
     private MidiMessageObserver _messageObserver;
     private bool _looping;
     private bool _endRaised;
+    private int _tailFramesRendered;
     private bool _disposed;
 
     /// <summary>Creates a provider rendering the given synthesizer at its own sample rate.</summary>
@@ -46,6 +59,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
 
         _sequencer = new MidiSequencer(synthesizer);
         SampleRate = synthesizer.SampleRate;
+        _maxTailFrames = (int)(MaxTailSeconds * synthesizer.SampleRate);
 
         _left = new float[synthesizer.BlockSize];
         _right = new float[synthesizer.BlockSize];
@@ -200,6 +214,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
             _sequence = sequence;
             _looping = loop;
             _endRaised = false;
+            _tailFramesRendered = 0;
             _sequencer.Play(sequence, loop);
         }
     }
@@ -211,6 +226,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
         {
             _sequencer.Stop();
             _endRaised = false;
+            _tailFramesRendered = 0;
         }
     }
 
@@ -229,6 +245,8 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
             // current position is what makes the change take effect without an audible jump.
             var resumeAt = _sequencer.Position;
             _looping = loop;
+            _endRaised = false;
+            _tailFramesRendered = 0;
             _sequencer.Play(_sequence, loop);
             _sequencer.Seek(resumeAt);
         }
@@ -248,6 +266,25 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
             {
                 buffer.Clear();
                 return buffer.Length;
+            }
+
+            // A finished non-looping sequence must end the stream: the engine's player treats a
+            // zero-length read as its ONLY end-of-stream signal (see SoundPlayerBase.GenerateAudio),
+            // and without one it pulls silence forever - state stuck at Playing, Position counting
+            // past Duration, PlaybackEnded never raised. The gate is live sequencer state rather
+            // than a latch, so seeking back before the end resumes rendering. The voice check lets
+            // the final release tails ring out before the cut; the frame cap bounds that ring-out
+            // for a voice whose note-off never comes.
+            if (!_looping && _sequencer.EndOfSequence &&
+                (_sequencer.Synthesizer.ActiveVoiceCount == 0 || _tailFramesRendered >= _maxTailFrames))
+            {
+                if (!_endRaised)
+                {
+                    _endRaised = true;
+                    EndOfStreamReached?.Invoke(this, EventArgs.Empty);
+                }
+
+                return 0;
             }
 
             // The engine asks for interleaved stereo; the sequencer renders into separate planes.
@@ -271,12 +308,9 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
                 written += take;
             }
 
-            // Rendering runs on the real-time audio thread. Raise the completion notification outside
-            // the render loop but still under the lock, then let the player marshal it off this thread.
-            if (!_looping && !_endRaised && _sequencer.EndOfSequence)
+            if (!_looping && _sequencer.EndOfSequence)
             {
-                _endRaised = true;
-                EndOfStreamReached?.Invoke(this, EventArgs.Empty);
+                _tailFramesRendered += frames;
             }
 
             PositionChanged?.Invoke(this, new PositionChangedEventArgs(Position));
@@ -298,6 +332,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
             var seconds = offset <= 0 ? 0d : (double)offset / SampleRate;
             _sequencer.Seek(TimeSpan.FromSeconds(seconds));
             _endRaised = false;
+            _tailFramesRendered = 0;
         }
     }
 

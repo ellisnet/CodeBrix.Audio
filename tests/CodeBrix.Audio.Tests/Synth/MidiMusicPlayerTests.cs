@@ -248,24 +248,24 @@ public sealed class MidiMusicPlayerTests : IDisposable
         //Arrange
         using var scope = new AudibleTestScope();
         using var player = new MidiMusicPlayer();
+        using var ended = new ManualResetEventSlim(false);
+        player.PlaybackEnded += (_, _) => ended.Set();
 
         player.Load(SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName), BuildMotifSequence());
         player.Volume = 0.7f;
 
         //Act
         player.Play();
-
-        var deadline = DateTime.UtcNow + player.Duration + TimeSpan.FromSeconds(2);
-        while (player.Position < player.Duration && DateTime.UtcNow < deadline)
-        {
-            Thread.Sleep(25);
-        }
+        // The deadline allows for the sequence, the ring-out of the final note, and the
+        // stuck-voice tail cap that bounds it.
+        var fired = ended.Wait(player.Duration + TimeSpan.FromSeconds(12), TestContext.Current.CancellationToken);
 
         //Assert
-        // Getting here having heard five notes is the point; the state check just proves the
-        // transport ran rather than the sequence never starting.
+        // Getting here having heard five notes is the point; the end checks prove the transport
+        // ran to the sequence's natural end and then actually stopped.
+        fired.Should().BeTrue();
         player.Position.Should().BeGreaterThan(TimeSpan.Zero);
-        player.PlaybackState.Should().Be(PlaybackState.Playing);
+        player.PlaybackState.Should().Be(PlaybackState.Stopped);
     }
 
     [Fact]
@@ -283,22 +283,20 @@ public sealed class MidiMusicPlayerTests : IDisposable
 
         using var scope = new AudibleTestScope();
         using var player = new MidiMusicPlayer();
+        using var ended = new ManualResetEventSlim(false);
+        player.PlaybackEnded += (_, _) => ended.Set();
 
         player.Load(instrument, BuildMotifSequence());
         player.Volume = 0.7f;
 
         //Act
         player.Play();
-
-        var deadline = DateTime.UtcNow + player.Duration + TimeSpan.FromSeconds(2);
-        while (player.Position < player.Duration && DateTime.UtcNow < deadline)
-        {
-            Thread.Sleep(25);
-        }
+        var fired = ended.Wait(player.Duration + TimeSpan.FromSeconds(12), TestContext.Current.CancellationToken);
 
         //Assert
+        fired.Should().BeTrue();
         player.Position.Should().BeGreaterThan(TimeSpan.Zero);
-        player.PlaybackState.Should().Be(PlaybackState.Playing);
+        player.PlaybackState.Should().Be(PlaybackState.Stopped);
     }
 
     [Fact]

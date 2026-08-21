@@ -85,9 +85,7 @@ can sample-play SF2 presets; it has no modulators, no per-voice LFO and no
 per-voice filter. It is the better tool for building instruments, and the wrong
 tool for faithfully reproducing somebody's .sf2.
 
-Neither was retired in favour of the other. They do different jobs, and the
-Engine's version is vendored SoundFlow code that is deliberately left unedited
-so re-vendoring stays cheap.
+Neither was retired in favour of the other. They do different jobs.
 
 SFZ HAS EXACTLY ONE PATH, and it is the first one: CodeBrix.Audio.Synth.Sfz
 (SfzInstrument, SfzSynthesizer). The Engine has no SFZ support at all, so there
@@ -828,14 +826,17 @@ all seven include the Ogg Vorbis decoder, so sf_has_vorbis() is present
 everywhere; the managed Vorbis fallback now only covers a binary that lacks it
 (for example a RID added later, before one is built for it).
 
-It deliberately keeps SoundFlow's own project settings so re-syncs stay
-mechanical: NRT is ON (the code uses `?` and `!`), ImplicitUsings is ON,
-AllowUnsafeBlocks is ON. Do not rewrite Engine source to match family style - to
-take a newer SoundFlow, re-vendor and re-apply the renames rather than editing in
-place.
+It keeps SoundFlow's own project settings: NRT is ON (the code uses `?` and
+`!`), ImplicitUsings is ON, AllowUnsafeBlocks is ON. Code added or changed in
+the Engine follows the Engine's local style rather than family style. Editing
+the Engine source is FINE. The vendoring kept changes minimal in the interest
+of completing that project quickly, but that was a scheduling decision, not a
+policy - there is nothing special about this code that should discourage
+modifying it going forward.
 
-RE-VENDOR CHECKLIST - nine deliberate divergences must be re-applied, or they
-silently regress:
+DELIBERATE DIVERGENCES FROM UPSTREAM SOUNDFLOW - nine changes made during the
+vendoring, recorded here for provenance (and to be re-applied should the Engine
+ever be re-synced against a newer SoundFlow):
 
   1. Namespace rename SoundFlow.* -> CodeBrix.Audio.Engine.*, with the
      `//was previously:` provenance comment on each namespace line.

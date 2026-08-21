@@ -31,8 +31,9 @@ namespace CodeBrix.Audio.Playback;
 /// The synthesizer is created at the output device's sample rate, so nothing is resampled. Rendering
 /// happens on the engine's real-time audio thread while transport calls arrive from yours; the two are
 /// serialized internally, because the underlying synthesizer is not thread-safe.
-/// <see cref="PlaybackEnded"/> is raised when a non-looping sequence reaches its end, on the
-/// <see cref="SynchronizationContext"/> captured at load if there is one.
+/// <see cref="PlaybackEnded"/> is raised when a non-looping sequence reaches its end and its final
+/// voices finish sounding, on the <see cref="SynchronizationContext"/> captured at load if there is
+/// one.
 /// </para>
 /// <para>Dispose when finished.</para>
 /// </remarks>
@@ -53,8 +54,9 @@ public sealed class MidiMusicPlayer : IDisposable
     private bool _disposed;
 
     /// <summary>
-    /// Raised when a non-looping sequence reaches its end. Not raised for <see cref="Stop"/>, and not
-    /// raised while <see cref="IsLooping"/> is set. Raised on the <see cref="SynchronizationContext"/>
+    /// Raised when a non-looping sequence reaches its end and its final voices finish sounding, so
+    /// release tails ring out before the event. Not raised for <see cref="Stop"/>, and not raised
+    /// while <see cref="IsLooping"/> is set. Raised on the <see cref="SynchronizationContext"/>
     /// captured when the sequence was loaded, if there is one; otherwise on a background thread.
     /// </summary>
     public event EventHandler PlaybackEnded;
