@@ -1,10 +1,11 @@
 ================================================================================
 AGENT-README: CodeBrix.Audio
-A Comprehensive Guide for AI Coding Agents
+A Guide for AI Coding Agents - CONSUMING the CodeBrix.Audio.MitLicenseForever
+NuGet package
 ================================================================================
 
 OVERVIEW
---------------------------------------------------------------------------------
+========
 CodeBrix.Audio is a fully managed, cross-platform audio file library for .NET.
 It reads WAV, MP3, Ogg Vorbis and FLAC waveform audio, reads and writes Standard
 MIDI Files, reads MP3 ID3v2 and Vorbis-comment tags, plays audio (media playback
@@ -26,6 +27,68 @@ NVorbis and MeltySynth, all MIT); the FLAC decoder was written here from the
 format specification. THIRD-PARTY-NOTICES.txt is the authoritative record of what came
 from where, what was changed, and under which licenses - consult it rather than
 this file for provenance questions.
+
+It targets .NET 10 or later.
+
+
+INSTALLATION
+============
+NuGet package:   CodeBrix.Audio.MitLicenseForever
+Command:         dotnet add package CodeBrix.Audio.MitLicenseForever
+
+Note that the PACKAGE id carries the ".MitLicenseForever" suffix, but the
+NAMESPACE is simply "CodeBrix.Audio" (no suffix).
+
+  License:        MIT (licence acceptance is required)
+  Target:         .NET 10 or later
+  NuGet deps:     NONE. The package has no PackageReference dependencies of its
+                  own - everything it needs, including the bundled
+                  CodeBrix.Audio.Engine assembly and its native backend, is
+                  inside the package.
+  Assemblies:     TWO, from this one package - CodeBrix.Audio and
+                  CodeBrix.Audio.Engine. Both are referenced automatically; you
+                  do not add a second PackageReference for the Engine, and there
+                  is no separate Engine package to find.
+  Native payload: the Engine ships codebrix_miniaudio for seven runtime
+                  identifiers - win-x64, win-arm64, linux-x64, linux-arm64,
+                  linux-riscv64, osx-x64, osx-arm64 - under runtimes/<rid>/
+                  native/. The right one is loaded at runtime with no
+                  configuration on your part. See the ENGINE section below for
+                  what that means for publishing.
+  System deps:    none. No system audio package and no system-wide codec is
+                  required on Windows, macOS or Linux.
+
+ADD-ON PACKAGES IN THE FAMILY
+
+  CodeBrix.Audio.Opus.BsdLicenseForever
+      Adds Ogg Opus (.opus) decoding and encoding. A separate package because
+      Opus is BSD-3-Clause rather than MIT; fully managed, no native code. One
+      call - CodeBrixAudioOpus.Register() - and .opus reaches every path a
+      built-in format reaches. Its guide is at
+      https://github.com/ellisnet/CodeBrix.Audio.Opus/blob/main/AGENT-README.txt
+
+  Any other codec package built on the seams described in ADDING A CODEC FROM
+  ANOTHER PACKAGE below plugs in the same way.
+
+
+KEY NAMESPACES / USINGS
+=======================
+  using CodeBrix.Audio.Wave;       // readers/writers, WaveFormat, MP3 frames, ID3,
+                                   //   playback (WaveOutEvent, SharedAudioOutput)
+  using CodeBrix.Audio.Playback;   // media player (AudioFilePlayer) and one-shot
+                                   //   sound effects (SoundEffectClip)
+  using CodeBrix.Audio.Midi;       // MIDI file read/write + event hierarchy
+  using CodeBrix.Audio.Dsp;        // FFT, biquad filters, analysis primitives
+  using CodeBrix.Audio.Synth;      // SoundFont (.sf2) rendering + MIDI music
+                                   //   playback — see "TWO SOUNDFONT PATHS"
+
+(Additional sub-namespaces exist for plumbing — sample/wave providers, codecs,
+utilities. The managed MP3, Ogg Vorbis and FLAC decoders — CodeBrix.Audio.Mpeg,
+CodeBrix.Audio.Vorbis and CodeBrix.Audio.Flac — are entirely internal; consumers
+reach those formats only through the readers in CodeBrix.Audio.Wave. The one
+public type in CodeBrix.Audio.Codecs a consumer might touch is ManagedCodecs,
+and only when driving an engine they created themselves — see COMMON PITFALLS.)
+
 
 ================================================================================
 CODEBRIX.AUDIO.ENGINE (BUNDLED IN THE SAME PACKAGE)
@@ -61,8 +124,8 @@ effects, and editing/mixing all live here, plus MIDI, metadata, and visualizatio
     from miniaudio for the native backend. See THIRD-PARTY-NOTICES.txt.
 
 
-TWO SOUNDFONT PATHS — WHICH ONE YOU WANT
---------------------------------------------------------------------------------
+TWO SOUNDFONT PATHS - WHICH ONE YOU WANT
+========================================
 READ THIS BEFORE WRITING ANY SOUNDFONT OR MIDI-SYNTHESIS CODE. This package
 contains TWO things that can play a SoundFont, and they are not interchangeable.
 Choosing wrong does not fail loudly — it produces audio that is subtly wrong.
@@ -94,8 +157,8 @@ same IMidiSynthesizer contract, which is why MidiSequencer, MidiMusicPlayer and
 SoundFontRenderer drive either format without caring which - consumers choose a
 file format, not an API.
 
-THE TWO MIDI MESSAGE HOOKS — WHICH ONE YOU WANT
---------------------------------------------------------------------------------
+THE TWO MIDI MESSAGE HOOKS - WHICH ONE YOU WANT
+===============================================
 MidiMusicPlayer exposes two hooks onto the messages a sequence plays. They look
 similar and do opposite things, so this is the same kind of trap as the two
 SoundFont paths above.
@@ -159,38 +222,9 @@ sequence has already discarded track structure and non-playable meta events, so
 converting back would silently lose them.
 
 
-INSTALLATION
---------------------------------------------------------------------------------
-NuGet package:   CodeBrix.Audio.MitLicenseForever
-Command:         dotnet add package CodeBrix.Audio.MitLicenseForever
-
-Note that the PACKAGE id carries the ".MitLicenseForever" suffix, but the
-NAMESPACE is simply "CodeBrix.Audio" (no suffix).
-
-Target framework: .NET 10.0 or higher.
-
-
-KEY NAMESPACES
---------------------------------------------------------------------------------
-  using CodeBrix.Audio.Wave;       // readers/writers, WaveFormat, MP3 frames, ID3,
-                                   //   playback (WaveOutEvent, SharedAudioOutput)
-  using CodeBrix.Audio.Playback;   // media player (AudioFilePlayer) and one-shot
-                                   //   sound effects (SoundEffectClip)
-  using CodeBrix.Audio.Midi;       // MIDI file read/write + event hierarchy
-  using CodeBrix.Audio.Dsp;        // FFT, biquad filters, analysis primitives
-  using CodeBrix.Audio.Synth;      // SoundFont (.sf2) rendering + MIDI music
-                                   //   playback — see "TWO SOUNDFONT PATHS"
-
-(Additional sub-namespaces exist for plumbing — sample/wave providers, codecs,
-utilities. The managed MP3, Ogg Vorbis and FLAC decoders — CodeBrix.Audio.Mpeg,
-CodeBrix.Audio.Vorbis and CodeBrix.Audio.Flac — are entirely internal; consumers
-reach those formats only through the readers in CodeBrix.Audio.Wave. The one
-public type in CodeBrix.Audio.Codecs a consumer might touch is ManagedCodecs,
-and only when driving an engine they created themselves — see COMMON PITFALLS.)
-
 
 CORE API REFERENCE
---------------------------------------------------------------------------------
+==================
 Reading audio (WAV, MP3, Ogg Vorbis, FLAC):
   - WaveFileReader        : reads a .wav stream/file as a WaveStream.
   - Mp3FileReader         : reads a .mp3 stream/file as a WaveStream, decoding
@@ -291,7 +325,7 @@ PATHS" above first:
                               SetChannelProgram() program change.
                               .MidiMessageProcessed  observe-only note hook.
                               .MidiMessageFilter     modify/replace hook.
-                            See "THE TWO MIDI MESSAGE HOOKS" below before using
+                            See "THE TWO MIDI MESSAGE HOOKS" above before using
                             either hook - they are not interchangeable.
 
 SFZ (CodeBrix.Audio.Synth.Sfz) — the .sfz counterparts of the SoundFont types:
@@ -366,8 +400,138 @@ FormatException, EndOfStreamException, ArgumentException). Readers/writers are
 IDisposable; dispose them (or use `using`) to release the underlying stream.
 
 
-SAMPLE CODE
---------------------------------------------------------------------------------
+MORE OF THE TOOLBOX (named here so you know it exists; these are the NAUDIO-
+SHAPED plumbing types, and they behave the way their NAudio counterparts do):
+
+  Other file formats:
+  - AiffFileReader / AiffFileWriter : .aiff read and write, alongside the WAV
+                                      pair. AiffFileWriter.CreateAiffFile(
+                                      filename, WaveStream) is the one-liner.
+  - WaveFormatExtensible, Mp3WaveFormat, AdpcmWaveFormat : the WaveFormat
+                                      subclasses you meet when inspecting a
+                                      file's header rather than its samples.
+
+  Wave/sample providers (compose these between a reader and an output):
+  - BufferedWaveProvider     push audio in from one thread, pull it out from the
+                             audio thread.
+  - MixingWaveProvider32     sum several 32-bit float sources into one.
+  - VolumeSampleProvider     gain.        PanningSampleProvider   stereo pan.
+  - OffsetSampleProvider     skip/pad/take a section of a source.
+  - FadeInOutSampleProvider  timed fades.
+  - ConcatenatingSampleProvider  play sources back to back.
+  - MultiplexingSampleProvider   route input channels to output channels.
+  - MonoToStereoSampleProvider / StereoToMonoSampleProvider : channel count.
+  - SilenceProvider          a source of silence.
+  - SignalGenerator          sine/square/saw/noise/sweep test tones.
+  - WaveChannel32            a WaveStream promoted to 32-bit float with volume
+                             and panning.
+  - RawSourceWaveStream      wrap headerless PCM (a byte[] or Stream) plus a
+                             WaveFormat as a WaveStream.
+  - WaveRecorder             a pass-through IWaveProvider that also writes
+                             everything read through it to a .wav file.
+  - IWavePlayer / IWavePosition : the interfaces WaveOutEvent implements.
+
+  Codecs you can call directly (CodeBrix.Audio.Codecs):
+  - ALawEncoder / ALawDecoder, MuLawEncoder / MuLawDecoder : companded 8-bit
+    telephony audio, sample-at-a-time (LinearToALawSample / ALawToLinearSample)
+    or in bulk (Decode(ReadOnlySpan<byte>, Span<short>)). These are NOT wired
+    into the WAV reader - see COMMON PITFALLS - so converting an A-law WAV means
+    calling them yourself.
+
+  More MIDI events (CodeBrix.Audio.Midi), all under MidiEvent:
+  - ControlChangeEvent (with the MidiController enum), PatchChangeEvent,
+    PitchWheelChangeEvent, ChannelAfterTouchEvent, SysexEvent, and the MetaEvent
+    subclasses TextEvent, TempoEvent, TimeSignatureEvent, KeySignatureEvent.
+    MidiCommandCode is the status-byte enum, and MidiMessage builds a raw
+    message from its parts.
+
+  More DSP and utilities:
+  - FftProcessor / FftWindowType : windowed FFT over a stream of samples, when
+    you want a spectrum rather than a single transform.
+  - Decibels : linear amplitude <-> dB.
+  - CircularBuffer : the ring buffer BufferedWaveProvider is built on.
+  - IgnoreDisposeStream : hand a Stream to something that disposes what it is
+    given, without losing the stream.
+
+
+ADDING A CODEC FROM ANOTHER PACKAGE
+===================================
+CodeBrix.Audio is MIT and stays that way, so a codec under a different licence
+(Opus is BSD-3-Clause) belongs in its own package that depends on this one.
+Everything such a package needs is public API; nothing here has to change to
+accept one.
+
+There are TWO seams, because there are two ways audio gets opened:
+
+  1. PLAYBACK goes through the audio engine, which identifies formats by
+     CONTENT. Supply an ICodecFactory and register it:
+
+         SharedAudioOutput.RegisterCodecFactory(new OpusCodecFactory());
+
+     That reaches AudioFilePlayer, SoundEffectClip, WaveOutEvent and the
+     GameEngine's audio stack. The registration is remembered for the process,
+     so it survives SharedAudioOutput.Shutdown() and is re-applied to every
+     engine started afterwards. A consumer driving its OWN AudioEngine calls
+     engine.RegisterCodecFactory(...) directly (ManagedCodecs.RegisterAll does
+     this for the built-in managed codecs).
+
+  2. READING BY FILE NAME goes through AudioFileReader, which dispatches on
+     EXTENSION. Register a WaveStream factory:
+
+         AudioFileReaderRegistry.Register(".opus", s => new OpusFileReader(s));
+
+     AudioFileReader then opens .opus, as do AudioFileReaderRegistry.OpenFile
+     and anything else built on the registry.
+
+     STREAM OWNERSHIP - the factory is handed a stream it does NOT own. Do not
+     close it, and do not make your reader close it either; the registry opened
+     the file and keeps the handle. OpenFile therefore returns a
+     FileOwningWaveStream pairing the two: disposing it disposes your reader and
+     THEN closes the file, and its .Reader property gets callers back to your
+     concrete type. A reader that takes ownership anyway is tolerated (the second
+     Dispose is a no-op), but a handle nobody closes leaves the file locked on
+     Windows until GC, which surfaces much later as File.Delete/File.Move failing
+     with "used by another process".
+
+Both are idempotent-ish and cheap; call them once at start-up (a static
+Register() entry point on the add-on package is the friendliest shape - do not
+rely on module initializers, which only run once something in the assembly is
+touched).
+
+WHAT TO BUILD ON:
+
+  - ManagedSoundDecoder (public, CodeBrix.Audio.Codecs) is the base class for a
+    managed ISoundDecoder. It handles the part every codec otherwise
+    reimplements: converting the file's channel count and sample rate to what
+    the engine asked for. Derive from it, supply ReadSourceSamples / SeekSource
+    / DisposeCore, and call Initialize(channels, sampleRate, totalFrames) once
+    the file's format is known. The library's own VorbisSoundDecoder and
+    FlacSoundDecoder are the two worked examples; both are internal, so read
+    them as source rather than deriving from them:
+    https://github.com/ellisnet/CodeBrix.Audio/tree/main/src/CodeBrix.Audio/Codecs
+  - OggCodecSniffer (public) identifies which codec an Ogg container carries -
+    Vorbis, Opus, Ogg FLAC, or unknown - without disturbing the stream position.
+
+THE OGG FORMAT-ID SHARING RULE (this is the one that bites):
+The metadata layer reports the format identifier "ogg" for EVERY Ogg stream,
+whatever codec is inside. So an Ogg-capable factory is offered Vorbis, Opus and
+Ogg FLAC alike. Two consequences:
+
+  - Your factory MUST check what it was actually handed (OggCodecSniffer) and
+    return NULL for anything else. Returning null lets the engine move on to the
+    next factory; throwing, or accepting and then failing, does not.
+  - Reset the stream position on entry (if stream.CanSeek). The engine does not
+    rewind between factories on the format-id path, so an earlier factory may
+    have moved it.
+
+PRIORITY CONVENTION: the built-in native factory is 0; the managed fallbacks are
+-10. An add-on codec for a format the native library cannot decode can sit
+anywhere below 0 - use -10 to match, or lower to defer to the built-ins.
+
+
+
+COMPLETE EXAMPLES
+=================
 Read a WAV or MP3 file as 32-bit float samples (simplest path):
 
     using CodeBrix.Audio.Wave;
@@ -391,7 +555,7 @@ Read a WAV with the lower-level reader, converting to float samples:
 
 Write a WAV file:
 
-    var format = new WaveFormat(sampleRate: 44100, bits: 16, channels: 1);
+    var format = new WaveFormat(rate: 44100, bits: 16, channels: 1);
     using (var writer = new WaveFileWriter("out.wav", format))
     {
         float[] mono = GenerateSamples();                  // your samples in [-1, 1]
@@ -605,8 +769,138 @@ DSP / analysis primitives:
     bool active = vad.Process(inputSample);
 
 
-COMMON PITFALLS
---------------------------------------------------------------------------------
+Overlap sound effects without keeping a clip around (fire and forget):
+
+    using CodeBrix.Audio.Playback;
+
+    SoundEffectClip.PlayOnce("beep.wav");          // loads, plays, cleans up
+    SoundEffectClip.PlayOnce("beep.wav", 0.4f);    // quieter
+    // Also PlayOnce(Stream, float) and PlayOnce(byte[], float). Convenient, but
+    // it decodes every time - for a sound you trigger often, hold a
+    // SoundEffectClip.Load(...) instead.
+
+
+MINIMUM VIABLE PROJECT
+======================
+Console application that plays an audio file to the end and prints its
+duration. Two files, no other dependencies.
+
+AudioDemo.csproj:
+
+    <Project Sdk="Microsoft.NET.Sdk">
+      <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>disable</Nullable>
+      </PropertyGroup>
+      <ItemGroup>
+        <PackageReference Include="CodeBrix.Audio.MitLicenseForever" />
+      </ItemGroup>
+    </Project>
+
+(Version attributes are omitted here on purpose - add the current version, or
+use central package management.)
+
+Program.cs:
+
+    using System;
+    using System.Threading;
+    using CodeBrix.Audio.Playback;
+
+    var finished = new ManualResetEventSlim(false);
+
+    using var media = new AudioFilePlayer();
+    media.PlaybackEnded += (s, e) => finished.Set();
+    media.Load(args[0]);                  // .wav / .mp3 / .ogg / .flac
+
+    Console.WriteLine($"Duration: {media.Duration}");
+    media.Play();
+    finished.Wait();
+
+Run it with:  dotnet run -- song.mp3
+
+The same two files, for MIDI music through a SoundFont, differ only in the
+middle - swap AudioFilePlayer for MidiMusicPlayer and Load for the two-argument
+overload:
+
+    using CodeBrix.Audio.Playback;
+    using CodeBrix.Audio.Synth;
+
+    using var music = new MidiMusicPlayer();
+    music.PlaybackEnded += (s, e) => finished.Set();
+    music.Load("GeneralUser.sf2", "level1.mid");   // .sf2 or .sfz, then the .mid
+    music.Play();
+
+And for offline rendering there is no player and no device at all:
+
+    using CodeBrix.Audio.Synth;
+
+    SoundFontRenderer.RenderToWavFile(
+        new SoundFont("GeneralUser.sf2"),
+        new MidiSequence("level1.mid"),
+        "level1.wav");
+
+
+PERFORMANCE TIPS
+================
+  - Opening a file is cheap no matter how big it is: AudioFilePlayer streams
+    through a chunked decoder instead of reading the file into memory, so Load
+    reads the headers plus roughly five seconds of audio. A 50 MB WAV opens as
+    fast as a 1 MB MP3 (milliseconds either way), and Duration is available as
+    soon as Load returns. So do not pre-load a media library at start-up - load
+    the one track you are about to play, when you are about to play it.
+
+  - DECODE ONCE FOR ANYTHING YOU TRIGGER REPEATEDLY. SoundEffectClip.Load
+    decodes the file to the output format ONE time and then plays it as often as
+    you like, overlapping itself, at no further decode cost. Re-opening a reader
+    per trigger is the single most expensive mistake available in this library.
+    The trade is memory: a clip holds its decoded PCM, so it is right for
+    effects and wrong for a soundtrack.
+
+  - STREAM ANYTHING LONG. AudioFilePlayer streams from disk, so a two-hour
+    podcast costs about what a ten-second one does in memory.
+
+  - SHARE THE BIG ASSETS. A .sf2 SoundFont runs to tens of megabytes and an SFZ
+    library decodes all of its samples eagerly at load. SoundFontCache and
+    SfzInstrumentCache exist precisely so one copy serves every player - hold
+    one cache for the application, and call .Get(path) rather than constructing
+    SoundFont / SfzInstrument yourself.
+
+  - PIN THE OUTPUT FORMAT ONCE, AT START-UP. SharedAudioOutput.Configure(
+    sampleRate[, channels]) before the first sound avoids both the rejection
+    described in COMMON PITFALLS and the cost of the output adopting whatever
+    the first sound happened to be.
+
+  - EVERY WaveOutEvent IS A VOICE, NOT A DEVICE. Overlapping dozens of them is
+    mixing inside one already-open device, not dozens of device opens. Do not
+    build a pool to avoid creating them.
+
+  - KEEP THE AUDIO THREAD CLEAN. A source's Read, and both MidiMusicPlayer
+    hooks, run on the real-time audio callback. No disk I/O, no locks that some
+    other thread holds for long, no allocation you can avoid, no UI marshalling.
+    Hand data to your own thread and act on it there.
+
+  - THE NATIVE DECODER IS THE FAST PATH. The engine prefers its bundled native
+    library and falls back to the managed decoders only where the native one
+    cannot handle a format. You get that automatically; it is a reason to play
+    through AudioFilePlayer / SoundEffectClip rather than pumping a managed
+    WaveStream by hand when you have the choice.
+
+  - FFT SIZES ARE POWERS OF TWO, and FastFourierTransform.FFT transforms in
+    place over a Complex[] you own. Allocate the array once and reuse it rather
+    than per frame; the same goes for the float buffers you pass to Read.
+
+  - PARSE A MIDI FILE TWICE IF YOU NEED BOTH MODELS. MidiSequence to play,
+    MidiFile to inspect tempo, time signature or markers. MIDI files are
+    kilobytes; this costs nothing and is the intended pattern.
+
+  - RENDERING OFFLINE BEATS RENDERING LIVE. SoundFontRenderer runs faster than
+    real time with no device involved, so bouncing a sequence to a .wav once and
+    playing the .wav is cheaper than synthesising it on every playthrough.
+
+
+COMMON PITFALLS TO AVOID
+========================
   - Float vs bytes: WaveFileReader/Mp3FileReader are WaveStreams that yield raw
     PCM BYTES. To get normalized float samples call .ToSampleProvider(), or just
     use AudioFileReader (which always exposes 32-bit float).
@@ -665,23 +959,13 @@ COMMON PITFALLS
     and stereo sources are matched to the output automatically. The audio callback runs
     on a real-time thread, so a source's Read should not block or do disk I/O (preload
     short, frequently-triggered effects into memory).
-  - Opus is NOT included. .opus files (and any Ogg stream carrying Opus rather
-    than Vorbis) are recognised - metadata, duration, channels and rate all read
-    correctly - but do not decode, and fail with a message saying so. Opus is
-    BSD-3-Clause rather than MIT, so it ships as a separate add-on package
-    instead of being folded into this one. See ADDING A CODEC below for how such
-    a package plugs in.
   - Which decoder plays your .ogg: the engine prefers the bundled native library,
-    which has an Ogg Vorbis decoder on every RID built from this repository's own
-    sources (currently the three Linux RIDs). Where it does not — a native binary
-    that predates Vorbis support — the managed decoder takes over automatically,
-    so .ogg and .flac play everywhere either way; the managed path simply costs
-    more CPU. Nothing to configure: SharedAudioOutput registers the managed
-    fallbacks itself. Only if you construct your OWN engine do you need
+    and all seven shipped native binaries carry an Ogg Vorbis decoder. Where a
+    native binary lacks one, the managed decoder takes over automatically, so
+    .ogg and .flac play everywhere either way; the managed path simply costs more
+    CPU. Nothing to configure: SharedAudioOutput registers the managed fallbacks
+    itself. Only if you construct your OWN engine do you need
     ManagedCodecs.RegisterAll(engine) to get the same safety net.
-  - DSP is primitives only: there is no turnkey onset/pitch/beat detector or
-    audio-to-MIDI transcriber - build those on top of the FFT / filters /
-    envelope follower.
   - Threading: a single reader/stream instance is not thread-safe; give each
     thread its own reader.
   - UI threads and the Engine's synchronous APIs: a few Engine entry points are
@@ -691,416 +975,235 @@ COMMON PITFALLS
     providers, and therefore AudioFilePlayer.Load). They still do BLOCKING disk or
     network I/O, so on a UI thread prefer the *Async overloads where they exist, or
     do the work on a background thread.
-    IMPORTANT if you are pinned to package 1.0.199.38 or earlier: on those versions
-    the same calls can DEADLOCK a UI thread outright - the window never paints, and
-    there is no exception and no log entry to tell you why. It is file-dependent, so
-    it looks intermittent: a read served from the stream buffer completes
-    synchronously and slips through, while an MP3 carrying a large ID3 tag (embedded
-    album art, say) hangs. On those versions, always open audio sources from a
-    background thread and marshal the result back to the UI.
-  - Opening a file is cheap no matter how big it is: AudioFilePlayer streams
-    through a chunked decoder instead of reading the file into memory, so Load
-    reads the headers plus roughly five seconds of audio. A 50 MB WAV opens as
-    fast as a 1 MB MP3 (milliseconds either way), and Duration is available as
-    soon as Load returns. So do not pre-load a media library at start-up - load
-    the one track you are about to play, when you are about to play it.
 
 
-CODING CONVENTIONS (CodeBrix family)
---------------------------------------------------------------------------------
-Nothing from here to the end of the file is needed to CONSUME the package - the
-rest of this document is for people and agents working ON this repository.
+WHAT THIS PACKAGE DOES NOT DO
+=============================
+  - Opus is NOT included. .opus files (and any Ogg stream carrying Opus rather
+    than Vorbis) are recognised - metadata, duration, channels and rate all read
+    correctly - but do not decode, and fail with a message saying so. Opus is
+    BSD-3-Clause rather than MIT, so it ships as a separate add-on package
+    instead of being folded into this one. See ADDING A CODEC below for how such
+    a package plugs in.
 
-These conventions govern the CodeBrix.Audio assembly and its tests. They do NOT
-govern CodeBrix.Audio.Engine; see MAINTAINING CODEBRIX.AUDIO.ENGINE below.
+  - DSP is primitives only: there is no turnkey onset/pitch/beat detector or
+    audio-to-MIDI transcriber - build those on top of the FFT / filters /
+    envelope follower.
 
-  - Target framework net10.0 only; no multi-targeting.
-  - Nullable reference types are OFF. Do NOT add `?` to reference types and do
-    NOT use the null-forgiveness `!` operator. Value-type nullables (int?,
-    bool?, enum?) are fine.
-  - No global usings; no ImplicitUsings. All usings are explicit, at the top of
-    the file, System.* first.
-  - File-scoped namespaces only.
-  - <GenerateDocumentationFile> is ON; every public/protected member carries an
-    XML doc comment. Never suppress CS1591 — fix it at source.
-  - No project-level warning suppression (no <NoWarn>, no warning-level changes).
-  - Files adapted from another project (NAudio, NLayer, NVorbis) carry a
-    `//was previously: <ns>;` provenance comment on the namespace line and
-    preserve upstream license headers where present. The vendored decoders are
-    internal; consumers reach them through the readers in CodeBrix.Audio.Wave.
-    THIRD-PARTY-NOTICES.txt records what was vendored and what was changed.
-  - Tests use xUnit v3 + SilverAssertions; see TESTING.
+  - No general-purpose resampler is exposed. Nothing in the public API converts
+    a source from one sample rate to another on demand: the playback types do it
+    internally, and the reader layer does not do it at all. If you need a
+    resampled buffer in your own code, you supply the conversion.
 
+  - No operating-system codec paths. There is no Windows ACM / DMO / Media
+    Foundation, no macOS AVFoundation and no GStreamer route - decoding is the
+    managed decoders plus the bundled native backend, and nothing else.
 
-ADDING A CODEC FROM ANOTHER PACKAGE
---------------------------------------------------------------------------------
-CodeBrix.Audio is MIT and stays that way, so a codec under a different licence
-(Opus is BSD-3-Clause) belongs in its own package that depends on this one.
-Everything such a package needs is public API; nothing here has to change to
-accept one.
+  - No lossy or lossless ENCODING of compressed formats. This package reads MP3,
+    Ogg Vorbis and FLAC but writes only .wav (WaveFileWriter), .aiff
+    (AiffFileWriter) and Standard MIDI Files (MidiFile.Export). For .opus
+    writing, take the CodeBrix.Audio.Opus add-on package.
 
-There are TWO seams, because there are two ways audio gets opened:
+  - No editing of tags in place. Id3v2Tag reads a tag from a stream, and
+    Id3v2Tag.Create builds one from key/value pairs, but there is no
+    re-tag-this-file-on-disk operation, and Vorbis comments are read-only.
 
-  1. PLAYBACK goes through the audio engine, which identifies formats by
-     CONTENT. Supply an ICodecFactory and register it:
+  - No streaming from a URL. Readers take a file name or a Stream; fetching
+    over the network is your code's job, and the result is a Stream you hand in.
 
-         SharedAudioOutput.RegisterCodecFactory(new OpusCodecFactory());
+  - No audio effects, mixing or multi-track editing in the CodeBrix.Audio
+    assembly. The bundled CodeBrix.Audio.Engine has effects, an editing/mixing
+    layer and a Recorder; CodeBrix.Audio itself is files, formats, DSP
+    primitives and playback facades.
 
-     That reaches AudioFilePlayer, SoundEffectClip, WaveOutEvent and the
-     GameEngine's audio stack. The registration is remembered for the process,
-     so it survives SharedAudioOutput.Shutdown() and is re-applied to every
-     engine started afterwards. A consumer driving its OWN AudioEngine calls
-     engine.RegisterCodecFactory(...) directly (ManagedCodecs.RegisterAll does
-     this for the built-in managed codecs).
+  - No capture or recording surface in CodeBrix.Audio. Recording lives in the
+    Engine (Recorder over an AudioCaptureDevice) - see the ENGINE section.
 
-  2. READING BY FILE NAME goes through AudioFileReader, which dispatches on
-     EXTENSION. Register a WaveStream factory:
-
-         AudioFileReaderRegistry.Register(".opus", s => new OpusFileReader(s));
-
-     AudioFileReader then opens .opus, as do AudioFileReaderRegistry.OpenFile
-     and anything else built on the registry.
-
-     STREAM OWNERSHIP - the factory is handed a stream it does NOT own. Do not
-     close it, and do not make your reader close it either; the registry opened
-     the file and keeps the handle. OpenFile therefore returns a
-     FileOwningWaveStream pairing the two: disposing it disposes your reader and
-     THEN closes the file, and its .Reader property gets callers back to your
-     concrete type. A reader that takes ownership anyway is tolerated (the second
-     Dispose is a no-op), but a handle nobody closes leaves the file locked on
-     Windows until GC, which surfaces much later as File.Delete/File.Move failing
-     with "used by another process".
-
-Both are idempotent-ish and cheap; call them once at start-up (a static
-Register() entry point on the add-on package is the friendliest shape - do not
-rely on module initializers, which only run once something in the assembly is
-touched).
-
-WHAT TO BUILD ON:
-
-  - ManagedSoundDecoder (public, CodeBrix.Audio.Codecs) is the base class for a
-    managed ISoundDecoder. It handles the part every codec otherwise
-    reimplements: converting the file's channel count and sample rate to what
-    the engine asked for. Derive from it, supply ReadSourceSamples / SeekSource
-    / DisposeCore, and call Initialize(channels, sampleRate, totalFrames) once
-    the file's format is known. VorbisSoundDecoder and FlacSoundDecoder are the
-    two worked examples in this repo.
-  - OggCodecSniffer (public) identifies which codec an Ogg container carries -
-    Vorbis, Opus, Ogg FLAC, or unknown - without disturbing the stream position.
-
-THE OGG FORMAT-ID SHARING RULE (this is the one that bites):
-The metadata layer reports the format identifier "ogg" for EVERY Ogg stream,
-whatever codec is inside. So an Ogg-capable factory is offered Vorbis, Opus and
-Ogg FLAC alike. Two consequences:
-
-  - Your factory MUST check what it was actually handed (OggCodecSniffer) and
-    return NULL for anything else. Returning null lets the engine move on to the
-    next factory; throwing, or accepting and then failing, does not.
-  - Reset the stream position on entry (if stream.CanSeek). The engine does not
-    rewind between factories on the format-id path, so an earlier factory may
-    have moved it.
-
-PRIORITY CONVENTION: the built-in native factory is 0; the managed fallbacks are
--10. An add-on codec for a format the native library cannot decode can sit
-anywhere below 0 - use -10 to match, or lower to defer to the built-ins.
+  - No visualisation widgets. There is an FFT and there are filters; drawing a
+    spectrum or a waveform is your UI framework's job.
 
 
-MAINTAINING CODEBRIX.AUDIO.ENGINE
---------------------------------------------------------------------------------
-src/CodeBrix.Audio.Engine/ is a ~35k-line verbatim vendoring of SoundFlow v1.4.1
-(LSXPrime/SoundFlow, MIT) with namespaces renamed SoundFlow.* ->
-CodeBrix.Audio.Engine.* (each namespace line carries a `//was previously:`
-comment). Native build inputs live under native/miniaudio/ (miniaudio.h vendored
-at native/miniaudio/miniaudio-80cf7b2/, stb_vorbis at stb_vorbis-31c1ad3/); see
-native/miniaudio/README.txt.
+WORKING EXAMPLES ON GITHUB
+==========================
+The test suites are the executable documentation. Every feature above has a
+file that exercises it.
 
-The native library is built and verified by tools/build_native_libraries — read
-its README.txt before touching anything native. It builds all three Linux RIDs
-in manylinux containers on one machine (arm64 and riscv64 under emulation) and
-carries host scripts for Windows and macOS; every build must pass a verification
-gate (required exports, codec coverage, dependency policy, compatibility floor,
-target architecture, and a dlopen + decode smoke test) before it is written to
-output/. native/miniaudio/BUILD-PROVENANCE.txt records what produced each shipped
-binary. All seven shipped RIDs are now self-built from the vendored sources and
-all seven include the Ogg Vorbis decoder, so sf_has_vorbis() is present
-everywhere; the managed Vorbis fallback now only covers a binary that lacks it
-(for example a RID added later, before one is built for it).
+  https://github.com/ellisnet/CodeBrix.Audio/tree/main/tests/CodeBrix.Audio.Tests
 
-It keeps SoundFlow's own project settings: NRT is ON (the code uses `?` and
-`!`), ImplicitUsings is ON, AllowUnsafeBlocks is ON. Code added or changed in
-the Engine follows the Engine's local style rather than family style. Editing
-the Engine source is FINE. The vendoring kept changes minimal in the interest
-of completing that project quickly, but that was a scheduling decision, not a
-policy - there is nothing special about this code that should discourage
-modifying it going forward.
+  READING AND WRITING FILES
+    WaveFileReaderTests.cs, WaveStreams/WaveFileWriterTests.cs,
+    WaveFormats/WaveFormatSerializeTests.cs, WavBitDepthTests.cs
+        WAV round trips across bit depths and encodings.
+    WaveStreams/WaveFileWriterRf64Tests.cs      files past the 4 GB RIFF limit.
+    Mp3FileReaderTests.cs, Mp3/Mp3FrameTests.cs,
+    Mp3/Mp3FileReaderBaseTests.cs               MP3 frame parsing and decode.
+    OggVorbisFileReaderTests.cs                 Vorbis decode, duration, seeking.
+    FlacFileReaderTests.cs, FlacTestStreams.cs  FLAC decode against the .wav each
+                                                fixture was encoded from.
+    AudioFileReaderTests.cs                     the by-extension convenience path.
+    Mp3/Id3v2TagTests.cs, Id3v2TagTests.cs      ID3v2 tag reading.
 
-DELIBERATE DIVERGENCES FROM UPSTREAM SOUNDFLOW - nine changes made during the
-vendoring, recorded here for provenance (and to be re-applied should the Engine
-ever be re-synced against a newer SoundFlow):
+  PLAYBACK
+    WaveOutEventTests.cs        Init / Play / Pause / Stop / Volume, and the
+                                sample-rate rejection described in the pitfalls.
+    AudioFilePlayerTests.cs     transport, Position/Duration, Seek, looping.
+    SoundEffectClipTests.cs     decode-once, overlapping voices, StopAll.
+    SharedAudioOutputCollection.cs   why the sounding tests are serialised.
 
-  1. Namespace rename SoundFlow.* -> CodeBrix.Audio.Engine.*, with the
-     `//was previously:` provenance comment on each namespace line.
+  CODECS AND EXTENSIBILITY
+    CodecExtensibilityTests.cs  the two registration seams - ICodecFactory and
+                                AudioFileReaderRegistry - exactly as ADDING A
+                                CODEC FROM ANOTHER PACKAGE describes them,
+                                including stream ownership.
+    VorbisCodecFactoryTests.cs, FlacCodecFactoryTests.cs   the managed factories
+                                and the Ogg format-id sharing rule.
+    Codecs/ALawDecoderTests.cs, Codecs/MuLawDecoderTests.cs   the companding
+                                codecs you call directly.
 
-  2. De-branding. "SoundFlow" is allowed only in comments, license text, and
-     provenance markers - never in a live namespace, type, member, or XML-doc.
-     Includes the type rename SoundFlowJsonContext -> CompositionProjectJsonContext
-     and the string values FactoryId "CodeBrix.MiniAudio.Default", Vorbis
-     VendorString "CodeBrix.Audio", and watermark key "DefaultCodeBrixAudioKey".
+  MIDI
+    Midi/MidiFileTests.cs, MidiFileTests.cs     read/write round trips.
+    Midi/MidiEventCollectionTest.cs             tracks, PrepareForExport.
+    Midi/NoteOnEventTests.cs, Midi/NoteEventTests.cs,
+    Midi/ControlChangeEventTests.cs, Midi/PitchWheelChangeEventTests.cs,
+    Midi/SysexEventTests.cs, Midi/TimeSignatureEventTests.cs,
+    Midi/KeySignatureEventTests.cs, Midi/MidiEventCloneTests.cs
+        the event hierarchy, one file per event type.
 
-  3. ConfigureAwait(false) on EVERY await. Upstream has none, and its metadata
-     layer blocks on its own async reads (BaseSoundFormatReader.Read is
-     `ReadAsync(...).GetAwaiter().GetResult()`), so on a thread with a
-     SynchronizationContext the continuation is posted to the very thread that is
-     blocked waiting for it and the process deadlocks with no exception and no
-     log. Currently 163 call sites across 24 files.
-     Verify with:
-         grep -rn "await " --include=*.cs src/ | grep -v ConfigureAwait
-     Only multi-line awaits whose suffix landed on a later line should remain (at
-     the time of writing, 3 in Editing/Persistence/CompositionProjectManager.cs).
-     Note the two non-obvious forms: the suffix belongs on the end of the awaited
-     EXPRESSION, not the end of the line (awaits appear inside `if` conditions and
-     ternaries), and `await using var x = expr;` has to become `var x = expr;`
-     plus `await using var xScope = x.ConfigureAwait(false);` so that x keeps its
-     original type.
+  SOUNDFONT, SFZ AND MIDI MUSIC
+    Synth/MidiMusicPlayerTests.cs      the transport, Speed, the channel
+                                       helpers, and BOTH message hooks.
+    Synth/MidiSequenceTests.cs, Synth/MidiSequenceBridgeTests.cs
+                                       MidiSequence, and FromEvents(...) as the
+                                       bridge from the editable MIDI model.
+    Synth/SoundFontRendererTests.cs    offline Render / RenderToWavFile.
+    Synth/SoundFontCacheTests.cs       sharing one .sf2.
+    Synth/Sfz/SfzInstrumentTests.cs, Synth/Sfz/SfzInstrumentCacheTests.cs,
+    Synth/Sfz/SfzSynthesizerTests.cs, Synth/Sfz/SfzRenderingTests.cs,
+    Synth/Sfz/SfzRegionTests.cs, Synth/Sfz/SfzModulatorTests.cs,
+    Synth/Sfz/SfzCurveTests.cs, Synth/Sfz/SfzArticulationExtrasTests.cs,
+    Synth/Sfz/SfzExtendedModelTests.cs, Synth/SfzParserTests.cs
+        the SFZ engine end to end, and SfzParser for the structural layer.
 
-  4. MiniAudioCodecFactory.SupportedFormatIds must include "ogg". The metadata
-     layer stamps an Ogg stream with the format id "ogg" and every data provider
-     asks the engine for that id, so without it opening an .ogg fails with "no
-     registered codec factory" and the native library is never even consulted.
+  DSP
+    Dsp/FastFourierTransformTests.cs, Dsp/FftProcessorTests.cs,
+    Dsp/BiQuadFilterTests.cs, Dsp/BiQuadFilterValidationTests.cs,
+    EnvelopeFollowerTests.cs, VoiceActivityDetectorTests.cs
 
-  5. MiniAudioDecoder.Seek must not refuse when Length is 0. Upstream returns
-     false in that case, which disables seeking entirely for any format that does
-     not report a length; worse, ChunkedDataProvider/StreamDataProvider ignored
-     that false and advanced their own position anyway, so a media transport
-     would drift out of step with the audio. Both providers now honour a failed
-     seek, and the decoder asks the native library instead of guessing.
+  PROVIDERS AND STREAM PLUMBING
+    WaveStreams/  - one file per provider: BufferedWaveProviderTests.cs,
+    OffsetSampleProviderTests.cs, FadeInOutSampleProviderTests.cs,
+    ConcatenatingSampleProviderTests.cs, MultiplexingSampleProviderTests.cs,
+    MonoToStereoSampleProviderTests.cs, StereoToMonoSampleProviderTests.cs,
+    SilenceProviderTests.cs, WaveChannel32Tests.cs, WaveOffsetStreamTests.cs,
+    WaveStreamTests.cs and their neighbours.
 
-  6. MiniAudioDecoder's memory path. When the source is a seekable Ogg stream
-     under a size cap, the decoder reads it into native memory and calls
-     ma_decoder_init_memory rather than feeding it through read callbacks. That
-     is what puts stb_vorbis in PULL mode, where it knows the stream length and
-     can seek directly; through callbacks it runs in PUSH mode, reports a length
-     of zero, and can only seek by decoding forward from the start. Requires the
-     Native.cs import of ma_decoder_init_memory, and NativeMemory that outlives
-     the decoder (miniaudio does not copy the data it is given).
+The second suite exercises the bundled Engine's native decode path without
+opening a device:
 
-  7. OggReader computes its duration for BOTH accuracy settings, and Native.cs's
-     Linux architecture switch has a RiscV64 case. An Ogg stream has no usable
-     first-frame estimate, so honouring DurationAccuracy.FastEstimate literally
-     meant reporting a duration of zero to anything using the format-specifying
-     ChunkedDataProvider constructor - which is what AudioFilePlayer uses. Reading
-     the last page's granule position is a single 64 KB tail read, so it is fast
-     enough to always do. Also in Native.cs: sf_has_vorbis is imported as the
-     capability probe (a missing entry point means an older binary, not an error).
+  https://github.com/ellisnet/CodeBrix.Audio/tree/main/tests/CodeBrix.Audio.Engine.Tests
 
-  8. OggReader's OpusHead handling: report 48000, and subtract the pre-skip from
-     the duration. Upstream does neither, and both matter more here than they do
-     upstream, because this package's whole Opus story is handing the stream to a
-     separately licensed decoder package.
-       * An Opus stream ALWAYS decodes at 48 kHz. OpusHead's "input sample rate"
-         (offset 12) is the rate the ENCODER was fed - 16000 for a typical
-         messenger voice note, and permitted to be 0 - and RFC 7845 marks it
-         informational. Reporting it is not a cosmetic slip: the data providers
-         build the decoder's TARGET format from SoundFormatInfo.SampleRate, so a
-         16 kHz voice note would have its 48 kHz output resampled as though it
-         were 16 kHz. ffprobe reports 48000 for these files too.
-       * An Ogg Opus granule position counts the pre-skip (offset 10, uint16 LE) -
-         priming samples the decoder discards - so the duration must subtract it
-         or every file reads a few milliseconds long.
-     tests/CodeBrix.Audio.Engine.Tests/OggOpusMetadataTests.cs pins both, against
-     .opus fixtures whose pre-skip and granule are known exactly.
+    MiniAudioDecoderTests.cs, OggVorbisDecodeTests.cs, FlacDecodeTests.cs
+        native decoding, including seeking.
+    ChunkedDataProviderTests.cs, ProviderLengthFallbackTests.cs
+        the length/duration arithmetic that a media transport depends on.
+    OggOpusMetadataTests.cs
+        that an Ogg Opus stream reports 48 kHz and a pre-skip-corrected
+        duration even though this package cannot decode it.
+    AudioFormatTests.cs, MiniAudioEngineTests.cs
 
-  9. ChunkedDataProvider.Length counts the DECODER's channels, not the file's.
-     Upstream multiplies FormatInfo.Duration by SampleRate and
-     FormatInfo.ChannelCount - mixing units, because SampleRate is already the
-     decoder's while ChannelCount is the FILE's. SoundPlayerBase.Duration then
-     divides that length by the DEVICE's channel count, so every mono file
-     reported exactly half its true duration on a stereo device: a two-minute
-     podcast showed as one minute, and any transport bound to it scrubbed the
-     wrong range. Stereo files hid it, because there the two counts agree.
-     tests/CodeBrix.Audio.Engine.Tests/ChunkedDataProviderTests.cs pins it, mono
-     and stereo, and at a sample rate that forces conversion as well.
-     The same expression appears as a FALLBACK in StreamDataProvider.Length and
-     in AssetDataProvider.Decode, reached when the decoder reports no length of
-     its own - which the native decoder does whenever it runs through read
-     callbacks rather than from memory (see divergence 6). Both were fixed the
-     same way, and BOTH must be re-applied.
-     AssetDataProvider's is the one that really bites: its fallback sizes the
-     buffer the whole asset is decoded into, in a single Decode call, and that
-     code only ever resizes the buffer DOWN. Taken from the file's layout the
-     value does not merely mis-describe the clip, it CUTS IT OFF - a mono sound
-     effect came back half as long, a 22.05 kHz one under a quarter.
-     tests/CodeBrix.Audio.Engine.Tests/ProviderLengthFallbackTests.cs pins both,
-     forcing the path with a test codec that decodes normally but reports a
-     length of 0 (LengthlessCodec.cs).
+Tests that open a real audio device and MAKE SOUND are opt-in, so an ordinary
+run is silent and headless-safe:
+
+    CODEBRIX_AUDIO_RUN_PLAYBACK_TESTS=1 dotnet test          # CodeBrix.Audio.Tests
+    CODEBRIX_AUDIO_ENGINE_RUN_PLAYBACK_TESTS=1 dotnet test   # Engine tests
+
+The audio fixtures those tests read are described at
+https://github.com/ellisnet/CodeBrix.Audio/blob/main/tests/Assets/audio/AUDIO-FIXTURES.txt
 
 
-ARCHITECTURE
---------------------------------------------------------------------------------
-Source lives under src/CodeBrix.Audio/, organized into sub-folders that map to
-sub-namespaces (e.g. Midi, Dsp, Codecs, Playback, and the internal wave/MP3/
-Vorbis/FLAC plumbing). Only the entry-point readers/writers and WaveFormat sit
-at or near the root namespace; the rest is implementation detail.
+QUICK REFERENCE CARD
+====================
+  PACKAGE    CodeBrix.Audio.MitLicenseForever   (MIT, .NET 10 or later)
+  ASSEMBLIES CodeBrix.Audio  +  CodeBrix.Audio.Engine   (both from this package)
 
-Each compressed format follows the same shape: an internal decoder in its own
-namespace behind a public WaveStream reader in CodeBrix.Audio.Wave.
+  I WANT TO...                            USE
+  -----------                             ---
+  read a file as float samples            new AudioFileReader(path)
+  read one specific format                WaveFileReader / Mp3FileReader /
+                                          OggVorbisFileReader / FlacFileReader /
+                                          AiffFileReader
+  write a .wav                            new WaveFileWriter(path, WaveFormat)
+                                          WaveFileWriter.CreateWaveFile16(
+                                              path, ISampleProvider)
+  play a long track with a transport      new AudioFilePlayer()
+  play a short sound, often, overlapping  SoundEffectClip.Load(path)
+  play something once, no bookkeeping     SoundEffectClip.PlayOnce(path)
+  push an IWaveProvider at the speakers   new WaveOutEvent()
+  pin the output format                   SharedAudioOutput.Configure(48000)
+  read/write a .mid                       new MidiFile(path, false)
+                                          MidiFile.Export(path, collection)
+  play a .mid through a .sf2 or .sfz      new MidiMusicPlayer()
+  bounce a .mid to .wav, no device        SoundFontRenderer.RenderToWavFile(...)
+  share a big instrument                  SoundFontCache / SfzInstrumentCache
+  analyse audio                           FastFourierTransform / BiQuadFilter /
+                                          EnvelopeFollower / VoiceActivityDetector
+  add a codec from another package        SharedAudioOutput.RegisterCodecFactory
+                                          AudioFileReaderRegistry.Register
 
-  - MP3   : CodeBrix.Audio.Mpeg    (NLayer-derived)      -> Mp3FileReader
-  - Vorbis: CodeBrix.Audio.Vorbis  (NVorbis-derived)     -> OggVorbisFileReader
-  - FLAC  : CodeBrix.Audio.Flac    (written from spec)   -> FlacFileReader
+  SIGNATURES YOU WILL REACH FOR
+    new AudioFileReader(string fileName)            // 32-bit float, any of the
+                                                    // four built-in formats
+    reader.ToSampleProvider()                       // WaveStream -> float
+    new WaveFormat(int rate, int bits, int channels)
+    WaveFormat.CreateIeeeFloatWaveFormat(int rate, int channels)
+    new WaveFileWriter(string path, WaveFormat format)
+    writer.WriteSamples(float[] samples, int offset, int count)
+    SharedAudioOutput.Configure(int sampleRate, int channels = 2)
+    SharedAudioOutput.RegisterCodecFactory(ICodecFactory factory)
+    SharedAudioOutput.Shutdown()
+    AudioFileReaderRegistry.Register(string extension,
+                                     Func<Stream, WaveStream> readerFactory)
+    AudioFileReaderRegistry.OpenFile(string fileName)   // returns a
+                                                        // FileOwningWaveStream
+    AudioFileReaderRegistry.Supports(string fileNameOrExtension)
+    SoundEffectClip.Load(string fileName)   // also (byte[]) and (Stream)
+    SoundEffectClip.PlayOnce(string fileName, float volume = 1.0f)
+    clip.Play(float volume = 1.0f)
+    player.Init(IWaveProvider waveProvider)            // WaveOutEvent
+    media.Load(string filePath)                        // AudioFilePlayer
+    media.Load(Stream stream, bool leaveOpen = false)
+    media.Seek(TimeSpan position)
+    music.Load(string instrumentPath, string midiFilePath)   // MidiMusicPlayer
+    music.Load(SoundFont soundFont, MidiSequence sequence)
+    music.Load(SfzInstrument instrument, MidiSequence sequence)
+    music.SendMidiMessage(int channel, int command, int data1, int data2)
+    music.SetChannelVolume(int channel, float volume)   // also Pan, Program
+    SoundFontRenderer.Render(SoundFont, MidiSequence,
+                             int sampleRate = 44100, TimeSpan tail = default)
+    SoundFontRenderer.RenderToWavFile(SoundFont, MidiSequence, string outputPath,
+                             int sampleRate = 44100, TimeSpan tail = default)
+    SoundFontRenderer.RenderToWavStream(...)            // same, to a Stream
+    cache.Get(string path)                  // SoundFontCache / SfzInstrumentCache
+    MidiSequence.FromEvents(MidiEventCollection events,
+                            MidiSequenceLoopType loopType = MidiSequenceLoopType.None)
+    events.PrepareForExport()               // REQUIRED before MidiFile.Export
+    Id3v2Tag.ReadTag(Stream input)
+    ManagedCodecs.RegisterAll(AudioEngine engine)   // only for your OWN engine
+    OggCodecSniffer.Identify(Stream stream)         // Vorbis / Opus / Flac
 
-No native codec is ever required for reading. CodeBrix.Audio.Codecs additionally
-holds the engine-facing side: VorbisCodecFactory and FlacCodecFactory register
-those same managed decoders with the audio engine at a priority BELOW its native
-factory, so the native decoder is used wherever it can be and the managed one is
-the fallback. ManagedSoundDecoder carries the channel-mapping and linear
-rate-conversion both of them need.
-
-The SoundFont renderer follows the same shape one level up: CodeBrix.Audio.Synth
-holds a MeltySynth-derived SF2 parser, object model and voice engine, of which
-only the SoundFont object model and a small playback facade are public. See
-"TWO SOUNDFONT PATHS" above before touching any of it.
-
-The SFZ engine (CodeBrix.Audio.Synth.Sfz) is NOT a port: it was written here,
-from the specification at sfzformat.com, per the porting rule below - sfizz and
-the other open-source players were not read. It reuses the voice-engine SHAPE of
-the MeltySynth core (block rendering, fixed-point oscillators, the anti-pop gain
-ramp) but shares no code with it; the two synthesizers meet only at the
-IMidiSynthesizer contract. SfzSupportedOpcodes is the authoritative implemented
-set, and tools/sfz_opcode_survey reads it to report measured coverage over a
-corpus of real libraries (implemented-coverage.md). As of the opcode-tail work
-that coverage is 16 of 16 corpus libraries at zero unimplemented opcodes.
-Where the spec describes behaviour without a formula, the engine documents its
-approximation in code: the ampeg/off shape opcodes map to power curves via
-2^(shape/2), curves 4-6 are x^2 / sqrt(x) / sqrt(1-x), and the flexible-envelope
-levels run bipolar -1..1 (the corpus' portamento envelopes need the -1).
-
-
-WHAT MAY BE READ WHEN PORTING, AND WHAT MAY BE TAKEN
---------------------------------------------------------------------------------
-A standing rule for all work in this library. The bar for CodeBrix.Audio is MIT
-or more permissive, and it is held deliberately: everything vendored so far
-clears it (NAudio, NLayer, NVorbis, SoundFlow and MeltySynth are MIT; miniaudio
-and stb_vorbis are Unlicense/MIT-0). The first license to add a condition —
-BSD-3, for Opus via Concentus — was pushed into a SEPARATE package rather than
-folded in. That is the precedent.
-
-  - DOCUMENTATION AND SPECIFICATIONS ARE UNRESTRICTED. Format specs, community
-    references, articles: read all of it. Documentation is not an
-    implementation, so implementing from it raises no question of derivation.
-    This is how the FLAC decoder here was written, and it is the intended path.
-
-  - ANOTHER PROJECT'S SOURCE CODE IS A DIFFERENT ACT. Reading it to "see how
-    they did it" and then writing something similar is derivation in substance
-    even when it is not copy-paste. Taking code means taking its obligations,
-    and that is a vendoring decision, not a research one.
-
-  - IF CODE IS TAKEN, IT GETS THE FULL RITUAL — a compatible license, a
-    `//was previously:` provenance comment on every file, the upstream version
-    and commit recorded, and the complete license text reproduced in
-    THIRD-PARTY-NOTICES.txt. Anything less is not acceptable.
-
-Worked example, because it is the live one: for SFZ support, sfizz is the
-obvious reference implementation and is BSD-2-Clause. Vendoring it would be
-legally fine with attribution — but it is C++ (against the managed-only line)
-and it would put a non-MIT entry in an MIT package's notices. So sfizz's SOURCE
-is not read for implementation guidance. sfzformat.com is the reference, the
-implementation is written from the specification, and sfizz is consulted for
-exactly one narrow signal: where it marks an opcode unsupported, that is good
-evidence nobody needs it.
-
-
-TESTING
---------------------------------------------------------------------------------
-Tests live under tests/CodeBrix.Audio.Tests/ and use xUnit v3 with
-SilverAssertions (fluent assertions) and CodeBrix.TestMocks (mocking +
-AutoFixture; Moq/AutoFixture-identical API under CodeBrix.TestMocks.* names).
-Run them with:
-
-    dotnet test CodeBrix.Audio.slnx
-
-There are two test projects: tests/CodeBrix.Audio.Tests (~625 tests) and
-tests/CodeBrix.Audio.Engine.Tests (~30, which exercise the native decode path
-without opening a device). Most of the former are adapted from the upstream
-NAudio.Core.Tests project (converted from NUnit to xUnit v3 + SilverAssertions);
-the remainder are authored for the CodeBrix-specific entry points and the
-analysis primitives. Coverage includes: WAV reading/writing round-trips, MP3
-frame parsing and full managed decode, Ogg Vorbis and FLAC decoding, MIDI
-read/write round-trips and the event hierarchy, ID3v2 tag reading, the codecs,
-and the DSP primitives.
-
-Test audio: WAV and MP3 fixtures are still built in code (TestAudio.cs). Ogg
-Vorbis and FLAC cannot reasonably be hand-assembled, so those live as files under
-tests/Assets/audio/ - synthesized tones, sweeps, seeded noise and silence
-generated by tools/make_test_fixtures/make_fixtures.sh, NOT third-party audio.
-tests/Assets/audio/AUDIO-FIXTURES.txt says what each one is for. Two .opus
-fixtures are there for the METADATA reader only - nothing here decodes Opus - and
-one of them is deliberately encoded from 16 kHz so its declared rate and its
-decode rate disagree.
-
-Regenerate the fixtures DELIBERATELY, not as a side effect of adding one file: an
-Ogg muxer assigns a random stream serial number per run, so every .ogg and .opus
-comes out with different bytes even on an identical ffmpeg build. (The .flac and
-.wav files do reproduce byte for byte.)
-
-Test SoundFont: tests/Assets/soundfont/codebrix-test.sf2, built from sine tones
-by tools/make_test_fixtures/make_soundfont.py. NO real SoundFont is committed
-here and none should be — they run to tens of megabytes and are variously
-licensed, and this package is MIT. The fixture is deliberately shaped for the
-tests that use it: two instruments, one looping and one one-shot, split key
-ranges, and a global instrument zone, so region traversal and both LoopMode
-branches are real. The CodeBrix.Audio.Synth tests under Synth/ are MeltySynth's
-own suite, carried across with the port as its regression net; their Freeverb
-(public domain) and TinySoundFont (MIT) reference vectors live under
-tests/Assets/synth/. Five upstream tests that compare against parameter dumps of
-the GPL-2 TimGM6mb SoundFont did NOT come across — that data cannot ship from an
-MIT package. They still run in Doom.Brix, which is GPL-2, against this library's
-public SoundFont object model.
-
-How the FLAC decoder is held to account: FLAC is lossless, so every .flac fixture
-ships with the .wav it was encoded from, and the decoder must reproduce that PCM
-byte for byte - across bit depths, all four stereo decorrelation modes, constant/
-verbatim/fixed/LPC subframes and a short final block. It is separately compared
-sample for sample against the native dr_flac decoder, so two independent
-implementations have to agree.
-
-Tests that open a real audio device and make sound are opt-in:
-
-    CODEBRIX_AUDIO_RUN_PLAYBACK_TESTS=1 dotnet test        # CodeBrix.Audio.Tests
-    CODEBRIX_AUDIO_ENGINE_RUN_PLAYBACK_TESTS=1 dotnet test # Engine tests
-
-Every test that is actually AUDIBLE plays the same thing: the five-tone motif from "Close
-Encounters of the Third Kind" (G, A, F, F an octave below, C - see TestAudio.
-BuildCloseEncountersSamples). One recognisable tune means a good run is obvious by ear
-and a broken one sounds broken. Two rules keep it recognisable, and both are easy to
-undo by accident:
-
-  - AudibleTestScope wraps every sounding test. The two test assemblies run as separate
-    PROCESSES, so without the named mutex inside it they play over each other and the
-    tune turns to mush. It also leaves a short silence on the way out so consecutive
-    tests stay distinct.
-  - Where a test needs several voices at once, it starts them TOGETHER, in unison -
-    louder, but still one clean statement. Staggering them proves the same thing about
-    the voice count and sounds like a round.
-
-The tests that merely need the device open (WaveOutEvent, AudioFilePlayer) play silence,
-and should stay that way.
-
-Test SFZ instruments: none are committed. The SFZ engine tests build theirs on
-the fly - SfzTestInstruments writes synthetic WAV samples (constants, sines,
-ramps, a hand-written smpl chunk) plus a test-authored .sfz into a temp
-directory per test. Constant-value samples make gain assertions arithmetic;
-ramp samples make playback speed readable. Two sharp edges those tests learned:
-the synthesizer renders in 64-frame blocks, so consecutive measurements on one
-instance must use block-aligned frame counts or a fresh synthesizer (a partial
-block of earlier audio leaks into the next Render call - same as the SoundFont
-synthesizer); and the anti-pop gain ramp means the first block after any CC
-change still touches the old level, so skip a settling window before measuring.
-A third: a PEAK measurement cannot tell a fade from a steady level - the first
-frames of the window carry the pre-fade signal, so a 5 ms choke and a 200 ms
-fade both "pass". Anything asserting fade behaviour (off_time, smoothing,
-envelope shapes, tremolo depth) must measure RMS over the window instead.
-
-A handful of other tests carry [Fact(Skip = "...")]: NUnit [Explicit] tests
-carried over as skipped, plus two manual performance tests.
+  THE RULES YOU WILL OTHERWISE BREAK
+    1. WaveStream readers give you BYTES. ToSampleProvider(), or AudioFileReader.
+    2. Dispose readers and writers. An undisposed WaveFileWriter writes a corrupt
+       file, and a stream from AudioFileReaderRegistry.OpenFile keeps the file
+       locked.
+    3. There is no resampler. WaveOutEvent REJECTS a source whose rate differs
+       from the running output - Configure(...) at start-up, or use
+       AudioFilePlayer / SoundEffectClip, which convert.
+    4. PrepareForExport() before MidiFile.Export, every time.
+    5. Two SoundFont paths, two MIDI hooks, two MIDI file models. Read the
+       decision guides near the top before choosing one.
+    6. The audio thread is real-time. Both MidiMusicPlayer hooks and every
+       source Read run on it: no blocking, no I/O, no UI.
+    7. .opus needs the CodeBrix.Audio.Opus add-on package, and one
+       CodeBrixAudioOpus.Register() call.
 ================================================================================
