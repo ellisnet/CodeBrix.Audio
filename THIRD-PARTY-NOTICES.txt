@@ -181,9 +181,10 @@ Modifications made during the port:
       `//was previously:` provenance comment on each file's namespace line).
     - Target framework moved from net8.0 to net10.0. SoundFlow's other project
       settings were kept as-is (nullable reference types enabled, implicit usings,
-      unsafe blocks, trim/AOT analyzers) so future re-syncs from upstream stay
-      mechanical: NO nullable annotations were stripped and NO doc comments were
-      added (unlike the NAudio/NLayer port in entries 1-2).
+      unsafe blocks, trim/AOT analyzers); no nullable annotations were stripped
+      and no doc comments were added during the port (unlike the NAudio/NLayer
+      port in entries 1-2). The code has been maintained and modified here since;
+      it is not kept in sync with upstream (see MAINTAINER-README.txt).
     - The native backend library was renamed from "miniaudio" to
       "codebrix_miniaudio" — the P/Invoke library name in Backends/MiniAudio/
       Native.cs and the CMake LIBRARY_NAME — so the shipped binary never clashes

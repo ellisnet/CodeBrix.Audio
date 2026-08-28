@@ -297,10 +297,11 @@ native backend is built from miniaudio and stb_vorbis (Unlicense / MIT-0).
 
 MAINTAINING CODEBRIX.AUDIO.ENGINE
 ---------------------------------
-src/CodeBrix.Audio.Engine/ is a ~35k-line verbatim vendoring of SoundFlow v1.4.1
-(LSXPrime/SoundFlow, MIT) with namespaces renamed SoundFlow.* ->
+src/CodeBrix.Audio.Engine/ began as a ~35k-line verbatim vendoring of SoundFlow
+v1.4.1 (LSXPrime/SoundFlow, MIT) with namespaces renamed SoundFlow.* ->
 CodeBrix.Audio.Engine.* (each namespace line carries a `//was previously:`
-comment). Native build inputs live under native/miniaudio/ (miniaudio.h vendored
+comment). It is CodeBrix code now: it is maintained and modified here and is NOT
+kept in sync with upstream. Native build inputs live under native/miniaudio/ (miniaudio.h vendored
 at native/miniaudio/miniaudio-80cf7b2/, stb_vorbis at stb_vorbis-31c1ad3/); see
 native/miniaudio/README.txt.
 
@@ -325,8 +326,7 @@ policy - there is nothing special about this code that should discourage
 modifying it going forward.
 
 DELIBERATE DIVERGENCES FROM UPSTREAM SOUNDFLOW - nine changes made during the
-vendoring, recorded here for provenance (and to be re-applied should the Engine
-ever be re-synced against a newer SoundFlow):
+vendoring, recorded here for provenance:
 
   1. Namespace rename SoundFlow.* -> CodeBrix.Audio.Engine.*, with the
      `//was previously:` provenance comment on each namespace line.

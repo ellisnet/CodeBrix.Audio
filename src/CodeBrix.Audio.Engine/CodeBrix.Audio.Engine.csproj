@@ -2,17 +2,18 @@
 
   <!--
     CodeBrix.Audio.Engine — a cross-platform audio engine (playback, recording,
-    effects, editing/mixing, MIDI, synthesis, metadata, visualization) vendored
-    verbatim from SoundFlow v1.4.1 (LSXPrime/SoundFlow, MIT). Namespaces were
-    rebranded SoundFlow.* -> CodeBrix.Audio.Engine.* (see the //was previously:
-    comment on each namespace line). Full provenance and license text live in
-    THIRD-PARTY-NOTICES.txt at the repo root.
+    effects, editing/mixing, MIDI, synthesis, metadata, visualization). It
+    originated as a port of SoundFlow v1.4.1 (LSXPrime/SoundFlow, MIT), with
+    namespaces rebranded SoundFlow.* -> CodeBrix.Audio.Engine.* (see the
+    //was previously: comment on each namespace line). Full provenance and license
+    text live in THIRD-PARTY-NOTICES.txt at the repo root.
 
-    This project INTENTIONALLY diverges from the CodeBrix.Audio family conventions
-    (which are NRT-off, no ImplicitUsings, CS1591-fixed-at-source). Because this is
-    a large verbatim vendoring, it keeps SoundFlow's original project settings
-    (Nullable/ImplicitUsings/AllowUnsafeBlocks) so future re-syncs from upstream
-    stay mechanical rather than requiring a rewrite of ~35k lines.
+    This is CodeBrix code: it is maintained and modified here freely and is NOT
+    kept in sync with the upstream project. It keeps its own project settings
+    (Nullable/ImplicitUsings/AllowUnsafeBlocks on), which differ from the
+    CodeBrix.Audio family conventions (NRT-off, no ImplicitUsings); code added or
+    changed here follows the Engine's local style. See MAINTAINER-README.txt,
+    "MAINTAINING CODEBRIX.AUDIO.ENGINE".
 
     It is NOT independently packable: it ships inside the single
     CodeBrix.Audio.MitLicenseForever package alongside CodeBrix.Audio, wired up by
