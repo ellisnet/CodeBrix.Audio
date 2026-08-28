@@ -11,8 +11,8 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="xunit.v3" Version="4.0.0" />
-    <PackageReference Include="SilverAssertions.ApacheLicenseForever" Version="1.0.164.180" />
-    <PackageReference Include="CodeBrix.TestMocks.ApacheLicenseForever" Version="1.0.165.1173" />
+    <PackageReference Include="SilverAssertions.ApacheLicenseForever" Version="1.0.237.1200" />
+    <PackageReference Include="CodeBrix.TestMocks.ApacheLicenseForever" Version="1.0.237.1192" />
     <!--
       Retained from the upstream MeltySynth test suite, which uses it for the FFT in the
       Freeverb impulse-response comparison. Test-only; MIT.
