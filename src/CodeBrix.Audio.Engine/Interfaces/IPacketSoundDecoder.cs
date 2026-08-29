@@ -83,6 +83,13 @@ public interface IPacketSoundDecoder : IDisposable
     /// length (a total-sample count, or an end-trim / discard-padding field), the caller applies it to
     /// the samples this method returns.
     /// </para>
+    /// <para>
+    /// AN EMPTY PACKET MEANS ONE PACKET WAS LOST. It is the long-standing convention for telling a
+    /// decoder to conceal a gap it was given no bytes for, and a decoder with concealment of its own
+    /// answers it with a packet's worth of concealment audio. A decoder without any returns zero. A
+    /// caller that knows HOW LONG the gap was should use <see cref="ConcealLoss"/> instead, which
+    /// says so rather than leaving the decoder to assume one packet.
+    /// </para>
     /// </remarks>
     /// <exception cref="ArgumentException">
     /// <paramref name="output"/> is too small for the samples this packet produces. Sizing it to
@@ -100,4 +107,63 @@ public interface IPacketSoundDecoder : IDisposable
     /// Vorbis, about 80 ms for Opus - and discards what comes back until the target is reached.
     /// </remarks>
     void Reset();
+
+    /// <summary>
+    /// Gets whether <see cref="ConcealLoss"/> produces real concealment audio for a gap, rather than
+    /// leaving the caller to fill it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// False by default, which is the honest answer for a codec with no packet-loss concealment of
+    /// its own (Vorbis, for one): a gap in such a stream becomes silence of the right length. A
+    /// decoder whose codec CAN synthesise plausible audio across a gap - Opus, whose concealment is
+    /// part of the specification - overrides this and returns true, so an application can say which
+    /// of the two it is getting without calling <see cref="ConcealLoss"/> to find out.
+    /// </para>
+    /// <para>
+    /// A player does not need to consult it: <see cref="ConcealLoss"/> is safe to call either way,
+    /// and a caller that gets nothing back fills the gap itself.
+    /// </para>
+    /// </remarks>
+    bool SupportsLossConcealment => false;
+
+    /// <summary>
+    /// Produces concealment audio for a gap of <paramref name="lostFrames"/> frames per channel -
+    /// audio the demultiplexer knows is missing, because packets were lost or a container recorded a
+    /// discontinuity.
+    /// </summary>
+    /// <param name="lostFrames">
+    /// How long the gap is, counted in FRAMES PER CHANNEL at <see cref="SampleRate"/> - the same unit
+    /// as <see cref="PreSkipSamples"/>. Must not be negative.
+    /// </param>
+    /// <param name="output">
+    /// The buffer to write interleaved samples into. Size it to <see cref="MaxSamplesPerPacket"/>, as
+    /// for <see cref="DecodePacket"/>.
+    /// </param>
+    /// <returns>
+    /// The number of interleaved samples written, which may be FEWER than
+    /// <paramref name="lostFrames"/> multiplied by <see cref="Channels"/> - a codec that conceals in
+    /// fixed-size steps covers a long gap over several calls - and may be zero when the decoder has
+    /// no concealment to offer. Never more than <see cref="MaxSamplesPerPacket"/>.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// THE CALLER LOOPS. Call this until the gap is covered, feeding the frames still missing each
+    /// time, and fill whatever is left over with silence when a call comes back with zero. That
+    /// keeps the timeline intact whatever the decoder does: the audio after the gap stays where it
+    /// belongs, rather than sliding earlier by the length of what was lost.
+    /// </para>
+    /// <para>
+    /// The default implementation forwards to <c>DecodePacket</c> with an empty packet, which is the
+    /// long-standing way of telling a decoder "one packet was lost, do what you can". A decoder that
+    /// already conceals that way keeps working with no change; one with real concealment overrides
+    /// this so it can conceal the length the container actually lost instead of guessing at one
+    /// packet.
+    /// </para>
+    /// <para>
+    /// Like <see cref="DecodePacket"/>, this advances the decoder's state: the gap becomes part of
+    /// the stream, and the packet fed afterwards is decoded as the one that follows it.
+    /// </para>
+    /// </remarks>
+    int ConcealLoss(int lostFrames, Span<float> output) => DecodePacket(ReadOnlySpan<byte>.Empty, output);
 }

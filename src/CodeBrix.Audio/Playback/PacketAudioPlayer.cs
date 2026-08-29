@@ -43,6 +43,13 @@ namespace CodeBrix.Audio.Playback;
 /// kHz is what media containers carry, and when the device runs at the media's rate no conversion
 /// runs at all.
 /// </para>
+/// <para>
+/// TWO THINGS THE CONTAINER KNOWS AND THE CODEC DOES NOT, both handled here.
+/// <see cref="SetTrailingTrim(TimeSpan)"/> says how much of the END of the track is encoder padding
+/// that must never be heard, and <see cref="AudioPacket.Loss(System.TimeSpan, System.Nullable{System.TimeSpan})"/>
+/// says that packets went missing and how much audio they held, so the gap comes out the length it
+/// really was instead of the audio after it sliding earlier.
+/// </para>
 /// <para>Dispose when finished; the voice is removed from the mixer and the decoder released.</para>
 /// </remarks>
 public sealed class PacketAudioPlayer : IDisposable
@@ -54,6 +61,9 @@ public sealed class PacketAudioPlayer : IDisposable
     private SoundPlayer _player;
     private SynchronizationContext _syncContext;
     private float _volume = 1.0f;
+    private TimeSpan _trailingTrim;
+    private int _trailingTrimFrames;
+    private bool _trailingTrimInFrames;
     private bool _endedRaised;
     private bool _disposed;
 
@@ -134,6 +144,130 @@ public sealed class PacketAudioPlayer : IDisposable
     public int Channels
     {
         get { lock (_lock) { return _adapter == null ? 0 : _adapter.NativeChannels; } }
+    }
+
+    /// <summary>
+    /// How much of the very END of the audio is never played: the encoder padding a container
+    /// records for the last of a track's packets. <see cref="TimeSpan.Zero"/> - no trim - unless
+    /// <see cref="SetTrailingTrim(TimeSpan)"/> or <see cref="SetTrailingTrimFrames"/> said otherwise.
+    /// </summary>
+    /// <remarks>
+    /// A trim set in frames reads back as a duration once audio is open, because that is when the
+    /// sample rate turning frames into time is known; before then it reads
+    /// <see cref="TimeSpan.Zero"/>.
+    /// </remarks>
+    public TimeSpan TrailingTrim
+    {
+        get
+        {
+            lock (_lock)
+            {
+                if (!_trailingTrimInFrames)
+                {
+                    return _trailingTrim;
+                }
+                return _adapter == null
+                    ? TimeSpan.Zero
+                    : TimeSpan.FromSeconds(_trailingTrimFrames / (double)_adapter.NativeSampleRate);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Says how much of the very END of the audio must never be heard, because it is encoder padding
+    /// rather than content. Settable before or after <see cref="Open(string, ReadOnlyMemory{byte}, IAudioPacketSource)"/>,
+    /// and at any time before the source reaches its end.
+    /// </summary>
+    /// <param name="trim">
+    /// How much of the tail to swallow. <see cref="TimeSpan.Zero"/> - the default - plays everything
+    /// the packets contain.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="trim"/> is negative.</exception>
+    /// <exception cref="ObjectDisposedException">The player has been disposed.</exception>
+    /// <remarks>
+    /// <para>
+    /// WHY IT EXISTS. An encoder pads the end of what it encodes, and the container - not the codec -
+    /// is what records how much: Matroska writes a DiscardPadding on the last block, other containers
+    /// state a trailing sample count. Without this the padding plays, which is tens of milliseconds
+    /// of encoder tail at the end of every track.
+    /// </para>
+    /// <para>
+    /// WHAT IT DOES. The last <paramref name="trim"/> of everything the source will ever deliver is
+    /// held back and then thrown away. The player cannot know which packet is the last one until the
+    /// source says so, so it keeps the most recent <paramref name="trim"/> worth of decoded audio in
+    /// hand and releases a sample to the mixer only once more than that much has been decoded behind
+    /// it. When the source reports the end of the stream, what is still in hand is discarded. The
+    /// cost is latency of exactly <paramref name="trim"/> - normally less than one packet - and no
+    /// allocation while playing.
+    /// </para>
+    /// <para>
+    /// <see cref="Position"/> never counts trimmed audio, because it counts what reached the mixer.
+    /// <see cref="Seek"/> clears what is in hand (the audio around a jump is not the end of the
+    /// track) but keeps the trim itself, which belongs to the track rather than to the moment. So
+    /// does the trim survive <see cref="Open(string, ReadOnlyMemory{byte}, IAudioPacketSource)"/>:
+    /// set it again - or to <see cref="TimeSpan.Zero"/> - when opening a different track.
+    /// </para>
+    /// <para>
+    /// A packet may also carry its own <see cref="AudioPacket.DiscardPadding"/>, and the larger of
+    /// the two wins, so a container may pass its per-block value through instead of calling this.
+    /// A trim longer than the whole track leaves nothing to hear and still ends cleanly, raising
+    /// <see cref="PlaybackEnded"/>.
+    /// </para>
+    /// </remarks>
+    public void SetTrailingTrim(TimeSpan trim)
+    {
+        if (trim < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(trim), trim, "A trailing trim cannot be negative.");
+        }
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            _trailingTrim = trim;
+            _trailingTrimFrames = 0;
+            _trailingTrimInFrames = false;
+            if (_adapter != null)
+            {
+                _adapter.SetTrailingTrimFrames(FramesFromDuration(trim, _adapter.NativeSampleRate));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The exact form of <see cref="SetTrailingTrim(TimeSpan)"/>, for a container that states its
+    /// trailing padding as a sample count rather than as a duration.
+    /// </summary>
+    /// <param name="frames">
+    /// How much of the tail to swallow, counted in FRAMES PER CHANNEL at the decoder's own sample
+    /// rate - the unit <c>IPacketSoundDecoder.PreSkipSamples</c> uses at the other end of the track.
+    /// Zero plays everything.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="frames"/> is negative.</exception>
+    /// <exception cref="ObjectDisposedException">The player has been disposed.</exception>
+    /// <remarks>
+    /// Everything <see cref="SetTrailingTrim(TimeSpan)"/> says applies here; only the unit differs.
+    /// Frames go through no rounding, so a container that knows its padding to the sample should say
+    /// it this way.
+    /// </remarks>
+    public void SetTrailingTrimFrames(int frames)
+    {
+        if (frames < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(frames), frames, "A trailing trim cannot be negative.");
+        }
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            _trailingTrimFrames = frames;
+            _trailingTrim = TimeSpan.Zero;
+            _trailingTrimInFrames = true;
+            if (_adapter != null)
+            {
+                _adapter.SetTrailingTrimFrames(frames);
+            }
+        }
     }
 
     /// <summary>
@@ -364,6 +498,16 @@ public sealed class PacketAudioPlayer : IDisposable
                 throw;
             }
 
+            // The trailing trim belongs to the track and is set before or after opening, so whatever
+            // is on the player now is handed to the adapter that will apply it.
+            var trimFrames = _trailingTrimInFrames
+                ? _trailingTrimFrames
+                : FramesFromDuration(_trailingTrim, adapter.NativeSampleRate);
+            if (trimFrames > 0)
+            {
+                adapter.SetTrailingTrimFrames(trimFrames);
+            }
+
             _adapter = adapter;
             _provider = provider;
             _player = player;
@@ -467,6 +611,18 @@ public sealed class PacketAudioPlayer : IDisposable
         }
     }
 
+    // A duration in frames at a given rate, rounded to the nearest frame and never negative.
+    internal static int FramesFromDuration(TimeSpan duration, int sampleRate)
+    {
+        if (duration <= TimeSpan.Zero || sampleRate <= 0)
+        {
+            return 0;
+        }
+
+        var frames = Math.Round(duration.TotalSeconds * sampleRate);
+        return frames >= int.MaxValue ? int.MaxValue : (int)frames;
+    }
+
     /// <summary>
     /// Turns the packet feed into the stream of samples the engine wants: pulls packets, decodes
     /// them, and lets <see cref="ManagedSoundDecoder"/> do the channel and rate conversion to the
@@ -480,9 +636,12 @@ public sealed class PacketAudioPlayer : IDisposable
         private readonly bool ownsDecoder;
         private readonly float[] packetSamples;
 
+        private readonly object trimLock = new object();
+
         private int pendingOffset;
         private int pendingCount;
         private int discardFrames;
+        private int pendingLossFrames;
         private bool sourceEnded;
 
         private long decodedFrames;
@@ -490,6 +649,28 @@ public sealed class PacketAudioPlayer : IDisposable
 
         private long pendingBaseTicks;
         private int pendingDiscardFrames;
+
+        // THE TRAILING-TRIM HOLD-BACK. A ring of the most recently decoded samples that have NOT been
+        // handed to the mixer yet, because they might turn out to be the encoder padding at the end
+        // of the track. A sample leaves the ring only once holdCapacity samples have been decoded
+        // behind it; whatever is still in the ring when the source ends is thrown away.
+        //
+        // holdBuffer only ever grows, so lowering the trim needs no allocation and raising it needs
+        // one only when the new trim is longer than any previous one. holdCount may briefly exceed
+        // holdCapacity after the trim is lowered; the surplus is released before anything new goes in.
+        private float[] holdBuffer = new float[0];
+        private int holdStart;
+        private int holdCount;
+        private int trimSamples;
+        private int packetTrimSamples;
+        private int holdCapacity;
+
+        // Set by SetTrailingTrimFrames on whatever thread the application calls it from, and picked
+        // up by the audio thread at the top of the next read. The replacement buffer is allocated by
+        // the setting thread so the audio thread does not have to.
+        private volatile bool trimChangePending;
+        private float[] pendingHoldBuffer;
+        private int pendingTrimSamples;
 
         public PacketDecoderAdapter(IPacketSoundDecoder packetDecoder, IAudioPacketSource source,
             bool ownsDecoder, int channels, int sampleRate)
@@ -555,26 +736,89 @@ public sealed class PacketAudioPlayer : IDisposable
             Seek(0);
         }
 
+        /// <summary>
+        /// Sets how much of the end of the track must never be heard, in frames per channel at the
+        /// decoder's own rate. Safe to call from any thread, at any time.
+        /// </summary>
+        /// <param name="frames">The trailing trim in frames per channel; 0 plays everything.</param>
+        public void SetTrailingTrimFrames(int frames)
+        {
+            var samples = (long)Math.Max(0, frames) * NativeChannels;
+            var capped = samples > int.MaxValue ? int.MaxValue : (int)samples;
+
+            lock (trimLock)
+            {
+                pendingTrimSamples = capped;
+
+                // Allocate here rather than on the audio thread. A buffer that is already big enough
+                // is kept, which is what makes lowering the trim - and setting it back to zero -
+                // allocation-free.
+                pendingHoldBuffer = capped > holdBuffer.Length ? new float[capped] : null;
+                trimChangePending = true;
+            }
+        }
+
         /// <inheritdoc />
         protected override int ReadSourceSamples(Span<float> destination)
         {
+            if (trimChangePending)
+            {
+                ApplyTrimChange();
+            }
+
             var written = 0;
             long framesAdvanced = 0;
 
             while (written < destination.Length)
             {
+                if (holdCount > holdCapacity)
+                {
+                    // The trim was lowered while audio was in flight; what is no longer inside the
+                    // window is owed to the mixer, so it goes out before anything new comes in.
+                    var flushed = PushThroughHoldBack(ReadOnlySpan<float>.Empty,
+                        destination.Slice(written), out _);
+                    written += flushed;
+                    framesAdvanced += flushed / NativeChannels;
+                    continue;
+                }
+
                 if (pendingCount > 0)
                 {
-                    var take = Math.Min(pendingCount, destination.Length - written);
-                    new ReadOnlySpan<float>(packetSamples, pendingOffset, take)
-                        .CopyTo(destination.Slice(written, take));
+                    int take;
+                    int handedOver;
+
+                    if (holdCapacity == 0)
+                    {
+                        // No trim: the samples go straight out, exactly as they did before the
+                        // hold-back existed.
+                        take = Math.Min(pendingCount, destination.Length - written);
+                        new ReadOnlySpan<float>(packetSamples, pendingOffset, take)
+                            .CopyTo(destination.Slice(written, take));
+                        handedOver = take;
+                    }
+                    else
+                    {
+                        handedOver = PushThroughHoldBack(
+                            new ReadOnlySpan<float>(packetSamples, pendingOffset, pendingCount),
+                            destination.Slice(written), out take);
+                    }
+
                     pendingOffset += take;
                     pendingCount -= take;
-                    written += take;
+                    written += handedOver;
 
                     // The clock counts audio handed over, not audio decoded: a packet decoded but
-                    // still waiting in the buffer has not been heard yet.
-                    framesAdvanced += take / NativeChannels;
+                    // still waiting in the buffer - or held back as possible end-of-track padding -
+                    // has not been heard yet.
+                    framesAdvanced += handedOver / NativeChannels;
+                    continue;
+                }
+
+                if (pendingLossFrames > 0)
+                {
+                    // A gap the source reported: as much concealment as the decoder will give for it,
+                    // silence for the rest, in helpings of at most one packet.
+                    framesAdvanced += ProduceConcealment();
                     continue;
                 }
 
@@ -589,7 +833,10 @@ public sealed class PacketAudioPlayer : IDisposable
                     if (source.EndOfStream)
                     {
                         // Everything the source will ever deliver has been decoded and handed over.
+                        // What is still held back IS the end-of-track padding: drop it.
                         sourceEnded = true;
+                        holdStart = 0;
+                        holdCount = 0;
                         break;
                     }
 
@@ -601,9 +848,20 @@ public sealed class PacketAudioPlayer : IDisposable
                     break;
                 }
 
-                var produced = packet.IsEmpty
-                    ? 0
-                    : packetDecoder.DecodePacket(packet.Data.Span, packetSamples);
+                if (packet.IsLoss)
+                {
+                    var lostFrames = packet.LossFrames > 0
+                        ? packet.LossFrames
+                        : FramesFromDuration(packet.LossDuration, NativeSampleRate);
+                    pendingLossFrames = lostFrames;
+                    continue;
+                }
+
+                SetPacketTrim(packet.DiscardPadding);
+
+                // An empty packet is the lengthless way of saying one packet was lost; the decoder
+                // is the one that knows what to do about it, so it is passed straight through.
+                var produced = packetDecoder.DecodePacket(packet.Data.Span, packetSamples);
 
                 if (produced <= 0)
                 {
@@ -614,18 +872,7 @@ public sealed class PacketAudioPlayer : IDisposable
 
                 pendingOffset = 0;
                 pendingCount = produced;
-
-                if (discardFrames > 0)
-                {
-                    var dropFrames = Math.Min(discardFrames, produced / NativeChannels);
-                    pendingOffset += dropFrames * NativeChannels;
-                    pendingCount -= dropFrames * NativeChannels;
-                    discardFrames -= dropFrames;
-
-                    // Discarded audio is media time even though nobody hears it, so the clock reads
-                    // the sought-to position once a pre-roll has been worked through.
-                    framesAdvanced += dropFrames;
-                }
+                framesAdvanced += TakeStartDiscard();
             }
 
             if (framesAdvanced > 0)
@@ -639,6 +886,217 @@ public sealed class PacketAudioPlayer : IDisposable
             return written;
         }
 
+        // Drops as much of what was just decoded as the codec's priming or a seek pre-roll still
+        // calls for, and returns how many frames that was. Discarded audio is media time even though
+        // nobody hears it, so the clock reads the sought-to position once a pre-roll is worked
+        // through.
+        private int TakeStartDiscard()
+        {
+            if (discardFrames <= 0)
+            {
+                return 0;
+            }
+
+            var dropFrames = Math.Min(discardFrames, pendingCount / NativeChannels);
+            pendingOffset += dropFrames * NativeChannels;
+            pendingCount -= dropFrames * NativeChannels;
+            discardFrames -= dropFrames;
+            return dropFrames;
+        }
+
+        // Fills the packet buffer with one helping of concealment for the gap still outstanding, and
+        // returns the frames of it that a start discard swallowed.
+        private int ProduceConcealment()
+        {
+            // Whole frames only: the buffer is sized to the decoder's own MaxSamplesPerPacket.
+            var roomFrames = packetSamples.Length / NativeChannels;
+            if (pendingLossFrames <= 0 || roomFrames <= 0)
+            {
+                pendingLossFrames = 0;
+                return 0;
+            }
+
+            // The decoder is told how much is STILL missing, not how much will fit, so a codec that
+            // conceals in its own fixed steps can choose the step. What comes back is capped by both.
+            var produced = packetDecoder.ConcealLoss(pendingLossFrames, packetSamples);
+            var cap = (int)Math.Min((long)pendingLossFrames * NativeChannels, roomFrames * (long)NativeChannels);
+
+            if (produced <= 0)
+            {
+                // The decoder has no concealment to offer. Silence of exactly the right length keeps
+                // the timeline honest: what follows the gap stays where it belongs instead of
+                // sliding earlier by the length of what was lost.
+                new Span<float>(packetSamples, 0, cap).Clear();
+                produced = cap;
+            }
+            else if (produced > cap)
+            {
+                // A decoder that hands back more than the gap - or more than the buffer holds - is
+                // trimmed to it rather than trusted.
+                produced = cap;
+            }
+
+            pendingOffset = 0;
+            pendingCount = produced;
+
+            var coveredFrames = produced / NativeChannels;
+            pendingLossFrames = Math.Max(0, pendingLossFrames - coveredFrames);
+
+            return TakeStartDiscard();
+        }
+
+        // Remembers the padding the most recent packet declared. It raises the hold-back only while
+        // that packet is the most recent one, so a value on the LAST packet trims the track and a
+        // value anywhere else merely delays audio that the next packet lets through.
+        private void SetPacketTrim(TimeSpan discardPadding)
+        {
+            var frames = FramesFromDuration(discardPadding, NativeSampleRate);
+            var samples = (long)frames * NativeChannels;
+            var capped = samples > int.MaxValue ? int.MaxValue : (int)samples;
+            if (capped == packetTrimSamples)
+            {
+                return;
+            }
+
+            packetTrimSamples = capped;
+            UpdateHoldCapacity(null);
+        }
+
+        // Picks up a trim change published by SetTrailingTrimFrames.
+        private void ApplyTrimChange()
+        {
+            float[] supplied;
+            int samples;
+
+            lock (trimLock)
+            {
+                trimChangePending = false;
+                supplied = pendingHoldBuffer;
+                pendingHoldBuffer = null;
+                samples = pendingTrimSamples;
+            }
+
+            trimSamples = samples;
+            UpdateHoldCapacity(supplied);
+        }
+
+        // Recomputes the hold-back window from the track-level trim and the most recent packet's
+        // padding, growing the ring if the window no longer fits in it.
+        private void UpdateHoldCapacity(float[] supplied)
+        {
+            var wanted = Math.Max(trimSamples, packetTrimSamples);
+            if (wanted > holdBuffer.Length)
+            {
+                GrowHoldBuffer(wanted, supplied);
+            }
+            holdCapacity = wanted;
+        }
+
+        // Moves whatever is held into a bigger ring, oldest sample first, so nothing is lost when the
+        // window grows.
+        private void GrowHoldBuffer(int samples, float[] supplied)
+        {
+            var replacement = supplied != null && supplied.Length >= samples ? supplied : new float[samples];
+            var held = holdCount;
+            if (held > 0)
+            {
+                CopyOutOfRing(new Span<float>(replacement, 0, held));
+            }
+
+            holdBuffer = replacement;
+            holdStart = 0;
+            holdCount = held;
+        }
+
+        // Pushes as much of input through the hold-back as destination has room for, releasing the
+        // samples that fall out of the back of the window. Returns the samples written to
+        // destination; consumed receives the samples taken from input.
+        private int PushThroughHoldBack(ReadOnlySpan<float> input, Span<float> destination, out int consumed)
+        {
+            var room = holdCapacity - holdCount;                  // negative after the trim is lowered
+            var maxConsume = destination.Length + room;
+            if (maxConsume < 0)
+            {
+                maxConsume = 0;
+            }
+            consumed = Math.Min(input.Length, maxConsume);
+
+            var release = holdCount + consumed - holdCapacity;
+            if (release < 0)
+            {
+                release = 0;
+            }
+            if (release > destination.Length)
+            {
+                release = destination.Length;
+            }
+
+            var written = 0;
+
+            var fromRing = Math.Min(release, holdCount);
+            if (fromRing > 0)
+            {
+                CopyOutOfRing(destination.Slice(0, fromRing));
+                written = fromRing;
+            }
+
+            // Once the ring is empty the rest of what is released comes straight from the input; only
+            // what is left after that goes into the ring.
+            var fromInput = release - fromRing;
+            if (fromInput > 0)
+            {
+                input.Slice(0, fromInput).CopyTo(destination.Slice(written, fromInput));
+                written += fromInput;
+            }
+
+            var intoRing = consumed - fromInput;
+            if (intoRing > 0)
+            {
+                CopyIntoRing(input.Slice(fromInput, intoRing));
+            }
+
+            return written;
+        }
+
+        // Takes the oldest samples out of the ring, wrapping if they straddle the end of the buffer.
+        private void CopyOutOfRing(Span<float> destination)
+        {
+            var count = destination.Length;
+            var first = Math.Min(count, holdBuffer.Length - holdStart);
+            new ReadOnlySpan<float>(holdBuffer, holdStart, first).CopyTo(destination);
+            if (first < count)
+            {
+                new ReadOnlySpan<float>(holdBuffer, 0, count - first).CopyTo(destination.Slice(first));
+            }
+
+            holdStart += count;
+            if (holdStart >= holdBuffer.Length)
+            {
+                holdStart -= holdBuffer.Length;
+            }
+            holdCount -= count;
+        }
+
+        // Appends samples to the ring, wrapping if they straddle the end of the buffer.
+        private void CopyIntoRing(ReadOnlySpan<float> source)
+        {
+            var count = source.Length;
+            var end = holdStart + holdCount;
+            if (end >= holdBuffer.Length)
+            {
+                end -= holdBuffer.Length;
+            }
+
+            var first = Math.Min(count, holdBuffer.Length - end);
+            source.Slice(0, first).CopyTo(new Span<float>(holdBuffer, end, first));
+            if (first < count)
+            {
+                source.Slice(first).CopyTo(new Span<float>(holdBuffer, 0, count - first));
+            }
+
+            holdCount += count;
+        }
+
         /// <inheritdoc />
         /// <remarks>
         /// There is nothing here to seek IN - the container does that, on the far side of the packet
@@ -650,8 +1108,21 @@ public sealed class PacketAudioPlayer : IDisposable
             packetDecoder.Reset();
             pendingOffset = 0;
             pendingCount = 0;
+            pendingLossFrames = 0;
             sourceEnded = false;
             discardFrames = pendingDiscardFrames;
+
+            // What is held back describes the audio just before the jump, and a jump is not the end
+            // of the track, so it is dropped. The trim itself belongs to the track and stays; so does
+            // the ring it lives in, which is why a seek allocates nothing. A per-packet padding is a
+            // property of a packet that is no longer the current one.
+            holdStart = 0;
+            holdCount = 0;
+            if (packetTrimSamples != 0)
+            {
+                packetTrimSamples = 0;
+                UpdateHoldCapacity(null);
+            }
 
             lock (clockLock)
             {

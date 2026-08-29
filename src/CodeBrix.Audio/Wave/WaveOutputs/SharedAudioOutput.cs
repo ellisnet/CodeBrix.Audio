@@ -240,6 +240,139 @@ public static class SharedAudioOutput
     }
 
     /// <summary>
+    /// Whether a packet decoder for <paramref name="codecId"/> WOULD be available on the shared
+    /// output - without starting the shared output or touching the audio device.
+    /// </summary>
+    /// <param name="codecId">The codec identifier to ask about, matched case-insensitively.</param>
+    /// <returns>
+    /// True when a packet codec factory serving that codec is built into this package or has been
+    /// added with <see cref="RegisterPacketCodecFactory"/>; false otherwise, including for a null or
+    /// empty identifier.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// This is the question <see cref="CreatePacketDecoder"/> cannot answer cheaply:
+    /// <see cref="CreatePacketDecoder"/> resolves through the running engine, so merely asking it
+    /// opens the audio device. Use this when availability is all that is wanted - deciding whether
+    /// to offer a track, choosing between two audio streams in a container, telling a user what is
+    /// missing - and <see cref="CreatePacketDecoder"/> only when a decoder is actually going to be
+    /// used.
+    /// </para>
+    /// <para>
+    /// IT ANSWERS FOR THE SHARED OUTPUT ONLY. A factory registered directly on some
+    /// <see cref="AudioEngine"/> instance with <see cref="AudioEngine.RegisterPacketCodecFactory"/>
+    /// is invisible here, because that engine is not the shared output's. Register through
+    /// <see cref="RegisterPacketCodecFactory"/> to be seen by both.
+    /// </para>
+    /// <para>
+    /// It is a question about the SEAM, not about a particular track: a factory may still decline a
+    /// specific piece of codec-private data (wrong shape, an unsupported profile), which is why
+    /// <see cref="CreatePacketDecoder"/> can still throw for a codec this reports as supported.
+    /// </para>
+    /// </remarks>
+    public static bool IsPacketCodecSupported(string codecId)
+    {
+        if (string.IsNullOrEmpty(codecId))
+        {
+            return false;
+        }
+
+        foreach (var factory in ManagedCodecs.BuiltInPacketCodecFactories)
+        {
+            if (ServesCodec(factory, codecId))
+            {
+                return true;
+            }
+        }
+
+        lock (Gate)
+        {
+            foreach (var factory in ExtraPacketCodecFactories)
+            {
+                if (ServesCodec(factory, codecId))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Every codec identifier <see cref="IsPacketCodecSupported"/> answers true for: the packet
+    /// codecs built into this package first, then those added with
+    /// <see cref="RegisterPacketCodecFactory"/> in registration order. Reading it does not start the
+    /// shared output.
+    /// </summary>
+    /// <remarks>
+    /// Identifiers are reported exactly as their factories declare them, de-duplicated
+    /// case-insensitively, so a codec two factories both serve appears once. Useful for a diagnostic
+    /// listing or a message that says what a package could not play and what it can.
+    /// </remarks>
+    public static IReadOnlyCollection<string> SupportedPacketCodecIds
+    {
+        get
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var ids = new List<string>();
+
+            foreach (var factory in ManagedCodecs.BuiltInPacketCodecFactories)
+            {
+                CollectCodecIds(factory, seen, ids);
+            }
+
+            lock (Gate)
+            {
+                foreach (var factory in ExtraPacketCodecFactories)
+                {
+                    CollectCodecIds(factory, seen, ids);
+                }
+            }
+
+            return ids.AsReadOnly();
+        }
+    }
+
+    // Whether one factory declares the codec, matched the way the engine's packet registry matches.
+    private static bool ServesCodec(IPacketCodecFactory factory, string codecId)
+    {
+        var supported = factory == null ? null : factory.SupportedCodecIds;
+        if (supported == null)
+        {
+            return false;
+        }
+
+        foreach (var id in supported)
+        {
+            if (string.Equals(id, codecId, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Adds one factory's codec identifiers to the running list, skipping ones already there.
+    private static void CollectCodecIds(IPacketCodecFactory factory, HashSet<string> seen, List<string> ids)
+    {
+        var supported = factory == null ? null : factory.SupportedCodecIds;
+        if (supported == null)
+        {
+            return;
+        }
+
+        foreach (var id in supported)
+        {
+            if (!string.IsNullOrEmpty(id) && seen.Add(id))
+            {
+                ids.Add(id);
+            }
+        }
+    }
+
+    /// <summary>
     /// Creates a decoder for audio that arrives as container packets, using the codecs registered
     /// with the shared output.
     /// </summary>
@@ -260,8 +393,14 @@ public static class SharedAudioOutput
     /// </para>
     /// <para>
     /// The codec registry belongs to the running engine, so this STARTS the shared output if it is
-    /// not already running, at 48 kHz unless <see cref="Configure"/> pinned a rate. An application
-    /// that plays audio at another rate should call <see cref="Configure"/> at start-up.
+    /// not already running, at 48 kHz unless <see cref="Configure"/> pinned a rate - which means it
+    /// opens the audio device. An application that plays audio at another rate should call
+    /// <see cref="Configure"/> at start-up.
+    /// </para>
+    /// <para>
+    /// A CALLER THAT ONLY WANTS TO KNOW WHETHER A CODEC IS AVAILABLE MUST NOT ASK THIS. Use
+    /// <see cref="IsPacketCodecSupported"/>, which answers the same question about the same
+    /// factories and starts nothing.
     /// </para>
     /// </remarks>
     public static IPacketSoundDecoder CreatePacketDecoder(string codecId, ReadOnlyMemory<byte> codecPrivate,
@@ -394,7 +533,9 @@ public static class SharedAudioOutput
                 }
 
                 // Same again for the packet seam: the built-in managed packet codecs went in with
-                // ManagedCodecs.RegisterAll above, so anything an add-on package registered is
+                // ManagedCodecs.RegisterAll above - from ManagedCodecs.BuiltInPacketCodecFactories,
+                // which is also what IsPacketCodecSupported consults, so the probe cannot disagree
+                // with what is registered here - and anything an add-on package registered is
                 // applied on top of them.
                 foreach (var packetFactory in ExtraPacketCodecFactories)
                 {

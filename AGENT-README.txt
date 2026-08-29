@@ -549,6 +549,8 @@ has its own three pieces.
          int PreSkipSamples { get; }        // codec priming, per channel
          void Reset()                       // after the source jumps
          int Channels { get; } int SampleRate { get; }
+         int ConcealLoss(int lostFrames, Span<float> output)   // a gap
+         bool SupportsLossConcealment { get; }
 
      TWO THINGS SURPRISE PEOPLE. DecodePacket may return ZERO and that is
      success, not an ending: a lapped-transform codec finalises a packet's
@@ -556,7 +558,21 @@ has its own three pieces.
      packet after construction or Reset() yields nothing. And the decoder does
      not trim the end of the stream - the container knows where the audio really
      stops (a total-sample count, an end-trim field), so applying that is the
-     caller's job.
+     caller's job. PacketAudioPlayer.SetTrailingTrim does it for you; see
+     TRIMMING THE END OF A TRACK below.
+
+     ConcealLoss and SupportsLossConcealment have DEFAULT IMPLEMENTATIONS, so an
+     existing decoder keeps compiling and working untouched. The default
+     forwards to DecodePacket with an EMPTY packet, which is the long-standing
+     way of saying "one packet was lost", and reports SupportsLossConcealment as
+     false. A decoder whose codec really can synthesise audio across a gap
+     overrides both, so it can conceal the length the container actually lost
+     instead of assuming one packet. lostFrames counts FRAMES PER CHANNEL at the
+     decoder's own rate, like PreSkipSamples; `output` is sized to
+     MaxSamplesPerPacket as usual, and a call may cover less than was asked for
+     and be called again. The built-in Vorbis decoder has no concealment - it
+     answers a gap with SILENCE of exactly the right length, so the timeline
+     keeps its shape - and the CodeBrix.Audio.Opus package conceals for real.
 
   2. IPacketCodecFactory (same namespace) is how a codec gets registered, and it
      mirrors ICodecFactory exactly - FactoryId, Priority, and SupportedCodecIds,
@@ -572,9 +588,30 @@ has its own three pieces.
      and always registered; Opus packets come with the CodeBrix.Audio.Opus
      add-on package.
 
+     To ASK WHETHER A CODEC IS AVAILABLE, without starting anything:
+
+         bool ok = SharedAudioOutput.IsPacketCodecSupported("opus");
+         IReadOnlyCollection<string> all = SharedAudioOutput.SupportedPacketCodecIds;
+
+     Both are matched case-insensitively, neither starts the shared output, and
+     neither opens the audio device. They answer for the SHARED OUTPUT: the
+     packet codecs built into this package plus everything registered with
+     SharedAudioOutput.RegisterPacketCodecFactory, in that order. A factory
+     registered directly on an AudioEngine of your own with
+     engine.RegisterPacketCodecFactory(...) is NOT visible to them, because that
+     engine is not the shared output's - register through SharedAudioOutput to
+     be seen by both. It is a question about the seam, not about one track: a
+     factory may still decline a particular piece of codecPrivate.
+
      To decode packets yourself, without playing them:
 
          var decoder = SharedAudioOutput.CreatePacketDecoder("vorbis", codecPrivate);
+
+     CREATEPACKETDECODER STARTS THE SHARED OUTPUT - it opens the audio device,
+     because the codec registry lives on the running engine (at 48 kHz unless
+     Configure pinned a rate). Use it only when you are actually going to decode
+     something. If all you want to know is whether a codec is available, use
+     IsPacketCodecSupported, which starts nothing.
 
      `codecPrivate` is whatever the container carries for the track: for Vorbis
      the three Xiph-laced setup headers (a count byte, the lengths of the first
@@ -604,10 +641,13 @@ one:
     for the packets that follow. Playback ends only when EndOfStream is true and
     the decoded audio has run out, at which point PlaybackEnded is raised away
     from the audio thread.
-  - AudioPacket is a small struct carrying ReadOnlyMemory<byte> Data and an
-    optional Timestamp. The memory must stay valid until the next TryReadPacket
-    call - the player decodes each packet before asking for another and never
-    keeps one - so handing out slices of a rolling buffer is fine.
+  - AudioPacket is a small struct carrying ReadOnlyMemory<byte> Data, an
+    optional Timestamp, an optional DiscardPadding (see TRIMMING THE END OF A
+    TRACK) and, for a packet that reports a gap rather than delivering audio,
+    IsLoss / LossDuration / LossFrames (see REPORTING PACKET LOSS). The memory
+    must stay valid until the next TryReadPacket call - the player decodes each
+    packet before asking for another and never keeps one - so handing out slices
+    of a rolling buffer is fine.
 
 Playing:
 
@@ -648,6 +688,76 @@ own source FIRST, then tell the player where it now is:
     new position and then plays the old audio against it. Order matters.
   - A source that had reported EndOfStream is expected to report false again
     once it has been repositioned.
+
+TRIMMING THE END OF A TRACK. An encoder pads the end of what it encodes, and the
+CONTAINER - not the codec - records how much: a discard-padding value on the last
+block, a trailing sample count in the track header. Without that being applied,
+the padding plays: tens of milliseconds of encoder tail at the end of every
+track. Two ways to apply it, and you can use either or both:
+
+    player.SetTrailingTrim(TimeSpan.FromMilliseconds(12));   // a duration
+    player.SetTrailingTrimFrames(576);                       // frames/channel
+    TimeSpan trim = player.TrailingTrim;                     // what is in effect
+
+or let the packets carry it, which suits a container that states it per block:
+
+    packet = new AudioPacket(bytes, timestamp, discardPadding);
+
+  - HOW IT WORKS. The last `trim` worth of everything the source will ever
+    deliver is held back and then thrown away. The player cannot know which
+    packet is the last one until the source says so, so it keeps the most recent
+    `trim` worth of decoded audio in hand and releases a sample only once more
+    than that much has been decoded behind it; when the source reports the end
+    of the stream, what is still in hand is discarded. The cost is latency of
+    exactly `trim` - normally less than one packet - and no allocation while
+    playing.
+  - SET IT BEFORE OR AFTER Open, and at any time before the source ends. A trim
+    of zero plays everything, which is the default.
+  - FRAMES ARE THE EXACT FORM, counted per channel at the decoder's own rate -
+    the same unit as PreSkipSamples at the other end of the track. A duration is
+    rounded to the nearest frame.
+  - POSITION NEVER COUNTS TRIMMED AUDIO, because it counts what reached the
+    mixer.
+  - SEEK clears what is in hand - the audio around a jump is not the end of the
+    track - but keeps the trim itself, which belongs to the track. So does Open:
+    set the trim again, or to TimeSpan.Zero, when you open a different track.
+  - A trim longer than the whole track leaves nothing to hear and still ends
+    cleanly, raising PlaybackEnded.
+  - PER-PACKET PADDING is applied as the LARGER of AudioPacket.DiscardPadding on
+    the packet just delivered and the track-level trim, so passing a container's
+    per-block value straight through works. One caveat: a per-packet value is
+    only learned when that packet arrives, so it can only hold back what is
+    still in hand plus what that packet decodes to. A padding that can exceed
+    one packet should be set with SetTrailingTrim instead, which applies from
+    the start and is therefore always exact. A padding on a packet that is NOT
+    the last one merely delays audio - the next packet lets it out again -
+    rather than dropping it.
+  - The codec's own PreSkipSamples discard at the START of a track and this
+    trim at the END are independent of each other.
+
+REPORTING PACKET LOSS. When your demultiplexer can see that packets are missing
+- a jump in the timestamps, a container-level loss marker, a network read that
+gave up - say so, with the LENGTH:
+
+    packet = AudioPacket.Loss(TimeSpan.FromMilliseconds(60));   // a duration
+    packet = AudioPacket.Loss(2880);                            // frames/channel
+
+  - The player asks the decoder to conceal exactly that much (ConcealLoss, in
+    helpings of at most MaxSamplesPerPacket) and fills whatever the decoder
+    cannot with silence. Either way the gap comes out the length it really was,
+    so the audio after it keeps the position it had instead of sliding earlier.
+  - CONCEALED AUDIO IS MEDIA TIME: it advances Position, and it flows through
+    the trailing-trim hold-back like any other audio.
+  - DO NOT USE IT FOR AN UNDERRUN. A moment when your reader has not kept up is
+    not lost audio: return false from TryReadPacket, which costs nothing and
+    consumes none of the timeline.
+  - THE LENGTHLESS FORM STILL WORKS: a packet with empty Data and no loss marker
+    means one packet was lost without saying how long it was, and is passed to
+    the decoder as an empty packet - what it makes of that is its own business
+    (the built-in Vorbis decoder produces nothing, since it cannot know the
+    length).
+  - Seek forgets a gap that had not been covered yet: it belonged to the
+    position you left behind.
 
 RATE ADVICE: call SharedAudioOutput.Configure(48000) at start-up. Media
 containers carry 48 kHz (it is Opus's only rate), the only rate conversion in
@@ -1281,6 +1391,14 @@ QUICK REFERENCE CARD
   play codec packets from a container     new PacketAudioPlayer()
   add a packet codec from another package SharedAudioOutput
                                               .RegisterPacketCodecFactory
+  ask if a packet codec is available      SharedAudioOutput
+    (without opening the audio device)        .IsPacketCodecSupported("opus")
+  list the packet codecs available        SharedAudioOutput
+                                              .SupportedPacketCodecIds
+  cut the encoder padding off a track     packets.SetTrailingTrim(TimeSpan)
+                                          packets.SetTrailingTrimFrames(int)
+  tell the player packets went missing    AudioPacket.Loss(TimeSpan)
+                                          AudioPacket.Loss(int frames)
 
   SIGNATURES YOU WILL REACH FOR
     new AudioFileReader(string fileName)            // 32-bit float, any of the
@@ -1329,6 +1447,17 @@ QUICK REFERENCE CARD
                  IAudioPacketSource source)            // PacketAudioPlayer
     packets.Seek(TimeSpan firstPacketTimestamp, TimeSpan preRoll = default)
     packets.Position                                   // the audio clock
+    packets.SetTrailingTrim(TimeSpan trim)             // encoder padding at the
+    packets.SetTrailingTrimFrames(int frames)          // END of the track
+    packets.TrailingTrim                               // what is in effect
+    SharedAudioOutput.IsPacketCodecSupported(string codecId)   // starts nothing
+    SharedAudioOutput.SupportedPacketCodecIds                  // starts nothing
+    new AudioPacket(ReadOnlyMemory<byte> data, TimeSpan? timestamp,
+                    TimeSpan discardPadding)
+    AudioPacket.Loss(TimeSpan duration, TimeSpan? timestamp = null)
+    AudioPacket.Loss(int frames, TimeSpan? timestamp = null)
+    decoder.ConcealLoss(int lostFrames, Span<float> output)  // IPacketSoundDecoder
+    decoder.SupportsLossConcealment                          // default: false
 
   THE RULES YOU WILL OTHERWISE BREAK
     1. WaveStream readers give you BYTES. ToSampleProvider(), or AudioFileReader.
@@ -1348,4 +1477,10 @@ QUICK REFERENCE CARD
     8. A packet source is PULLED on the audio thread and must never block; an
        empty return is an underrun (silence, playback continues), not the end.
        Only EndOfStream ends it.
+    9. SharedAudioOutput.CreatePacketDecoder OPENS THE AUDIO DEVICE. To ask
+       whether a codec is available without starting anything, use
+       IsPacketCodecSupported.
+   10. The container, not the codec, knows where a track really stops. Apply it
+       with SetTrailingTrim (or AudioPacket.DiscardPadding) or the encoder's
+       padding plays.
 ================================================================================

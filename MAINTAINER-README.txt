@@ -356,6 +356,110 @@ never inline, because the handler stops the voice). The clock counts frames
 handed over plus frames discarded as priming or pre-roll, and never counts
 underrun silence.
 
+THE TRAILING-TRIM HOLD-BACK. A container states how much of the END of a track
+is encoder padding, and the decoder cannot apply it - it has no idea which
+packet is the last one until the source says so. PacketAudioPlayer therefore
+holds audio back rather than trimming it afterwards:
+PacketDecoderAdapter keeps a RING of the most recently decoded samples and lets
+one out only once holdCapacity samples have been decoded behind it. At the end
+of the stream, what is still in the ring IS the padding, and it is dropped. Two
+consequences fall straight out of that shape: latency is exactly the trim (under
+one packet in practice), and Position - which counts what was handed over -
+never counts a trimmed frame.
+
+  - THE RING GROWS AND NEVER SHRINKS. holdBuffer.Length is the physical modulus;
+    holdCapacity is the logical window, and may be smaller. Lowering the trim
+    therefore allocates nothing and leaves holdCount temporarily ABOVE
+    holdCapacity; the read loop releases that surplus before it takes anything
+    new in, so held audio is delayed rather than dropped. Raising the trim past
+    any previous value is the only case that allocates, and SetTrailingTrimFrames
+    allocates the replacement on the CALLING thread and publishes it through
+    trimChangePending, so the audio thread does not allocate either. Steady state
+    is allocation-free, and a test pins that with
+    GC.GetAllocatedBytesForCurrentThread.
+  - A TRIM OF ZERO IS THE OLD CODE PATH, byte for byte: holdCapacity == 0 takes
+    the straight copy the read loop always did, with no ring involved. A test
+    compares a zero-trim run against a run that never touches the feature.
+  - SEEK CLEARS THE RING but keeps the trim and the buffer: the audio around a
+    jump is not the end of the track, and the trim belongs to the track.
+  - PER-PACKET DISCARD PADDING (AudioPacket.DiscardPadding, Matroska's term)
+    feeds the SAME window: holdCapacity is max(track trim, the padding of the
+    most recent packet). Applying it that way, rather than remembering the
+    largest value seen, is what makes "the value on the LAST packet wins" fall
+    out naturally - a padding on a packet in the middle of a stream raises the
+    window only while that packet is the most recent, so its audio is delayed and
+    then released, while a padding on the last packet is still raised when the
+    stream ends. Its one limitation is inherent and is documented for consumers:
+    a per-packet value is only learned when that packet arrives, so it can hold
+    back only what is still in the ring plus what that packet decodes to. A trim
+    set in advance is the exact instrument; the per-packet value is the
+    convenient one.
+
+WHY THERE IS NO DRAIN() ON IPacketSoundDecoder. The obvious alternative to the
+hold-back is to have the decoder emit its final partial window and let the
+caller cut it. That would mean a new member on a PUBLISHED interface, which
+breaks every external implementer that does not know about it - and the packet
+seam exists precisely so that other packages can implement it. If a drain is
+ever genuinely needed, it goes on a SEPARATE optional interface that a decoder
+opts into (`is IPacketSoundDrain drain`), never as a required member here. The
+loss members added later (ConcealLoss, SupportsLossConcealment) went in as
+DEFAULT INTERFACE METHODS for exactly the same reason: a default body is
+additive, an abstract member is not.
+
+THE LOSS SEAM. A demultiplexer that can see packets are missing says so with
+AudioPacket.Loss(duration) or AudioPacket.Loss(frames), and the player asks the
+decoder to conceal exactly that length. The design points worth keeping:
+
+  - A DEFAULT INTERFACE METHOD, not a new required member. IPacketSoundDecoder
+    .ConcealLoss defaults to DecodePacket with an EMPTY packet, so a decoder
+    written before the member existed - including any third-party one - keeps
+    working and keeps whatever concealment it had behind the empty-packet
+    convention. SupportsLossConcealment defaults to false and is informational:
+    the player does not consult it, because it falls back to silence anyway.
+  - THE EMPTY-PACKET CONVENTION IS KEPT, and the player now honours it. It used
+    to short-circuit an empty packet to "nothing decoded" without calling the
+    decoder at all, which meant a decoder with concealment of its own never saw
+    the gap. An empty, non-loss packet is now passed straight to DecodePacket -
+    the lengthless way of saying one packet was lost. For the built-in Vorbis
+    decoder that is a no-op (it returns 0 either way, since it cannot know the
+    length), so nothing observable changed for this package's own codec.
+  - THE PLAYER ALWAYS FILLS THE GAP. It asks ConcealLoss for what is still
+    missing, caps what comes back at both the gap and the buffer, and writes
+    silence for a call that returns nothing - so a gap is always exactly as long
+    as it really was, whatever the decoder does, and the audio after it does not
+    slide earlier. Concealed frames are media time: they advance Position and
+    they flow through the trailing-trim hold-back like any other audio.
+  - VORBIS ANSWERS WITH SILENCE OF THE EXACT LENGTH. It overrides ConcealLoss
+    rather than leaving the default, so the behaviour is stated in the codec
+    rather than left to the player's fallback. The test measures the re-sync
+    cost: after a gap, ONE packet is decoded against the overlap window the
+    packet before the gap left behind, and from the packet after that the audio
+    is sample-exact against an unbroken decode.
+
+THE NON-STARTING PROBE, AND THE ONE LIST THAT KEEPS IT HONEST.
+SharedAudioOutput.CreatePacketDecoder has to start the shared output, because
+the registry lives on the running engine - so merely asking whether a codec is
+available opened the audio device. SharedAudioOutput.IsPacketCodecSupported and
+SupportedPacketCodecIds answer that question without starting anything.
+
+  THE SINGLE SOURCE OF TRUTH IS ManagedCodecs.BuiltInPacketCodecFactories, an
+  internal static list of factory INSTANCES. ManagedCodecs.RegisterAll registers
+  exactly that list (which is what EnsureStarted calls), and the probe asks
+  exactly that list plus SharedAudioOutput's own ExtraPacketCodecFactories, in
+  the same order EnsureStarted applies them. There is no second registry and no
+  second list of codec names, so the two cannot drift: adding a built-in packet
+  codec to the list registers it AND makes the probe report it, in one edit.
+  Sharing one factory instance across engines is safe because a factory holds no
+  per-engine state - the engine keeps priority and registration order in its own
+  PacketCodecRegistration record.
+
+  Matching is OrdinalIgnoreCase, which is what the engine's packet registry
+  dictionary uses, so the probe and CreatePacketDecoder agree about case. The
+  probe answers for the SHARED OUTPUT ONLY: a factory registered directly on some
+  other AudioEngine is invisible to it, and that is stated in the API docs and in
+  AGENT-README rather than worked around.
+
+
 
 PROVENANCE AND VENDORED SOURCES
 ===============================

@@ -89,6 +89,50 @@ internal sealed class VorbisPacketSoundDecoder : IPacketSoundDecoder
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// False: Vorbis has no packet-loss concealment of its own, so <see cref="ConcealLoss"/> fills a
+    /// gap with silence rather than with synthesised audio.
+    /// </remarks>
+    public bool SupportsLossConcealment => false;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// <para>
+    /// Vorbis cannot invent audio across a gap, so what a lost stretch becomes here is SILENCE OF
+    /// EXACTLY THE LENGTH THAT WAS LOST. That is the point of implementing it at all: the timeline
+    /// stays intact, and every sample after the gap keeps the position it had before the loss
+    /// instead of sliding earlier by the length of what went missing.
+    /// </para>
+    /// <para>
+    /// A gap longer than <see cref="MaxSamplesPerPacket"/> is covered over several calls, as the
+    /// interface allows - this returns as much as the buffer holds and waits to be asked again.
+    /// </para>
+    /// <para>
+    /// <see cref="DecodePacket"/> with an EMPTY packet still returns 0, because that convention says
+    /// a packet was lost without saying how long it was, and a decoder with no concealment has
+    /// nothing useful to do with it.
+    /// </para>
+    /// </remarks>
+    public int ConcealLoss(int lostFrames, Span<float> output)
+    {
+        lock (syncLock)
+        {
+            if (disposed || lostFrames <= 0) return 0;
+
+            var channels = decoder.Channels;
+            if (channels <= 0) return 0;
+
+            var frames = Math.Min(lostFrames, output.Length / channels);
+            frames = Math.Min(frames, MaxSamplesPerPacket / channels);
+            if (frames <= 0) return 0;
+
+            var samples = frames * channels;
+            output.Slice(0, samples).Clear();
+            return samples;
+        }
+    }
+
+    /// <inheritdoc />
     public void Reset()
     {
         lock (syncLock)

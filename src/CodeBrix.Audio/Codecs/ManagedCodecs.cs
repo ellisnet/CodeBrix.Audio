@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using CodeBrix.Audio.Engine.Abstracts;
+using CodeBrix.Audio.Engine.Interfaces;
 
 namespace CodeBrix.Audio.Codecs;
 
@@ -30,10 +32,12 @@ public static class ManagedCodecs
     /// </summary>
     /// <param name="engine">The engine to register with.</param>
     /// <remarks>
-    /// The packet factory serves a different seam - audio a media container delivers as loose
-    /// packets, with no Ogg framing around it - and has no native counterpart to sit below, so it is
-    /// registered at the built-in priority rather than as a fallback. One instance per call, as with
-    /// the stream factories.
+    /// The packet factories serve a different seam - audio a media container delivers as loose
+    /// packets, with no Ogg framing around it - and have no native counterpart to sit below, so they
+    /// are registered at the built-in priority rather than as a fallback. The stream factories are a
+    /// fresh instance per call; the packet factories are the shared instances in
+    /// <see cref="BuiltInPacketCodecFactories"/>, so that asking what the packet seam supports and
+    /// registering it are answered from the same list.
     /// </remarks>
     public static void RegisterAll(AudioEngine engine)
     {
@@ -41,6 +45,24 @@ public static class ManagedCodecs
 
         engine.RegisterCodecFactory(new VorbisCodecFactory());
         engine.RegisterCodecFactory(new FlacCodecFactory());
-        engine.RegisterPacketCodecFactory(new VorbisPacketCodecFactory());
+
+        foreach (var packetFactory in BuiltInPacketCodecFactories)
+        {
+            engine.RegisterPacketCodecFactory(packetFactory);
+        }
     }
+
+    /// <summary>
+    /// THE list of packet codec factories this package carries. <see cref="RegisterAll"/> registers
+    /// exactly these, and <see cref="Wave.SharedAudioOutput.IsPacketCodecSupported"/> asks exactly
+    /// these, so what the shared output supports and what it registers cannot drift apart.
+    /// </summary>
+    /// <remarks>
+    /// One instance each, shared by every engine they are registered with. A packet codec factory
+    /// holds no per-engine state - the engine keeps the priority and registration order in its own
+    /// registration record - so sharing is safe and lets a caller ask about the seam without an
+    /// engine existing at all.
+    /// </remarks>
+    internal static readonly IReadOnlyList<IPacketCodecFactory> BuiltInPacketCodecFactories =
+        new IPacketCodecFactory[] { new VorbisPacketCodecFactory() };
 }

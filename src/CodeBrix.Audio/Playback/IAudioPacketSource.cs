@@ -16,6 +16,13 @@ namespace CodeBrix.Audio.Playback;
 /// <see cref="EndOfStream"/> still false, and the player fills the gap with silence and keeps the
 /// voice alive, ready for the packets that follow. Only <see cref="EndOfStream"/> ends playback.
 /// </para>
+/// <para>
+/// RUNNING DRY IS NOT THE SAME AS LOSING PACKETS. Running dry means the audio has not arrived YET
+/// and costs none of the timeline. Packets that will never arrive - a gap the demultiplexer can see
+/// in the timestamps, a container-level loss marker - are reported by handing over a packet made
+/// with <see cref="AudioPacket.Loss(System.TimeSpan, System.Nullable{System.TimeSpan})"/>, which says how much
+/// audio went missing so the player can put exactly that much back.
+/// </para>
 /// </remarks>
 public interface IAudioPacketSource
 {
