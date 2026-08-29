@@ -25,14 +25,22 @@ namespace CodeBrix.Audio.Codecs;
 public static class ManagedCodecs
 {
     /// <summary>
-    /// Registers every managed codec factory - currently Ogg Vorbis and FLAC - with the engine.
+    /// Registers every managed codec factory with the engine: the Ogg Vorbis and FLAC STREAM
+    /// decoders, and the Vorbis PACKET decoder.
     /// </summary>
     /// <param name="engine">The engine to register with.</param>
+    /// <remarks>
+    /// The packet factory serves a different seam - audio a media container delivers as loose
+    /// packets, with no Ogg framing around it - and has no native counterpart to sit below, so it is
+    /// registered at the built-in priority rather than as a fallback. One instance per call, as with
+    /// the stream factories.
+    /// </remarks>
     public static void RegisterAll(AudioEngine engine)
     {
         if (engine == null) throw new ArgumentNullException(nameof(engine));
 
         engine.RegisterCodecFactory(new VorbisCodecFactory());
         engine.RegisterCodecFactory(new FlacCodecFactory());
+        engine.RegisterPacketCodecFactory(new VorbisPacketCodecFactory());
     }
 }

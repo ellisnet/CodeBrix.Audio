@@ -38,6 +38,7 @@ public static class SharedAudioOutput
     private static readonly object Gate = new object();
     private static readonly List<WaveOutEvent> Players = new List<WaveOutEvent>();
     private static readonly List<ICodecFactory> ExtraCodecFactories = new List<ICodecFactory>();
+    private static readonly List<IPacketCodecFactory> ExtraPacketCodecFactories = new List<IPacketCodecFactory>();
 
     private static MiniAudioEngine _engine;
     private static AudioPlaybackDevice _device;
@@ -50,6 +51,11 @@ public static class SharedAudioOutput
     // How often the sweep thread reclaims finished voices and raises their PlaybackStopped. A few
     // tens of milliseconds is imperceptible for a stop notification and keeps the sweep cheap.
     private const int SweepIntervalMilliseconds = 25;
+
+    // The rate the output starts at when packet audio is the first thing to reach it and nothing was
+    // configured. 48 kHz is what video containers carry (it is Opus's only rate), so the common case
+    // needs no conversion at all.
+    private const int DefaultPacketSampleRate = 48000;
 
     /// <summary>Whether the shared engine and playback device are currently running.</summary>
     public static bool IsRunning
@@ -174,6 +180,114 @@ public static class SharedAudioOutput
     }
 
     /// <summary>
+    /// Adds a PACKET codec to the shared output, so that <see cref="CodeBrix.Audio.Playback.PacketAudioPlayer"/>
+    /// can decode audio a media container delivers as loose packets.
+    /// </summary>
+    /// <param name="factory">The packet codec factory to add.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="factory"/> is null.</exception>
+    /// <remarks>
+    /// <para>
+    /// This is the packet-level sibling of <see cref="RegisterCodecFactory"/> and behaves the same
+    /// way: call it once at start-up, the registration is remembered for the lifetime of the
+    /// PROCESS (so it survives <see cref="Shutdown"/> and is re-applied to every engine the shared
+    /// output starts), and registering the same factory instance twice is harmless - the second call
+    /// is ignored. Keep one instance per add-on package for that reason.
+    /// </para>
+    /// <code>
+    /// SharedAudioOutput.RegisterPacketCodecFactory(new SomeFormatPacketCodecFactory());
+    /// </code>
+    /// <para>
+    /// The two seams are separate because they answer different questions: a stream factory is asked
+    /// "can you open this Ogg file?", a packet factory "can you decode packets of codec 'vorbis'?".
+    /// A package that does both registers with both.
+    /// </para>
+    /// </remarks>
+    public static void RegisterPacketCodecFactory(IPacketCodecFactory factory)
+    {
+        if (factory == null)
+        {
+            throw new ArgumentNullException(nameof(factory));
+        }
+
+        lock (Gate)
+        {
+            if (ExtraPacketCodecFactories.Contains(factory))
+            {
+                return;
+            }
+
+            ExtraPacketCodecFactories.Add(factory);
+
+            // A device that is already running gets it immediately; otherwise EnsureStarted
+            // applies the whole list when it builds the engine.
+            if (_running)
+            {
+                _engine.RegisterPacketCodecFactory(factory);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The packet codec factories added with <see cref="RegisterPacketCodecFactory"/>, in registration
+    /// order.
+    /// </summary>
+    /// <remarks>
+    /// Does not include the built-in managed packet codecs, which are always present.
+    /// </remarks>
+    public static IReadOnlyList<IPacketCodecFactory> RegisteredPacketCodecFactories
+    {
+        get { lock (Gate) { return ExtraPacketCodecFactories.ToArray(); } }
+    }
+
+    /// <summary>
+    /// Creates a decoder for audio that arrives as container packets, using the codecs registered
+    /// with the shared output.
+    /// </summary>
+    /// <param name="codecId">The codec identifier, lowercase - for example "vorbis" or "opus".</param>
+    /// <param name="codecPrivate">
+    /// The codec's initialisation data exactly as the container carried it: the three Xiph-laced
+    /// setup headers for Vorbis, the identification-header bytes for Opus.
+    /// </param>
+    /// <param name="hint">An optional hint describing the format the caller would like back.</param>
+    /// <returns>A decoder for the codec; dispose it when finished with it.</returns>
+    /// <exception cref="ArgumentException"><paramref name="codecId"/> is null or empty.</exception>
+    /// <exception cref="NotSupportedException">No registered packet codec factory serves that codec.</exception>
+    /// <remarks>
+    /// <para>
+    /// <see cref="CodeBrix.Audio.Playback.PacketAudioPlayer"/> calls this for you; it is public
+    /// because an application decoding packets for its own purposes - measuring them, mixing them
+    /// itself - needs the same door.
+    /// </para>
+    /// <para>
+    /// The codec registry belongs to the running engine, so this STARTS the shared output if it is
+    /// not already running, at 48 kHz unless <see cref="Configure"/> pinned a rate. An application
+    /// that plays audio at another rate should call <see cref="Configure"/> at start-up.
+    /// </para>
+    /// </remarks>
+    public static IPacketSoundDecoder CreatePacketDecoder(string codecId, ReadOnlyMemory<byte> codecPrivate,
+        AudioFormat? hint = null)
+    {
+        if (string.IsNullOrEmpty(codecId))
+        {
+            throw new ArgumentException("A codec identifier is required.", nameof(codecId));
+        }
+
+        var device = EnsureStarted(DefaultPacketSampleRate);
+
+        try
+        {
+            return device.Engine.CreatePacketDecoder(codecId, codecPrivate, hint);
+        }
+        catch (NotSupportedException ex)
+        {
+            throw new NotSupportedException(
+                $"Audio codec '{codecId}' has no registered packet decoder. Register one with " +
+                "SharedAudioOutput.RegisterPacketCodecFactory(...); the decoder for a codec this " +
+                "package does not carry lives in an add-on package.", ex);
+        }
+    }
+
+    /// <summary>
     /// Stops and releases the shared engine, playback device, and sweep timer, and clears any format
     /// set by <see cref="Configure"/>. Any voices still in the mixer are dropped. Useful at application
     /// shutdown and for test isolation; the output restarts automatically (unconfigured) the next time
@@ -277,6 +391,14 @@ public static class SharedAudioOutput
                 foreach (var factory in ExtraCodecFactories)
                 {
                     engine.RegisterCodecFactory(factory);
+                }
+
+                // Same again for the packet seam: the built-in managed packet codecs went in with
+                // ManagedCodecs.RegisterAll above, so anything an add-on package registered is
+                // applied on top of them.
+                foreach (var packetFactory in ExtraPacketCodecFactories)
+                {
+                    engine.RegisterPacketCodecFactory(packetFactory);
                 }
 
                 device = engine.InitializePlaybackDevice(null, format);

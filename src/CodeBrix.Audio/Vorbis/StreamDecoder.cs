@@ -545,56 +545,185 @@ internal sealed class StreamDecoder : IStreamDecoder
             {
                 // no packet? we're at the end of the stream
                 isEndOfStream = true;
+                return null;
             }
-            else
-            {
-                // if the packet is flagged as the end of the stream, we can safely mark _eosFound
-                isEndOfStream = packet.IsEndOfStream;
 
-                // resync... that means we've probably lost some data; pick up a new position
-                if (packet.IsResync)
-                {
-                    _hasPosition = false;
-                }
-
-                // grab the container overhead now, since the read won't affect it
-                containerOverheadBits = packet.ContainerOverheadBits;
-
-                // make sure the packet starts with a 0 bit as per the spec
-                if (packet.ReadBit())
-                {
-                    bitsRemaining = packet.BitsRemaining + 1;
-                }
-                else
-                {
-                    // if we get here, we should have a good packet; decode it and add it to the buffer
-                    var mode = _modes[(int)packet.ReadBits(_modeFieldBits)];
-                    if (_nextPacketBuf == null)
-                    {
-                        _nextPacketBuf = new float[_channels][];
-                        for (var i = 0; i < _channels; i++)
-                        {
-                            _nextPacketBuf[i] = new float[_block1Size];
-                        }
-                    }
-                    if (mode.Decode(packet, _nextPacketBuf, out packetStartindex, out packetValidLength, out packetTotalLength))
-                    {
-                        // per the spec, do not decode more samples than the last granulePosition
-                        samplePosition = packet.GranulePosition;
-                        bitsRead = packet.BitsRead;
-                        bitsRemaining = packet.BitsRemaining;
-                        return _nextPacketBuf;
-                    }
-                    bitsRemaining = packet.BitsRead + packet.BitsRemaining;
-                }
-            }
-            return null;
+            return DecodePacketBody(packet, out packetStartindex, out packetValidLength, out packetTotalLength,
+                out isEndOfStream, out samplePosition, out bitsRead, out bitsRemaining, out containerOverheadBits);
         }
         finally
         {
             packet?.Done();
         }
     }
+
+    // The decode half of DecodeNextPacket, with the packet supplied rather than pulled from the
+    // provider.  Split out so a caller holding a packet of its own -- the packet-level seam, where a
+    // media container does the framing instead of Ogg -- can decode it through exactly this code
+    // rather than a second implementation.  Does NOT call Done() on the packet: whoever supplied it
+    // owns it.
+    private float[][] DecodePacketBody(IPacket packet, out int packetStartindex, out int packetValidLength, out int packetTotalLength, out bool isEndOfStream, out long? samplePosition, out int bitsRead, out int bitsRemaining, out int containerOverheadBits)
+    {
+        packetStartindex = 0;
+        packetValidLength = 0;
+        packetTotalLength = 0;
+        samplePosition = null;
+        bitsRead = 0;
+        bitsRemaining = 0;
+        containerOverheadBits = 0;
+
+        // if the packet is flagged as the end of the stream, we can safely mark _eosFound
+        isEndOfStream = packet.IsEndOfStream;
+
+        // resync... that means we've probably lost some data; pick up a new position
+        if (packet.IsResync)
+        {
+            _hasPosition = false;
+        }
+
+        // grab the container overhead now, since the read won't affect it
+        containerOverheadBits = packet.ContainerOverheadBits;
+
+        // make sure the packet starts with a 0 bit as per the spec
+        if (packet.ReadBit())
+        {
+            bitsRemaining = packet.BitsRemaining + 1;
+        }
+        else
+        {
+            // if we get here, we should have a good packet; decode it and add it to the buffer
+            var mode = _modes[(int)packet.ReadBits(_modeFieldBits)];
+            if (_nextPacketBuf == null)
+            {
+                _nextPacketBuf = new float[_channels][];
+                for (var i = 0; i < _channels; i++)
+                {
+                    _nextPacketBuf[i] = new float[_block1Size];
+                }
+            }
+            if (mode.Decode(packet, _nextPacketBuf, out packetStartindex, out packetValidLength, out packetTotalLength))
+            {
+                // per the spec, do not decode more samples than the last granulePosition
+                samplePosition = packet.GranulePosition;
+                bitsRead = packet.BitsRead;
+                bitsRemaining = packet.BitsRemaining;
+                return _nextPacketBuf;
+            }
+            bitsRemaining = packet.BitsRead + packet.BitsRemaining;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Decodes ONE caller-supplied packet, writing the samples it makes final into
+    /// <paramref name="buffer"/>.
+    /// </summary>
+    /// <param name="packet">The packet to decode. The caller owns it; <c>Done()</c> is not called on it.</param>
+    /// <param name="buffer">The buffer to write interleaved samples into.</param>
+    /// <returns>The number of samples written, which is legitimately 0 for the first packet after construction or <see cref="ResetOverlapState"/>.</returns>
+    /// <remarks>
+    /// <para>
+    /// This is the entry point for the packet-level seam, where a media container -- not Ogg -- does
+    /// the framing and hands over one packet at a time. It cannot go through <see cref="Read(System.Span{float})"/>: that
+    /// path PULLS packets, and a provider returning null means permanent end of stream, so a
+    /// provider fed one packet at a time would poison the decoder the first time it ran dry.
+    /// </para>
+    /// <para>
+    /// The overlap bookkeeping is ReadNextPacket's, so the samples are bit-for-bit what the pulling
+    /// path produces for the same packets -- with two differences that belong to the container
+    /// rather than the codec: no granule position is available, so the final packet is not trimmed,
+    /// and there is no end-of-stream drain of the last packet's tail.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="buffer"/> is too small for the samples this packet makes final.</exception>
+    internal int DecodeSinglePacket(IPacket packet, Span<float> buffer)
+    {
+        if (packet == null) throw new ArgumentNullException(nameof(packet));
+        if (_packetProvider == null) throw new ObjectDisposedException(nameof(StreamDecoder));
+
+        var curPacket = DecodePacketBody(packet, out var startIndex, out var validLen, out var totalLen,
+            out _, out _, out var bitsRead, out var bitsRemaining, out var containerOverheadBits);
+        if (curPacket == null)
+        {
+            // A packet that carried no audio (or was too short to decode); the codec state is
+            // unchanged and the caller simply gets nothing for it.
+            _stats.AddPacket(0, bitsRead, bitsRemaining, containerOverheadBits);
+            return 0;
+        }
+
+        // How many samples this packet makes final, worked out BEFORE any state changes so that an
+        // undersized buffer is rejected without leaving the overlap half-applied.
+        int available;
+        if (_prevPacketEnd > 0)
+        {
+            available = validLen - startIndex;
+        }
+        else if (_prevPacketBuf == null)
+        {
+            // The first packet after a reset overlaps with nothing, so it makes nothing final.
+            available = 0;
+        }
+        else
+        {
+            available = validLen - _prevPacketStart;
+        }
+        if (available < 0) available = 0;
+
+        if (available * _channels > buffer.Length)
+        {
+            throw new ArgumentException(
+                $"The output buffer holds {buffer.Length} samples, but this packet makes " +
+                $"{available * _channels} final. Size the buffer to MaxSamplesPerPacket " +
+                $"({MaxPacketSampleCount * _channels} samples), which no packet can exceed.",
+                nameof(buffer));
+        }
+
+        // From here on this is ReadNextPacket's bookkeeping, minus the granule-position trim (the
+        // container owns the stream's exact length on this path).
+        if (_prevPacketEnd > 0)
+        {
+            OverlapBuffers(_prevPacketBuf, curPacket, _prevPacketStart, _prevPacketStop, startIndex, _channels);
+            _prevPacketStart = startIndex;
+        }
+        else if (_prevPacketBuf == null)
+        {
+            _prevPacketStart = validLen;
+        }
+
+        _stats.AddPacket(validLen - _prevPacketStart, bitsRead, bitsRemaining, containerOverheadBits);
+
+        // keep the old buffer so the GC doesn't have to reallocate every packet
+        _nextPacketBuf = _prevPacketBuf;
+
+        _prevPacketEnd = validLen;
+        _prevPacketStop = totalLen;
+        _prevPacketBuf = curPacket;
+
+        var count = 0;
+        var copyLen = (_prevPacketEnd - _prevPacketStart) * _channels;
+        if (copyLen > 0)
+        {
+            count = ClipSamples
+                ? ClippingCopyBuffer(buffer.Slice(0, copyLen))
+                : CopyBuffer(buffer.Slice(0, copyLen));
+        }
+
+        _currentPosition += count / _channels;
+        return count;
+    }
+
+    /// <summary>
+    /// Drops the inter-packet overlap state, so the next packet decoded may come from anywhere in
+    /// the stream. The packet-level counterpart of what a seek does on the pulling path.
+    /// </summary>
+    internal void ResetOverlapState() => ResetDecoder();
+
+    /// <summary>
+    /// The largest number of samples PER CHANNEL that one packet can make final: a long block whose
+    /// left neighbour is long and right neighbour short finalises the most.
+    /// </summary>
+    internal int MaxPacketSampleCount => (3 * _block1Size / 4) - (_block0Size / 4);
 
     private static void OverlapBuffers(float[][] previous, float[][] next, int prevStart, int prevLen, int nextStart, int channels)
     {

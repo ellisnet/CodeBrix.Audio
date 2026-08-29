@@ -26,6 +26,9 @@ public abstract class AudioEngine : IDisposable
     private readonly object _lock = new();
     private readonly Dictionary<string, List<CodecRegistration>> _codecRegistry = new();
     private long _registrationCounter;
+    private readonly Dictionary<string, List<PacketCodecRegistration>> _packetCodecRegistry =
+        new(StringComparer.OrdinalIgnoreCase);
+    private long _packetRegistrationCounter;
     private IMidiBackend? _midiBackend;
 
     /// <summary>
@@ -34,6 +37,19 @@ public abstract class AudioEngine : IDisposable
     private class CodecRegistration(ICodecFactory factory, long registrationOrder)
     {
         public ICodecFactory Factory { get; } = factory;
+        public int Priority { get; set; } = factory.Priority; // Use the factory's suggested priority by default.
+        public long RegistrationOrder { get; } = registrationOrder;
+    }
+
+    /// <summary>
+    /// Internal wrapper to store a packet codec factory along with its mutable priority and
+    /// registration order. A sibling of <see cref="CodecRegistration"/> rather than a reuse of it:
+    /// the two registries hold different factory types and are keyed differently (container format
+    /// identifier versus codec identifier), so they stay apart.
+    /// </summary>
+    private class PacketCodecRegistration(IPacketCodecFactory factory, long registrationOrder)
+    {
+        public IPacketCodecFactory Factory { get; } = factory;
         public int Priority { get; set; } = factory.Priority; // Use the factory's suggested priority by default.
         public long RegistrationOrder { get; } = registrationOrder;
     }
@@ -264,6 +280,154 @@ public abstract class AudioEngine : IDisposable
         }
 
         return [];
+    }
+
+    /// <summary>
+    /// Registers a packet codec factory with the audio engine using its default priority.
+    /// </summary>
+    /// <param name="factory">The packet codec factory to register.</param>
+    /// <remarks>
+    /// The packet registry is separate from the stream registry <see cref="RegisterCodecFactory"/>
+    /// fills, and is keyed by CODEC identifier rather than container format identifier. Registering
+    /// the same factory twice adds it twice, exactly as the stream registry does; de-duplication is
+    /// the concern of whatever front door an application registers through.
+    /// </remarks>
+    public void RegisterPacketCodecFactory(IPacketCodecFactory factory)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+
+        lock (_packetCodecRegistry)
+        {
+            var registration = new PacketCodecRegistration(factory, _packetRegistrationCounter++);
+            foreach (var codecId in factory.SupportedCodecIds)
+            {
+                if (!_packetCodecRegistry.TryGetValue(codecId, out var registrationList))
+                {
+                    registrationList = [];
+                    _packetCodecRegistry[codecId] = registrationList;
+                }
+
+                registrationList.Add(registration);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Unregisters a packet codec factory from the engine using its unique ID.
+    /// </summary>
+    /// <param name="factoryId">The unique ID of the factory to unregister.</param>
+    /// <returns><c>true</c> if the factory was found and removed; otherwise, <c>false</c>.</returns>
+    public bool UnregisterPacketCodecFactory(string factoryId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(factoryId);
+
+        lock (_packetCodecRegistry)
+        {
+            // Sum the number of removed items from all lists, if the total is greater than 0, a factory was found and removed.
+            var totalRemoved = _packetCodecRegistry.Values.Sum(registrationList =>
+                registrationList.RemoveAll(reg => reg.Factory.FactoryId == factoryId)
+            );
+            return totalRemoved > 0;
+        }
+    }
+
+    /// <summary>
+    /// Sets a new priority for a registered packet codec factory, overriding its default priority.
+    /// This allows for runtime prioritization of codecs.
+    /// </summary>
+    /// <param name="factoryId">The unique ID of the factory to prioritize.</param>
+    /// <param name="newPriority">The new priority value. Higher numbers are tried first.</param>
+    /// <returns><c>true</c> if the factory was found and its priority was updated; otherwise, <c>false</c>.</returns>
+    public bool SetPacketCodecPriority(string factoryId, int newPriority)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(factoryId);
+
+        lock (_packetCodecRegistry)
+        {
+            // Select all registrations for the given factory ID and convert to a list.
+            var registrationsToUpdate = _packetCodecRegistry.Values
+                .SelectMany(list => list.Where(reg => reg.Factory.FactoryId == factoryId))
+                .ToList();
+
+            // Update the priority of each registration.
+            registrationsToUpdate.ForEach(reg => reg.Priority = newPriority);
+
+            // Return true if the list we acted on was not empty.
+            return registrationsToUpdate.Count != 0;
+        }
+    }
+
+    /// <summary>
+    /// Gets a read-only list of all registered packet codec factories for a specific codec,
+    /// ordered from highest to lowest priority.
+    /// </summary>
+    /// <param name="codecId">The codec identifier (e.g., "vorbis").</param>
+    /// <returns>A read-only list of factories, or an empty list if none are registered.</returns>
+    public IReadOnlyList<IPacketCodecFactory> GetRegisteredPacketCodecs(string codecId)
+    {
+        lock (_packetCodecRegistry)
+        {
+            if (codecId != null && _packetCodecRegistry.TryGetValue(codecId, out var registrationList))
+            {
+                return registrationList
+                    .OrderByDescending(r => r.Priority)
+                    .ThenByDescending(r => r.RegistrationOrder) // For tie-breaking
+                    .Select(r => r.Factory)
+                    .ToList()
+                    .AsReadOnly();
+            }
+        }
+
+        return [];
+    }
+
+    /// <summary>
+    /// Constructs a decoder for audio that arrives as container packets. It queries the registered
+    /// packet codec factories based on priority to find a suitable implementation.
+    /// </summary>
+    /// <param name="codecId">The codec identifier (e.g., "vorbis", "opus").</param>
+    /// <param name="codecPrivate">
+    /// The codec's initialisation data, exactly as the container carried it - the three Xiph-laced
+    /// setup headers for Vorbis, the identification-header bytes for Opus.
+    /// </param>
+    /// <param name="hint">An optional hint describing the format the caller would like back.</param>
+    /// <returns>An instance of a packet sound decoder.</returns>
+    /// <exception cref="NotSupportedException">Thrown if no registered and working packet codec factory is found for the specified codec.</exception>
+    public IPacketSoundDecoder CreatePacketDecoder(string codecId, ReadOnlyMemory<byte> codecPrivate,
+        AudioFormat? hint = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(codecId);
+
+        List<PacketCodecRegistration>? registrationList;
+        lock (_packetCodecRegistry)
+        {
+            _packetCodecRegistry.TryGetValue(codecId, out registrationList);
+        }
+
+        if (registrationList != null)
+        {
+            var sortedFactories = registrationList
+                .OrderByDescending(r => r.Priority)
+                .ThenByDescending(r => r.RegistrationOrder);
+
+            foreach (var registration in sortedFactories)
+            {
+                try
+                {
+                    var decoder = registration.Factory.CreateDecoder(codecId, codecPrivate, hint);
+                    if (decoder != null)
+                        return decoder;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(
+                        $"Packet codec factory '{registration.Factory.FactoryId}' failed to create a decoder for codec '{codecId}': {ex.Message}");
+                }
+            }
+        }
+
+        throw new NotSupportedException(
+            $"No registered and working packet codec factory found for decoding codec '{codecId}'.");
     }
 
     /// <summary>

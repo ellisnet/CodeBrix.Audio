@@ -528,6 +528,135 @@ PRIORITY CONVENTION: the built-in native factory is 0; the managed fallbacks are
 -10. An add-on codec for a format the native library cannot decode can sit
 anywhere below 0 - use -10 to match, or lower to defer to the built-ins.
 
+A THIRD SEAM exists for audio that never arrives as a file at all - codec
+packets out of a media container - with its own factory interface and its own
+player. See PLAYING AUDIO THAT ARRIVES AS PACKETS below.
+
+
+PLAYING AUDIO THAT ARRIVES AS PACKETS
+=====================================
+Everything above assumes the audio is a FILE - something with a container around
+it that a reader can open and seek in. Audio pulled out of a video container
+does not arrive that way: a demultiplexer hands out bare codec packets, a few
+hundred a second, with no framing of their own. That is a different seam, and it
+has its own three pieces.
+
+  1. IPacketSoundDecoder (CodeBrix.Audio.Engine.Interfaces) decodes ONE packet
+     at a time:
+
+         int DecodePacket(ReadOnlySpan<byte> packet, Span<float> output)
+         int MaxSamplesPerPacket { get; }   // size `output` to this
+         int PreSkipSamples { get; }        // codec priming, per channel
+         void Reset()                       // after the source jumps
+         int Channels { get; } int SampleRate { get; }
+
+     TWO THINGS SURPRISE PEOPLE. DecodePacket may return ZERO and that is
+     success, not an ending: a lapped-transform codec finalises a packet's
+     samples only once the NEXT packet has been overlapped onto it, so the first
+     packet after construction or Reset() yields nothing. And the decoder does
+     not trim the end of the stream - the container knows where the audio really
+     stops (a total-sample count, an end-trim field), so applying that is the
+     caller's job.
+
+  2. IPacketCodecFactory (same namespace) is how a codec gets registered, and it
+     mirrors ICodecFactory exactly - FactoryId, Priority, and SupportedCodecIds,
+     which name the CODEC ("vorbis", "opus"), not the container:
+
+         SharedAudioOutput.RegisterPacketCodecFactory(new SomePacketCodecFactory());
+
+     Same rules as the stream seam: call it once at start-up, the registration
+     lasts for the process, registering the same instance twice is ignored, and
+     a factory that cannot serve a request returns null rather than throwing so
+     the next one gets its turn. A consumer driving its OWN AudioEngine calls
+     engine.RegisterPacketCodecFactory(...) instead. Vorbis packets are built in
+     and always registered; Opus packets come with the CodeBrix.Audio.Opus
+     add-on package.
+
+     To decode packets yourself, without playing them:
+
+         var decoder = SharedAudioOutput.CreatePacketDecoder("vorbis", codecPrivate);
+
+     `codecPrivate` is whatever the container carries for the track: for Vorbis
+     the three Xiph-laced setup headers (a count byte, the lengths of the first
+     two headers as 255-continuation bytes, then the identification, comment and
+     setup headers back to back); for Opus the identification-header bytes.
+
+  3. PacketAudioPlayer (CodeBrix.Audio.Playback) plays them. It is the supported
+     route from packet audio to the speakers, because WaveOutEvent refuses a
+     source whose rate does not match the running output while this player
+     decodes through the engine's own conversion.
+
+THE PACKET FEED IS PULLED, NOT PUSHED. You implement IAudioPacketSource and the
+player asks it for the next packet ON THE AUDIO THREAD, exactly when it needs
+one:
+
+    public interface IAudioPacketSource
+    {
+        bool TryReadPacket(out AudioPacket packet);   // false = none ready
+        bool EndOfStream { get; }                     // true = no more, ever
+    }
+
+  - Both members must return IMMEDIATELY. Read ahead on your own thread into a
+    bounded queue and hand packets out of that queue; never block, never do I/O
+    here.
+  - RUNNING DRY IS NOT AN ERROR. Return false with EndOfStream still false and
+    the player plays silence for that moment and keeps the voice alive, ready
+    for the packets that follow. Playback ends only when EndOfStream is true and
+    the decoded audio has run out, at which point PlaybackEnded is raised away
+    from the audio thread.
+  - AudioPacket is a small struct carrying ReadOnlyMemory<byte> Data and an
+    optional Timestamp. The memory must stay valid until the next TryReadPacket
+    call - the player decodes each packet before asking for another and never
+    keeps one - so handing out slices of a rolling buffer is fine.
+
+Playing:
+
+    using CodeBrix.Audio.Playback;
+    using CodeBrix.Audio.Wave;
+
+    SharedAudioOutput.Configure(48000);          // see the rate advice below
+
+    var player = new PacketAudioPlayer();
+    player.PlaybackEnded += (s, e) => { /* the track finished */ };
+    player.Open("vorbis", codecPrivate, myPacketSource);
+    player.Volume = 0.8f;
+    player.Play();
+
+    TimeSpan where = player.Position;             // the clock; any thread
+
+POSITION IS THE CLOCK. It counts the audio actually handed to the mixer since
+the last Seek, at the codec's own sample rate, and is readable from any thread -
+so anything being synchronised to the audio should read it rather than keeping a
+clock of its own. Silence played through an underrun does NOT advance it;
+samples discarded as codec priming or seek pre-roll DO, because they are media
+time.
+
+SEEKING IS A CONTRACT, because the player has no container to seek in. Move your
+own source FIRST, then tell the player where it now is:
+
+    myPacketSource.MoveTo(keyframeBefore(target));      // your reader
+    player.Seek(firstPacketTimestamp, preRoll: gap);    // then the player
+
+  - firstPacketTimestamp is the timestamp of the very next packet the source
+    will hand over. Position starts counting again from there.
+  - preRoll is how much audio to decode and throw away before any is heard. A
+    codec carrying state between packets cannot decode correctly at a jump, so
+    start a little BEFORE the real target - one packet for Vorbis, about 80 ms
+    for Opus - and pass the gap as preRoll. Once it has been worked through,
+    Position reads the position you were aiming at.
+  - Calling Seek while the OLD packets are still queued dates the clock to the
+    new position and then plays the old audio against it. Order matters.
+  - A source that had reported EndOfStream is expected to report false again
+    once it has been repositioned.
+
+RATE ADVICE: call SharedAudioOutput.Configure(48000) at start-up. Media
+containers carry 48 kHz (it is Opus's only rate), the only rate conversion in
+this package is linear interpolation, and when the device runs at the media's
+rate no conversion runs at all. Without it the shared output starts at 48 kHz
+for packet audio anyway - but an application that has already played a 44.1 kHz
+sound effect will have started it at 44.1 kHz, and then every video plays
+through the interpolator.
+
 
 
 COMPLETE EXAMPLES
@@ -1149,6 +1278,9 @@ QUICK REFERENCE CARD
                                           EnvelopeFollower / VoiceActivityDetector
   add a codec from another package        SharedAudioOutput.RegisterCodecFactory
                                           AudioFileReaderRegistry.Register
+  play codec packets from a container     new PacketAudioPlayer()
+  add a packet codec from another package SharedAudioOutput
+                                              .RegisterPacketCodecFactory
 
   SIGNATURES YOU WILL REACH FOR
     new AudioFileReader(string fileName)            // 32-bit float, any of the
@@ -1190,6 +1322,13 @@ QUICK REFERENCE CARD
     Id3v2Tag.ReadTag(Stream input)
     ManagedCodecs.RegisterAll(AudioEngine engine)   // only for your OWN engine
     OggCodecSniffer.Identify(Stream stream)         // Vorbis / Opus / Flac
+    SharedAudioOutput.RegisterPacketCodecFactory(IPacketCodecFactory factory)
+    SharedAudioOutput.CreatePacketDecoder(string codecId,
+                                          ReadOnlyMemory<byte> codecPrivate)
+    packets.Open(string codecId, ReadOnlyMemory<byte> codecPrivate,
+                 IAudioPacketSource source)            // PacketAudioPlayer
+    packets.Seek(TimeSpan firstPacketTimestamp, TimeSpan preRoll = default)
+    packets.Position                                   // the audio clock
 
   THE RULES YOU WILL OTHERWISE BREAK
     1. WaveStream readers give you BYTES. ToSampleProvider(), or AudioFileReader.
@@ -1206,4 +1345,7 @@ QUICK REFERENCE CARD
        source Read run on it: no blocking, no I/O, no UI.
     7. .opus needs the CodeBrix.Audio.Opus add-on package, and one
        CodeBrixAudioOpus.Register() call.
+    8. A packet source is PULLED on the audio thread and must never block; an
+       empty return is an underrun (silence, playback continues), not the end.
+       Only EndOfStream ends it.
 ================================================================================

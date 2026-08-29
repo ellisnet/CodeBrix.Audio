@@ -284,6 +284,79 @@ build on it. A breaking change to the codec-registration seams, to
 SharedAudioOutput or to AudioFileReaderRegistry is a breaking change for them.
 
 
+THE PACKET SEAM
+===============
+Audio lifted out of a media container arrives as bare codec packets, not as a
+file, so alongside the stream seam (ICodecFactory / ISoundDecoder) there is a
+packet seam: IPacketCodecFactory / IPacketSoundDecoder, with
+AudioEngine.RegisterPacketCodecFactory / UnregisterPacketCodecFactory /
+SetPacketCodecPriority / GetRegisteredPacketCodecs / CreatePacketDecoder behind
+them and SharedAudioOutput.RegisterPacketCodecFactory as the process-wide front
+door. Consumer documentation is in AGENT-README.txt.
+
+WHY IT LIVES IN THE ENGINE. The interfaces sit in
+CodeBrix.Audio.Engine.Interfaces beside the two they mirror, and the registry is
+the same machinery in the same class, because that gives implementers ONE
+registration model, ONE priority model, and one place to look; a second registry
+somewhere else would have been a second set of rules to learn and to keep in
+step. The Engine is ordinary CodeBrix code and is edited freely, so there was no
+reason to route around it. Two things deliberately did NOT follow: the registry
+keys on CODEC identifiers ("vorbis") rather than container format identifiers
+("ogg") and therefore uses its own dictionary, and PacketAudioPlayer stays in
+CodeBrix.Audio because it is built on ManagedSoundDecoder, which lives there.
+
+THE VORBIS SINGLE-PACKET ENTRY POINT. The managed Vorbis decoder is pull-model:
+StreamDecoder asks an IPacketProvider for the next packet, and a null answer
+means PERMANENT end of stream (_eosFound latches, and only a seek clears it). A
+provider fed one packet at a time would therefore poison the decoder the first
+time the demultiplexer ran dry, so the packet path pushes instead:
+
+  - StreamDecoder.DecodeNextPacket was split in two. The fetch half still pulls
+    from the provider; the decode half, DecodePacketBody, takes the packet as an
+    argument. Behaviour of the pulling path is unchanged - it is the same code,
+    one call deeper.
+  - StreamDecoder.DecodeSinglePacket(IPacket, Span<float>) is the packet entry
+    point: it runs DecodePacketBody, then repeats ReadNextPacket's overlap
+    bookkeeping and Read's copy-out, MINUS the granule-position trim and the
+    end-of-stream drain. Both of those are the CONTAINER's business - Ogg states
+    the exact end in its granule position, a media container in its own fields -
+    so on this path the caller applies them.
+  - ResetOverlapState() exposes the private ResetDecoder for a seek, and
+    MaxPacketSampleCount reports the largest number of samples one packet can
+    make final: (3 * block1 / 4) - (block0 / 4) per channel, which is a long
+    block with a long left neighbour and a short right one. That is MORE than
+    the block1/2 figure a first estimate suggests, and sizing a buffer to the
+    smaller number would throw on real streams.
+  - The two supporting types are small: MemoryDataPacket is a DataPacket over
+    ReadOnlyMemory<byte>, reused for every packet so the path allocates nothing
+    per packet, and HeaderPacketProvider hands the decoder's constructor the
+    three setup headers un-laced out of the container's codec-private data and
+    nothing more. Header parsing therefore stays in the one place it already
+    was; there is no second header parser.
+
+WHAT THE ROUND-TRIP TEST PINS. VorbisPacketCodecFactoryTests takes an Ogg
+fixture apart with a test-side page reader, re-frames its three headers the way
+a container carries them, and decodes every audio packet through the seam: the
+result must equal VorbisReader's output on the same file SAMPLE FOR SAMPLE. The
+two lengths differ by less than one window at the very end, which is exactly the
+trailing trim described above, so the comparison runs over the common prefix and
+bounds the difference. The reset test pins the other half: one packet of
+pre-roll after Reset() and the audio is identical to the uninterrupted decode,
+not merely close to it.
+
+PACKETAUDIOPLAYER AND THE LIVE-STREAM PATH. Its data provider reports a Length
+of 0, which the engine's SoundPlayerBase reads as "live stream": when a read
+comes back empty it clears the buffer and carries on rather than ending
+playback. That is what makes an underrun harmless - the pump returns silence and
+the voice stays in the mixer - but it also means the engine never raises
+PlaybackEnded for this player, so PacketAudioPlayer raises its own from the
+provider's end-of-stream event, once, marshalled off the audio thread (the
+captured SynchronizationContext if there is one, otherwise the thread pool -
+never inline, because the handler stops the voice). The clock counts frames
+handed over plus frames discarded as priming or pre-roll, and never counts
+underrun silence.
+
+
 PROVENANCE AND VENDORED SOURCES
 ===============================
 THIRD-PARTY-NOTICES.txt is the authoritative record of what came from where,
