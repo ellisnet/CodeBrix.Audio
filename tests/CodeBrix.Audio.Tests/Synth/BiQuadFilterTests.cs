@@ -1,8 +1,7 @@
 using System;
 using System.Linq;
 using System.Numerics;
-using MathNet.Numerics;
-using MathNet.Numerics.IntegralTransforms;
+using CodeBrix.Audio.Tests.Utils;
 using CodeBrix.Audio.Synth;
 using SilverAssertions;
 using Xunit;
@@ -33,7 +32,7 @@ public class BiQuadFilterTests
         lpf.Process(block);
 
         var fft = block.Select(x => (Complex)x).ToArray();
-        Fourier.Forward(fft, FourierOptions.AsymmetricScaling);
+        TestFourier.Forward(fft);
 
         var spectrum = fft.Select(x => x.Magnitude).ToArray();
 
@@ -77,7 +76,7 @@ public class BiQuadFilterTests
         lpf.Process(block);
 
         var fft = block.Select(x => (Complex)x).ToArray();
-        Fourier.Forward(fft, FourierOptions.AsymmetricScaling);
+        TestFourier.Forward(fft);
 
         var spectrum = fft.Select(x => x.Magnitude).ToArray();
 
