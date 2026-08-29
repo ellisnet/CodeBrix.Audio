@@ -474,6 +474,16 @@ native backend is built from miniaudio and stb_vorbis (Unlicense / MIT-0).
 
 MAINTAINING CODEBRIX.AUDIO.ENGINE
 ---------------------------------
+PER-NATIVE LICENCE FILE (added 2026-08-29, Jeremy's family convention): every
+runtimes/<rid>/native/ folder carries LICENSE-MiniAudio.txt - the miniaudio and
+stb_vorbis licence texts beside the binary built from them. The name is
+package-unique on purpose: a file named plainly LICENSE beside a native collides
+in a consuming application's output folder with any other package shipping a
+same-named file there (CodeBrix.VideoPlayback.Dav1d ships LICENSE-Dav1d.txt,
+CodeBrix.PdfDocuments' rasterizer ships LICENSE-Pdfium.txt, for the same reason).
+The file is committed beside the binaries and flows into the package through the
+existing runtimes glob; a native rebuild replaces the binaries and leaves it.
+
 src/CodeBrix.Audio.Engine/ began as a ~35k-line verbatim vendoring of SoundFlow
 v1.4.1 (LSXPrime/SoundFlow, MIT) with namespaces renamed SoundFlow.* ->
 CodeBrix.Audio.Engine.* (each namespace line carries a `//was previously:`
