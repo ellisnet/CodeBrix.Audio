@@ -280,6 +280,21 @@ ADOPTING A BUILT BINARY INTO THE PACKAGE
      project edits - but do check the RID is handled in Native.cs's
      GetLibraryPath() arch switch, or the resolver will never look for it.
 
+     THE LICENCE FILE GOES WITH IT. Every existing RID folder holds a
+     LICENSE-MiniAudio.txt beside the binary - the miniaudio and stb_vorbis
+     grants, which are what the binary is built from - and the same runtimes/**
+     glob packs it, so it reaches the consuming application's output folder
+     alongside the library it covers. A new RID folder gets a copy too, or the
+     package ships a native binary with no licence notice next to it:
+
+       cp ../../src/CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/linux-x64/native/LICENSE-MiniAudio.txt \
+          ../../src/CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/<rid>/native/
+
+     The seven copies are byte-identical, so copy any one of them. The name is
+     deliberately package-unique - a file called plainly LICENSE would collide
+     with every other package's in one output folder. ../../THIRD-PARTY-NOTICES.txt
+     at the package root stays the authoritative record.
+
   2. Record the build in ../../native/miniaudio/BUILD-PROVENANCE.txt - copy the
      values straight out of output/<rid>/build-info.txt. That file is how anyone
      later can tell which binary came from what.

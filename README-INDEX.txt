@@ -30,4 +30,16 @@ GENERAL
       Human-facing overview shown on GitHub and nuget.org.
   README-INDEX.txt
       This file.
+  THIRD-PARTY-NOTICES.txt
+      What came from where, and under which licences. Packed into the nupkg, and
+      the authoritative provenance record for both bundled assemblies and the
+      native backend.
+
+ALSO WORTH READING, IN PLACE
+----------------------------
+  tools/build_native_libraries/README.txt
+      How the seven native backends are built and verified, why the Linux ones
+      are built in containers, and the steps for adopting a built binary into
+      the package - including the LICENSE-MiniAudio.txt that must travel with
+      it. Read it before touching anything native.
 ================================================================================

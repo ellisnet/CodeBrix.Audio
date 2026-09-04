@@ -49,8 +49,15 @@ REPOSITORY LAYOUT
   tests/CodeBrix.Audio.Tests/        the main test project
   tests/CodeBrix.Audio.Engine.Tests/ native-decode-path tests
   tests/Assets/                      audio, soundfont and synth fixtures
-  CodeBrix.Audio.slnx                the solution
-  global.json                        pins the test runner
+  CodeBrix.Audio.slnx                the solution. The Solution Items folder
+                                     carries .gitignore, AGENT-README.txt,
+                                     EXTRAS-README.txt, global.json,
+                                     icon-codebrix-128.png, LICENSE,
+                                     MAINTAINER-README.txt, README-INDEX.txt,
+                                     README.md and THIRD-PARTY-NOTICES.txt; the
+                                     Tests folder carries the two test projects
+  global.json                        selects the test runner. It does NOT pin an
+                                     SDK version - see BUILDING and TESTING
   THIRD-PARTY-NOTICES.txt            the authoritative provenance record
 
 SOURCE ORGANISATION (moved here from the old AGENT-README's ARCHITECTURE
@@ -78,7 +85,7 @@ rate-conversion both of them need.
 The SoundFont renderer follows the same shape one level up: CodeBrix.Audio.Synth
 holds a MeltySynth-derived SF2 parser, object model and voice engine, of which
 only the SoundFont object model and a small playback facade are public. See
-"TWO SOUNDFONT PATHS" above before touching any of it.
+AGENT-README.txt, "TWO SOUNDFONT PATHS", before touching any of it.
 
 The SFZ engine (CodeBrix.Audio.Synth.Sfz) is NOT a port: it was written here,
 from the specification at sfzformat.com, per the porting rule below - sfizz and
@@ -155,8 +162,26 @@ Run them with:
 
     dotnet test CodeBrix.Audio.slnx
 
-There are two test projects: tests/CodeBrix.Audio.Tests (~625 tests) and
-tests/CodeBrix.Audio.Engine.Tests (~30, which exercise the native decode path
+THE TEST RUNNER IS Microsoft.Testing.Platform (MTP), selected by global.json at
+the repo root:
+
+    { "test": { "runner": "Microsoft.Testing.Platform" } }
+
+That file does NOT pin an SDK version, so the newest installed .NET 10 SDK is
+still used; selecting the runner is all it does. Because the setting lives in
+global.json rather than in the test csproj, it applies to every `dotnet test`
+run anywhere in the repository. Keep it committed - without it `dotnet test`
+falls back to the older VSTest bridge. You can tell which one ran: MTP output
+ends in a "Test run summary:" block, while the VSTest bridge invokes MSBuild
+with `--target:VSTest`.
+
+NO COVERAGE COLLECTOR IS REFERENCED. Neither test project carries
+coverlet.collector any more; `dotnet test` produces test results and nothing
+else. If you want coverage, add the collector locally for the run rather than
+committing it back into the csproj files.
+
+There are two test projects: tests/CodeBrix.Audio.Tests (~1,100 tests) and
+tests/CodeBrix.Audio.Engine.Tests (~70, which exercise the native decode path
 without opening a device). Most of the former are adapted from the upstream
 NAudio.Core.Tests project (converted from NUnit to xUnit v3 + SilverAssertions);
 the remainder are authored for the CodeBrix-specific entry points and the
@@ -254,6 +279,12 @@ PACKAGING AND PUBLISHING
         IncludeEngineAssemblyInPackage target rather than by a package reference
     runtimes/<rid>/native/...    the seven native backends, packed from
         src/CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/
+    runtimes/<rid>/native/LICENSE-MiniAudio.txt   one beside each of the seven
+        binaries, packed by the same glob. It carries both the miniaudio and the
+        stb_vorbis grants, and it lands in every consuming application's output
+        folder alongside the binary it covers. A new RID folder must get a copy
+        too - see tools/build_native_libraries/README.txt, "ADOPTING A BUILT
+        BINARY INTO THE PACKAGE".
     icon-codebrix-128.png        the package icon
     README.md                    the nuget.org / GitHub landing page
     AGENT-README.txt             the consumer guide - THIS is the file that
@@ -681,13 +712,12 @@ NOTES
     SoundMetadataReader.Read, SoundMetadataWriter.WriteTags/RemoveTags,
     Recorder.StopRecording, and anything that opens a source through them. In
     packages published before the ConfigureAwait(false) sweep (divergence 3
-    above), those calls could DEADLOCK a UI thread outright:
-    the same calls can DEADLOCK a UI thread outright - the window never paints, and
-    there is no exception and no log entry to tell you why. It is file-dependent, so
-    it looks intermittent: a read served from the stream buffer completes
-    synchronously and slips through, while an MP3 carrying a large ID3 tag (embedded
-    album art, say) hangs. On those versions, always open audio sources from a
-    background thread and marshal the result back to the UI.
+    above), those calls could DEADLOCK a UI thread outright - the window never
+    paints, and there is no exception and no log entry to tell you why. It is
+    file-dependent, so it looks intermittent: a read served from the stream
+    buffer completes synchronously and slips through, while an MP3 carrying a
+    large ID3 tag (embedded album art, say) hangs. On those versions, always open
+    audio sources from a background thread and marshal the result back to the UI.
     The sweep fixed it, so the AGENT-README states the current behaviour as a
     fact and does not carry a version pin. If someone reports this symptom, the
     first question is which package version they are on.

@@ -200,13 +200,14 @@ Modifications made during the port:
       one.
 
 Native binaries currently shipped:
-    The Linux binaries (linux-x64, linux-arm64, linux-riscv64) are built from the
-    sources in native/miniaudio by tools/build_native_libraries; see
-    native/miniaudio/BUILD-PROVENANCE.txt for exactly what produced each one. The
-    Windows and macOS binaries are still SoundFlow v1.4.1's own prebuilt
-    miniaudio libraries, renamed, and therefore have no Ogg Vorbis decoder; on
-    those platforms .ogg is served by the managed decoder in CodeBrix.Audio
-    instead.
+    All seven (win-x64, win-arm64, linux-x64, linux-arm64, linux-riscv64,
+    osx-x64, osx-arm64) are built from the sources in native/miniaudio by
+    tools/build_native_libraries; see native/miniaudio/BUILD-PROVENANCE.txt for
+    exactly what produced each one. Every one compiles stb_vorbis into the same
+    translation unit and so exports sf_has_vorbis(), which means .ogg decodes
+    natively on every platform; the managed Vorbis decoder in CodeBrix.Audio is
+    a fallback for a binary that lacks one. None of SoundFlow v1.4.1's prebuilt
+    libraries remain.
 
 ----- SoundFlow MIT License -----
 
@@ -238,8 +239,15 @@ Incorporated:
       SoundFlow's thin MIT-licensed C wrapper native/miniaudio/library.c +
       library.h (see entry 3) — into the codebrix_miniaudio native library that
       CodeBrix.Audio.Engine's MiniAudio backend P/Invokes into.
-    - The prebuilt binaries shipped today were built by SoundFlow from this same
-      miniaudio commit.
+    - Every binary shipped today is self-built in this repository from this same
+      vendored miniaudio copy, through SoundFlow's wrapper (entry 3);
+      native/miniaudio/BUILD-PROVENANCE.txt records what produced each one.
+    - A LICENSE-MiniAudio.txt accompanies each of the seven shipped binaries, at
+      runtimes/<rid>/native/ in the package, and therefore travels into every
+      consuming application's output folder. It reproduces the miniaudio grant
+      below together with the stb_vorbis grant (entry 6), because both are
+      compiled into that one binary. THIS FILE remains the authoritative record;
+      the accompanying licence file names it as such.
 
 Modifications:
     - miniaudio.h itself is UNMODIFIED. The only change is that the build sources
@@ -377,6 +385,11 @@ Incorporated:
     - This is what allows the native decode path - and therefore the AudioPlayer
       element, the audio engine and anything else that decodes through the
       engine - to play .ogg files.
+
+    - The stb_vorbis grant below also travels with the shipped binaries: it is
+      reproduced, together with the miniaudio grant (entry 4), in the
+      LICENSE-MiniAudio.txt that accompanies each native library at
+      runtimes/<rid>/native/.
 
 Modifications:
     - stb_vorbis.c itself is UNMODIFIED.

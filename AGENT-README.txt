@@ -55,6 +55,12 @@ NAMESPACE is simply "CodeBrix.Audio" (no suffix).
                   native/. The right one is loaded at runtime with no
                   configuration on your part. See the ENGINE section below for
                   what that means for publishing.
+                  A LICENSE-MiniAudio.txt sits beside each of the seven binaries
+                  and travels with them into your application's output folder -
+                  the licence notice for the native code, carried next to the
+                  code it covers. Keep it there when you publish; it is small,
+                  and THIRD-PARTY-NOTICES.txt in the package root remains the
+                  authoritative record for everything else.
   System deps:    none. No system audio package and no system-wide codec is
                   required on Windows, macOS or Linux.
 
@@ -85,9 +91,13 @@ KEY NAMESPACES / USINGS
 (Additional sub-namespaces exist for plumbing — sample/wave providers, codecs,
 utilities. The managed MP3, Ogg Vorbis and FLAC decoders — CodeBrix.Audio.Mpeg,
 CodeBrix.Audio.Vorbis and CodeBrix.Audio.Flac — are entirely internal; consumers
-reach those formats only through the readers in CodeBrix.Audio.Wave. The one
-public type in CodeBrix.Audio.Codecs a consumer might touch is ManagedCodecs,
-and only when driving an engine they created themselves — see COMMON PITFALLS.)
+reach those formats only through the readers in CodeBrix.Audio.Wave. The
+public types in CodeBrix.Audio.Codecs a consumer might touch are ManagedCodecs
+(only when driving an engine they created themselves — see COMMON PITFALLS),
+ManagedSoundDecoder and OggCodecSniffer (what an add-on codec package builds on
+— see ADDING A CODEC FROM ANOTHER PACKAGE), the built-in factories
+VorbisCodecFactory, FlacCodecFactory and VorbisPacketCodecFactory, the OggCodec
+enum, and the A-law/mu-law encoders and decoders, which you call directly.)
 
 
 ================================================================================
@@ -222,6 +232,48 @@ sequence has already discarded track structure and non-playable meta events, so
 converting back would silently lose them.
 
 
+FIVE TYPE NAMES COLLIDE ACROSS THE TWO BUNDLED ASSEMBLIES. This package ships
+CodeBrix.Audio and CodeBrix.Audio.Engine, and each has its own type for several
+of the same ideas. The names are identical; only the namespaces differ:
+
+  NAME                    CodeBrix.Audio               CodeBrix.Audio.Engine
+  ----                    --------------               ---------------------
+  MidiFile                CodeBrix.Audio.Midi          CodeBrix.Audio.Engine
+                                                       .Metadata.Midi
+  MidiSequence            CodeBrix.Audio.Synth         CodeBrix.Audio.Engine
+                                                       .Editing
+  PlaybackState           CodeBrix.Audio.Wave          CodeBrix.Audio.Engine
+                                                       .Enums
+  VoiceActivityDetector   CodeBrix.Audio.Dsp           CodeBrix.Audio.Engine
+                                                       .Components
+  MetaEventType           CodeBrix.Audio.Midi          CodeBrix.Audio.Engine
+                                                       .Metadata.Midi.Enums
+
+They are not the same type and there is no conversion between them. A file that
+imports both namespaces of a pair gets CS0104 ("... is an ambiguous reference
+between ... and ...") on the bare name — which is a compile error, not a wrong
+result, so it cannot bite silently. The remedy is a using ALIAS for the one you
+need less often, and NOT a second namespace import — exactly what this library's
+own source does when it has to hold both:
+
+    using CodeBrix.Audio.Playback;
+    using CodeBrix.Audio.Wave;      // PlaybackState, the one the players return
+    using EnginePlaybackState = CodeBrix.Audio.Engine.Enums.PlaybackState;
+    // and deliberately NOT: using CodeBrix.Audio.Engine.Enums;
+
+    PlaybackState state = player.PlaybackState;        // CodeBrix.Audio.Wave
+    EnginePlaybackState engineState = EnginePlaybackState.Playing;
+
+Importing BOTH namespaces and adding the alias does not help: the alias gives the
+other type a second name, it does not remove the first one from the bare name's
+candidates. Import one, alias the other.
+
+For ordinary playback you never need the Engine namespaces at all: AudioFilePlayer,
+PacketAudioPlayer, SoundEffectClip, WaveOutEvent and SharedAudioOutput all speak
+CodeBrix.Audio types. Import an Engine namespace only for something the Engine
+alone offers (recording, effects, editing/mixing), and alias the collision.
+
+
 
 CORE API REFERENCE
 ==================
@@ -270,9 +322,15 @@ Playback (cross-platform, via the bundled engine):
                             (low memory for long tracks) and mixing into the same
                             SharedAudioOutput. A friendly wrapper over the engine's
                             SoundPlayer, so consumers never touch CodeBrix.Audio.Engine.*.
-  - SharedAudioOutput     : the one shared output WaveOutEvent and AudioFilePlayer mix
-                            into. Optional: Configure(sampleRate[, channels]) once at
-                            start to pin the format; Shutdown() to release it.
+  - PacketAudioPlayer     : (namespace CodeBrix.Audio.Playback) plays audio that arrives
+                            as bare codec packets out of a media container rather than as
+                            a file - Open, Play/Pause/Stop, Seek, Volume, Position, and
+                            end-of-track trimming. Mixes into the same SharedAudioOutput.
+                            See "PLAYING AUDIO THAT ARRIVES AS PACKETS" below.
+  - SharedAudioOutput     : the one shared output WaveOutEvent, AudioFilePlayer and
+                            PacketAudioPlayer mix into. Optional: Configure(sampleRate
+                            [, channels]) once at start to pin the format; Shutdown() to
+                            release it.
 
 WaveFormat:
   - WaveFormat            : sample rate, channel count, bit depth, encoding.
@@ -575,18 +633,60 @@ has its own three pieces.
      keeps its shape - and the CodeBrix.Audio.Opus package conceals for real.
 
   2. IPacketCodecFactory (same namespace) is how a codec gets registered, and it
-     mirrors ICodecFactory exactly - FactoryId, Priority, and SupportedCodecIds,
-     which name the CODEC ("vorbis", "opus"), not the container:
+     mirrors ICodecFactory exactly - FactoryId, Priority, SupportedCodecIds,
+     which name the CODEC ("vorbis", "opus") rather than the container, and the
+     one method that does the work:
+
+         string FactoryId { get; }
+         IReadOnlyCollection<string> SupportedCodecIds { get; }
+         int Priority { get; }
+         IPacketSoundDecoder CreateDecoder(string codecId,
+                                           ReadOnlyMemory<byte> codecPrivate,
+                                           AudioFormat? hint)
+
+     CreateDecoder returns NULL for anything this factory does not want, which
+     lets the next factory have its turn; throwing does not. `hint` is the format
+     the caller would like back and may be ignored.
 
          SharedAudioOutput.RegisterPacketCodecFactory(new SomePacketCodecFactory());
 
      Same rules as the stream seam: call it once at start-up, the registration
-     lasts for the process, registering the same instance twice is ignored, and
-     a factory that cannot serve a request returns null rather than throwing so
-     the next one gets its turn. A consumer driving its OWN AudioEngine calls
-     engine.RegisterPacketCodecFactory(...) instead. Vorbis packets are built in
-     and always registered; Opus packets come with the CodeBrix.Audio.Opus
-     add-on package.
+     lasts for the process, and registering the same instance twice is ignored -
+     so keep one factory instance per add-on package. To see what has been added
+     that way:
+
+         IReadOnlyList<IPacketCodecFactory> added =
+             SharedAudioOutput.RegisteredPacketCodecFactories;
+
+     which lists what you registered, in registration order, and deliberately
+     NOT the built-ins, which are always present.
+
+     Vorbis packets are built in and always registered - the public
+     VorbisPacketCodecFactory (namespace CodeBrix.Audio.Codecs), FactoryId
+     "CodeBrix.Audio.ManagedVorbis.Packets", serving codec id "vorbis" at
+     Priority 0. You do not register it; it is named here so a factory of your
+     own can be given a priority relative to it. Opus packets come with the
+     CodeBrix.Audio.Opus add-on package.
+
+     A CONSUMER DRIVING ITS OWN AudioEngine uses the engine's own surface
+     instead, and gets more of it than the shared output exposes:
+
+         engine.RegisterPacketCodecFactory(IPacketCodecFactory factory)
+         bool engine.UnregisterPacketCodecFactory(string factoryId)
+         bool engine.SetPacketCodecPriority(string factoryId, int newPriority)
+         IReadOnlyList<IPacketCodecFactory>
+             engine.GetRegisteredPacketCodecs(string codecId)
+         IPacketSoundDecoder engine.CreatePacketDecoder(string codecId,
+             ReadOnlyMemory<byte> codecPrivate, AudioFormat? hint = null)
+
+     Unregister and SetPacketCodecPriority both match on FactoryId and both
+     return false when nothing carried that id; SetPacketCodecPriority overrides
+     the factory's own Priority for that engine only. GetRegisteredPacketCodecs
+     answers for ONE codec id, highest priority first, and returns an empty list
+     rather than null. Call ManagedCodecs.RegisterAll(engine) on an engine of
+     your own to get the built-in Vorbis packet factory on it as well.
+     Registering the same factory twice on an engine ADDS IT TWICE - the
+     de-duplication above belongs to SharedAudioOutput, not to the engine.
 
      To ASK WHETHER A CODEC IS AVAILABLE, without starting anything:
 
@@ -663,6 +763,51 @@ Playing:
     player.Play();
 
     TimeSpan where = player.Position;             // the clock; any thread
+
+THE WHOLE SURFACE, since it is small (all of it is thread-safe; Position and the
+events aside, everything takes the player's own lock):
+
+    void Open(string codecId, ReadOnlyMemory<byte> codecPrivate,
+              IAudioPacketSource source)
+        Resolves a decoder for codecId through the shared output and opens the
+        feed. Replaces anything already open. STARTS THE SHARED OUTPUT (it has
+        to build a decoder), so it opens the audio device; the voice is added to
+        the mixer stopped, and Play() starts it.
+    void Open(IPacketSoundDecoder decoder, IAudioPacketSource source,
+              bool leaveOpen = false)
+        The same, with a decoder you already have - one you built yourself, or
+        one from SharedAudioOutput.CreatePacketDecoder. leaveOpen: false (the
+        default) means this player disposes the decoder; true keeps it yours.
+    void Play()      Starts or resumes. Throws InvalidOperationException if
+                     nothing is open.
+    void Pause()     Pauses, keeping the position. The source is not asked for
+                     packets while paused. Harmless when nothing is open.
+    void Stop()      Stops and consumes no more packets; the position is left
+                     where it is, so Play() resumes there. Seek first to start
+                     somewhere else. Harmless when nothing is open.
+    void Seek(TimeSpan firstPacketTimestamp, TimeSpan preRoll = default)
+                     See SEEKING IS A CONTRACT below - move your source first.
+    void Dispose()   Stops, removes the voice from the mixer, and releases the
+                     decoder unless leaveOpen kept it.
+
+    bool IsOpen                  A feed is open and ready to play.
+    PlaybackState PlaybackState  Stopped / Playing / Paused. This is
+                                 CodeBrix.Audio.Wave.PlaybackState - see "FIVE
+                                 TYPE NAMES COLLIDE" near the top.
+    TimeSpan Position            The clock (below). Readable from any thread.
+    float Volume                 1.0 is unity gain; persists across opens.
+    int SampleRate               The open audio's rate in Hz; 0 when nothing is
+                                 open. The CODEC's rate, not the device's.
+    int Channels                 The open audio's channel count; 0 when nothing
+                                 is open.
+    TimeSpan TrailingTrim        What end-of-track trim is in effect (below).
+    void SetTrailingTrim(TimeSpan) / void SetTrailingTrimFrames(int)
+                                 Set it (below).
+    event EventHandler PlaybackEnded
+                                 Raised once the source has reported EndOfStream
+                                 and the last decoded audio has been played -
+                                 never on the audio thread, so a handler may take
+                                 locks or dispose the player.
 
 POSITION IS THE CLOCK. It counts the audio actually handed to the mixer since
 the last Seek, at the codec's own sample rate, and is readable from any thread -
@@ -1299,6 +1444,39 @@ file that exercises it.
     Codecs/ALawDecoderTests.cs, Codecs/MuLawDecoderTests.cs   the companding
                                 codecs you call directly.
 
+  PACKET AUDIO
+    PacketAudioPlayerTests.cs   the player end to end - the guards before Open,
+                                an underrun playing silence and recovering, the
+                                end of the stream, the clock, Seek and its
+                                pre-roll, the codec's own pre-skip, and a real
+                                Vorbis asset played through the packet path.
+    PacketAudioPlayerTrimTests.cs   the trailing trim: the hold-back, which
+                                frames are dropped, a trim set after Open, a trim
+                                longer than the track, per-packet DiscardPadding
+                                and the larger-of-the-two rule, and the clock not
+                                counting trimmed audio.
+    PacketAudioPlayerLossTests.cs   AudioPacket.Loss - a gap coming out the
+                                length it really was, concealment in helpings,
+                                silence where a decoder offers nothing, a gap as
+                                media time, and a gap forgotten by a reposition.
+    PacketCodecProbeTests.cs    IsPacketCodecSupported and
+                                SupportedPacketCodecIds: case-insensitive, they
+                                start nothing, and they agree with what
+                                CreatePacketDecoder then resolves.
+    VorbisPacketCodecFactoryTests.cs   the built-in factory - its identity, the
+                                codec-private data it declines, decoding that
+                                matches the stream decoder sample for sample, the
+                                empty first packet, and Reset mid-stream.
+    VorbisPacketLossTests.cs    the built-in decoder has no concealment of its
+                                own and answers a gap with silence of exactly the
+                                right length.
+    Utils/FakePacketAudio.cs, Utils/OggPacketReader.cs   the test doubles: a
+                                scripted IAudioPacketSource / IPacketSoundDecoder
+                                pair, and the Ogg de-framer that turns a .ogg
+                                fixture into the packets a container would hand
+                                over. Read these first if you are writing a
+                                source of your own.
+
   MIDI
     Midi/MidiFileTests.cs, MidiFileTests.cs     read/write round trips.
     Midi/MidiEventCollectionTest.cs             tracks, PrepareForExport.
@@ -1345,6 +1523,14 @@ opening a device:
         native decoding, including seeking.
     ChunkedDataProviderTests.cs, ProviderLengthFallbackTests.cs
         the length/duration arithmetic that a media transport depends on.
+    PacketCodecRegistryTests.cs, FakePacketCodec.cs
+        the engine-level packet registry - RegisterPacketCodecFactory,
+        UnregisterPacketCodecFactory, SetPacketCodecPriority,
+        GetRegisteredPacketCodecs and CreatePacketDecoder - including
+        highest-priority-first order, the later registration winning a tie,
+        case-insensitive codec ids, reordering with SetPacketCodecPriority, and
+        CreatePacketDecoder moving on from a factory that declines or throws.
+        It also shows the packet registry is separate from the stream one.
     OggOpusMetadataTests.cs
         that an Ogg Opus stream reports 48 kHz and a pre-skip-corrected
         duration even though this package cannot decode it.
@@ -1389,8 +1575,14 @@ QUICK REFERENCE CARD
   add a codec from another package        SharedAudioOutput.RegisterCodecFactory
                                           AudioFileReaderRegistry.Register
   play codec packets from a container     new PacketAudioPlayer()
+  decode packets without playing them     SharedAudioOutput
+                                              .CreatePacketDecoder(id, priv)
+                                          packets.Open(decoder, source, true)
   add a packet codec from another package SharedAudioOutput
                                               .RegisterPacketCodecFactory
+  re-order or remove packet codecs        engine.SetPacketCodecPriority /
+    (on an AudioEngine of your own)           .UnregisterPacketCodecFactory /
+                                              .GetRegisteredPacketCodecs
   ask if a packet codec is available      SharedAudioOutput
     (without opening the audio device)        .IsPacketCodecSupported("opus")
   list the packet codecs available        SharedAudioOutput
@@ -1445,8 +1637,22 @@ QUICK REFERENCE CARD
                                           ReadOnlyMemory<byte> codecPrivate)
     packets.Open(string codecId, ReadOnlyMemory<byte> codecPrivate,
                  IAudioPacketSource source)            // PacketAudioPlayer
+    packets.Open(IPacketSoundDecoder decoder, IAudioPacketSource source,
+                 bool leaveOpen = false)               // decoder you already have
+    packets.Play() / packets.Pause() / packets.Stop() / packets.Dispose()
     packets.Seek(TimeSpan firstPacketTimestamp, TimeSpan preRoll = default)
     packets.Position                                   // the audio clock
+    packets.IsOpen                                     // a feed is open
+    packets.PlaybackState                              // CodeBrix.Audio.Wave
+    packets.SampleRate / packets.Channels              // the CODEC's, 0 if closed
+    packets.Volume                                     // 1.0 = unity gain
+    packets.PlaybackEnded                              // event, off the audio thread
+    SharedAudioOutput.RegisteredPacketCodecFactories   // what YOU registered
+    engine.UnregisterPacketCodecFactory(string factoryId)     // your OWN engine
+    engine.SetPacketCodecPriority(string factoryId, int newPriority)
+    engine.GetRegisteredPacketCodecs(string codecId)
+    engine.CreatePacketDecoder(string codecId, ReadOnlyMemory<byte> codecPrivate,
+                               AudioFormat? hint = null)
     packets.SetTrailingTrim(TimeSpan trim)             // encoder padding at the
     packets.SetTrailingTrimFrames(int frames)          // END of the track
     packets.TrailingTrim                               // what is in effect

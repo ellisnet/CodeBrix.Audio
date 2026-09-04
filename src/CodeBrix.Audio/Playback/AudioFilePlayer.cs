@@ -10,7 +10,7 @@ using EnginePlaybackState = CodeBrix.Audio.Engine.Enums.PlaybackState;
 namespace CodeBrix.Audio.Playback;
 
 /// <summary>
-/// A simple, long‑running player for a single WAV or MP3 file, with transport controls suitable for a
+/// A simple, long‑running player for a single audio file, with transport controls suitable for a
 /// media‑player UI: play/pause/stop, volume, seek to a timecode, and a readable current position and
 /// total duration. It hides the CodeBrix.Audio.Engine plumbing (a streaming decoder feeding an engine
 /// sound player mixed into the shared output device) behind a small, UI‑friendly surface.
@@ -110,10 +110,15 @@ public sealed class AudioFilePlayer : IDisposable
     }
 
     /// <summary>
-    /// Loads a WAV or MP3 file for playback, positioned at the start and stopped. Replaces any
+    /// Loads an audio file for playback, positioned at the start and stopped. Replaces any
     /// previously loaded file. <see cref="Duration"/> is available once this returns.
     /// </summary>
-    /// <param name="filePath">Path to a .wav or .mp3 file.</param>
+    /// <remarks>
+    /// Any format the bundled engine can decode: .wav, .mp3, .ogg and .flac out of the box, plus
+    /// anything a codec package has added with <see cref="SharedAudioOutput.RegisterCodecFactory"/>.
+    /// The format is identified from the file's CONTENT, not from its extension.
+    /// </remarks>
+    /// <param name="filePath">Path to a supported audio file.</param>
     /// <exception cref="ArgumentNullException"><paramref name="filePath"/> is null.</exception>
     public void Load(string filePath)
     {
@@ -135,10 +140,11 @@ public sealed class AudioFilePlayer : IDisposable
     }
 
     /// <summary>
-    /// Loads a WAV or MP3 file from a stream. The stream should be seekable so the player can report
+    /// Loads an audio file from a stream. The stream should be seekable so the player can report
     /// duration and seek. Replaces any previously loaded file.
     /// </summary>
-    /// <param name="stream">A readable (ideally seekable) stream containing a WAV or MP3 file.</param>
+    /// <param name="stream">A readable (ideally seekable) stream containing a supported audio
+    /// file - see <see cref="Load(string)"/> for which formats those are.</param>
     /// <param name="leaveOpen">When <see langword="false"/> (the default), the stream is disposed when a
     /// new file is loaded or this player is disposed; when <see langword="true"/>, the caller keeps ownership.</param>
     /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
