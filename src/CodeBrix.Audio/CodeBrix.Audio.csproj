@@ -53,7 +53,7 @@
     <Product>CodeBrix.Audio</Product>
     <Title>CodeBrix.Audio</Title>
     <Authors>Jeremy Ellis</Authors>
-    <Description>CodeBrix.Audio is a fully managed, cross-platform audio file library for .NET: it reads WAV, MP3, Ogg Vorbis and FLAC waveform audio, reads and writes Standard MIDI Files, reads MP3 ID3v2 and Vorbis-comment tags, plays audio (a media player with transport and seeking, decode-once sound effects that overlap freely, and codec packets straight out of a media container), renders SoundFont (.sf2) and SFZ (.sfz) instruments and plays MIDI music through either, and exposes a set of DSP primitives (FFT, biquad filters, envelope follower, voice-activity detection) for audio analysis. This package also bundles CodeBrix.Audio.Engine, a cross-platform audio engine — playback, recording, effects, editing/mixing, MIDI, synthesis, and visualization — built on a bundled native backend for Windows, macOS, and Linux.</Description>
+    <Description>A fully managed audio library for playing, recording, and analyzing sound. Reads and plays common audio file formats like WAV, MP3, Ogg Vorbis, and FLAC, plays MIDI music through SoundFont or SFZ instruments, and includes a small set of signal-processing tools for analyzing audio. Also includes a full audio engine for recording, editing, mixing, and effects, with no platform-specific setup required.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ellisnet/CodeBrix.Audio</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ellisnet/CodeBrix.Audio</RepositoryUrl>
