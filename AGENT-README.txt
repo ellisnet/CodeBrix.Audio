@@ -15,7 +15,7 @@ instruments (.sfz) and Decent Sampler instruments (.dspreset, .dslibrary,
 whose parts can each come from a recording or from a MIDI performance (including
 a Suno stems download), and exposes a set of DSP primitives for audio analysis. All file DECODING
 and all SYNTHESIS is managed code with no
-platform-specific interop, so it behaves identically on Windows, macOS, and
+platform-specific interop, so it behaves the same way on Windows, macOS, and
 Linux; PLAYBACK goes through the bundled engine and its native backend.
 
 NOTE: the CodeBrix.Audio.MitLicenseForever package ALSO bundles a second
@@ -1884,7 +1884,9 @@ PLAYING IT
   A synthesizer never disposes its instrument, and is not thread-safe. The
   defaults worth knowing: 192-voice polyphony (a preset routinely layers a dozen
   groups), 64-frame blocks, master volume 0.5, and a seeded random stream, so
-  the same instrument and the same events render the same bytes every run.
+  the same instrument and the same events render the same bytes every run on
+  the same machine (see "Renders are repeatable per machine" under COMMON
+  PITFALLS before comparing renders made on different operating systems).
 
 NOTE NAMES: C3 IS 60, WHICH IS NOT WHAT SFZ SAYS
   A Decent Sampler preset writes note names in the YAMAHA convention:
@@ -2101,7 +2103,7 @@ MODULATORS
     settings.EnableModulators = false;   // play the preset as the sampler alone
 
   Every random draw is seeded, so a modulated preset renders the same bytes from
-  the same events.
+  the same events on the same machine.
 
 MPE
   DecentSamplerSynthesizer reads an MPE performance out of a MIDI file - zone
@@ -2727,6 +2729,16 @@ PERFORMANCE TIPS
 
 COMMON PITFALLS TO AVOID
 ========================
+  - Renders are repeatable per machine, not across operating systems: every
+    synthesizer is deterministic (seeded randomness, fixed-point resampling), so
+    the same instrument and the same events produce the same bytes on the same
+    machine every time. The pitch, gain and envelope arithmetic reaches the
+    operating system's maths library, and Windows, Linux and macOS round those
+    functions differently by a hair, so a render made on one operating system
+    matches the same render made on another to about one part in a million,
+    not bit for bit. Compare cross-machine renders with a tolerance (a per-
+    sample difference of 1e-4 is generous), and never cache a render keyed on a
+    hash of its bytes if the cache is shared between operating systems.
   - Float vs bytes: WaveFileReader/Mp3FileReader are WaveStreams that yield raw
     PCM BYTES. To get normalized float samples call .ToSampleProvider(), or just
     use AudioFileReader (which always exposes 32-bit float).

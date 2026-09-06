@@ -174,11 +174,12 @@ the channel from the contract and then read their OWN state for it.
 The reads are gated on HasActiveZone, and no zone is ever active in MpeMode.Off.
 That is not an optimisation, it is the guarantee: with the zones switched off
 every engine takes the code path it took before any of this existed, and the MPE
-tests fence it - the SFZ pair by rendering the same performance twice on the one
-machine and demanding the two agree bit for bit, the SoundFont pair against a
-committed digest. Any new read of MPE state must sit behind the same gate. See
-PINNED RENDERS AND THE PLATFORM MATHS LIBRARY, under TESTING, for why the two
-pairs are fenced differently.
+tests fence it, the SFZ pair and the SoundFont pair alike: one test renders the
+same performance twice on the one machine, with the settings applied and
+switched off and without them, and demands the two agree bit for bit; the other
+holds the render to values pinned with a tolerance. Any new read of MPE state
+must sit behind the same gate. See PINNED RENDERS AND THE PLATFORM MATHS LIBRARY,
+under TESTING, for why a committed digest is the wrong fence for either pair.
 
 
 BUILDING
@@ -377,7 +378,11 @@ A RENDER CANNOT BE PINNED BIT FOR BIT ACROSS OPERATING SYSTEMS. Four tests used
 to try - two in SfzRenderRegressionTests and two in MpeSfzEngineTests - and they
 passed on Linux, where their numbers were recorded, and failed on Windows the
 first time anyone ran them there. Nothing was wrong with the library. The numbers
-were only ever a description of one machine's C runtime.
+were only ever a description of one machine's C runtime. Two more, in
+MpeSoundFontEngineTests, pinned the same kind of digest and happened to agree on
+both machines: the SoundFont voice path reaches powf, sinf and exp exactly as the
+SFZ path does, so that agreement was luck, and they were converted to the same
+fences before a third platform could prove it.
 
 WHY. MathF.Sin and MathF.Pow compile to the platform's sinf and powf: UCRT on
 Windows, glibc on Linux, Apple's libm on macOS. None of the three is correctly

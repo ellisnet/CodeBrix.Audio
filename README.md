@@ -1,6 +1,6 @@
 # CodeBrix.Audio
 
-A fully managed, cross-platform audio file library for .NET. CodeBrix.Audio reads WAV, MP3, Ogg Vorbis and FLAC waveform audio, reads and writes Standard MIDI Files, reads MP3 ID3v2 and Vorbis-comment tags, plays sampled instruments in three formats, plays audio through a bundled cross-platform engine, and exposes a set of DSP primitives (FFT, biquad filters, envelope follower, voice-activity detection) for audio analysis — and it behaves identically on Windows, macOS, and Linux.
+A fully managed, cross-platform audio file library for .NET. CodeBrix.Audio reads WAV, MP3, Ogg Vorbis and FLAC waveform audio, reads and writes Standard MIDI Files, reads MP3 ID3v2 and Vorbis-comment tags, plays sampled instruments in three formats, plays audio through a bundled cross-platform engine, and exposes a set of DSP primitives (FFT, biquad filters, envelope follower, voice-activity detection) for audio analysis — and it behaves properly on Windows, macOS, and Linux.
 CodeBrix.Audio is provided as a .NET 10 library and associated `CodeBrix.Audio.MitLicenseForever` NuGet package, which also bundles **CodeBrix.Audio.Engine**, a cross-platform audio engine with a native backend (see below). File decoding is fully managed; playback goes through that engine.
 
 CodeBrix.Audio supports applications and assemblies that target Microsoft .NET version 10.0 and later.

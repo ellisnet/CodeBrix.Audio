@@ -23,10 +23,56 @@ public class MpeSoundFontEngineTests
 {
     private const int Key = MpeEngineFixtures.SoundFontKey;
 
-    // The performance that the byte-identity fence renders, digested from the engine BEFORE any of
-    // this existed. MpeMode.Off must still produce it sample for sample. Regenerate only when a
-    // deliberate change to SoundFont voice arithmetic is being made, and say so in the commit.
-    private const ulong LegacyRenderDigest = 0x10B0C9192A1C182BUL;
+    /// <summary>Frames between the samples pinned in <see cref="LegacyRenderLeft"/> and its twin.</summary>
+    private const int LegacyStride = 1536;
+
+    // The performance that the byte-identity fence renders, sampled from the engine BEFORE any of
+    // this existed. MpeMode.Off must still produce it. This was a single digest until the SFZ pair
+    // had to pass on Windows, Linux and macOS at once, which no digest of a render can - the SoundFont
+    // voice path reaches the platform's powf, sinf and exp the same way, and only luck kept this one
+    // agreeing across two of the three. See PinnedRender. Regenerate only when a deliberate change to
+    // SoundFont voice arithmetic is being made, and say so in the commit.
+    private static readonly double[] LegacyRenderLeft =
+    [
+        0.000000000, 0.002114212, 0.005147552, 0.008180997,
+        0.011206800, 0.014232610, 0.017242410, 0.024681600,
+        0.027659370, 0.030621220, 0.033558660, 0.036487710,
+        0.000000000, 0.000000000, 0.000000000, 0.000000000,
+        0.000000000, 0.000000000, 0.116041200, 0.053386830,
+        -0.031848260, -0.103617600, -0.131536400, -0.103783800,
+        -0.032105420, 0.057235050, 0.117985400, 0.128799700,
+        0.085105880, 0.000000000, 0.000000000, 0.000000000,
+        0.000000000, 0.000000000, 0.000000000, 0.062809120,
+        -0.025574700, -0.013965040, 0.052265690, -0.085800560,
+        0.111597000, -0.127266400, 0.131106200, -0.122064900,
+        0.101929600, -0.072545970, 0.009599230, 0.000000000,
+        0.000000000, 0.000000000, 0.000000000, 0.000000000,
+        0.025664720, -0.126609700, 0.089532980, 0.045138530,
+        -0.130611700, 0.073695970, 0.063548100, -0.131589400,
+        0.060155050, 0.076856840, -0.130086700, 0.041506710,
+    ];
+
+    // The right channel is pinned separately: the SoundFont engine pans its voices with a sine law,
+    // so the two channels differ by a fraction of a percent throughout this performance.
+    private static readonly double[] LegacyRenderRight =
+    [
+        0.000000000, 0.002114414, 0.005148045, 0.008181782,
+        0.011207880, 0.014233970, 0.017244070, 0.024683970,
+        0.027662020, 0.030624160, 0.033561870, 0.036491210,
+        0.000000000, 0.000000000, 0.000000000, 0.000000000,
+        0.000000000, 0.000000000, 0.116052300, 0.053391950,
+        -0.031851320, -0.103627500, -0.131549100, -0.103793800,
+        -0.032108500, 0.057240540, 0.117996700, 0.128812100,
+        0.085114040, 0.000000000, 0.000000000, 0.000000000,
+        0.000000000, 0.000000000, 0.000000000, 0.062815150,
+        -0.025577150, -0.013966380, 0.052270700, -0.085808790,
+        0.111607700, -0.127278700, 0.131118800, -0.122076600,
+        0.101939400, -0.072552930, 0.009600151, 0.000000000,
+        0.000000000, 0.000000000, 0.000000000, 0.000000000,
+        0.025667180, -0.126621900, 0.089541570, 0.045142860,
+        -0.130624200, 0.073703040, 0.063554200, -0.131602100,
+        0.060160820, 0.076864220, -0.130099100, 0.041510690,
+    ];
 
     [Fact]
     public void an_export_with_no_configuration_message_gives_each_note_its_own_bend()
@@ -462,8 +508,10 @@ public class MpeSoundFontEngineTests
         //Assert
         // Measured from the engine before it knew anything about MPE. Every bend, controller,
         // pressure and registered-parameter message in the performance is delivered; with the zones
-        // switched off not one sample moves.
-        MpeEngineFixtures.Digest(audio.Left, audio.Right).Should().Be(LegacyRenderDigest);
+        // switched off the render still holds these values, on every platform, within the one
+        // tolerance PinnedRender explains.
+        PinnedRender.ShouldStillRender(audio.Left, LegacyStride, LegacyRenderLeft);
+        PinnedRender.ShouldStillRender(audio.Right, LegacyStride, LegacyRenderRight);
     }
 
     [Fact]
@@ -471,19 +519,26 @@ public class MpeSoundFontEngineTests
     {
         //Arrange
         using var fixtures = MpeEngineFixtures.Create();
-        var sequence = MpeSequences.Sequence(MpeEngineFixtures.ExpressivePerformance(Key));
 
-        //Act
-        var audio = fixtures.RenderSoundFontStereo(sequence, 3.0, synthesizer =>
-        {
-            synthesizer.MpeMemberBendRange = 96.0;
-            synthesizer.MpeLowerZoneMemberCount = 15;
-            synthesizer.MpeUpperZoneMemberCount = 15;
-            synthesizer.MpeMode = MpeMode.Auto;
-            synthesizer.MpeMode = MpeMode.Off;
-        });
+        //Act - the same performance twice: once through a synthesizer that was given the zone settings
+        //and then switched off, once through one that never heard of them.
+        var configured = fixtures.RenderSoundFontStereo(
+            MpeSequences.Sequence(MpeEngineFixtures.ExpressivePerformance(Key)), 3.0, synthesizer =>
+            {
+                synthesizer.MpeMemberBendRange = 96.0;
+                synthesizer.MpeLowerZoneMemberCount = 15;
+                synthesizer.MpeUpperZoneMemberCount = 15;
+                synthesizer.MpeMode = MpeMode.Auto;
+                synthesizer.MpeMode = MpeMode.Off;
+            });
+
+        var untouched = fixtures.RenderSoundFontStereo(
+            MpeSequences.Sequence(MpeEngineFixtures.ExpressivePerformance(Key)), 3.0);
 
         //Assert
-        MpeEngineFixtures.Digest(audio.Left, audio.Right).Should().Be(LegacyRenderDigest);
+        // No pinned numbers and no tolerance: the claim is that the settings do not reach the render,
+        // and two renders on the SAME machine settle that bit for bit, whatever platform it is.
+        MpeEngineFixtures.Digest(configured.Left, configured.Right)
+            .Should().Be(MpeEngineFixtures.Digest(untouched.Left, untouched.Right));
     }
 }
