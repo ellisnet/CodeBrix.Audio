@@ -173,9 +173,12 @@ the channel from the contract and then read their OWN state for it.
 
 The reads are gated on HasActiveZone, and no zone is ever active in MpeMode.Off.
 That is not an optimisation, it is the guarantee: with the zones switched off
-every engine takes the code path it took before any of this existed, and a
-committed render digest in the MPE tests fences it sample for sample. Any new
-read of MPE state must sit behind the same gate.
+every engine takes the code path it took before any of this existed, and the MPE
+tests fence it - the SFZ pair by rendering the same performance twice on the one
+machine and demanding the two agree bit for bit, the SoundFont pair against a
+committed digest. Any new read of MPE state must sit behind the same gate. See
+PINNED RENDERS AND THE PLATFORM MATHS LIBRARY, under TESTING, for why the two
+pairs are fenced differently.
 
 
 BUILDING
@@ -367,6 +370,106 @@ envelope shapes, tremolo depth) must measure RMS over the window instead.
 
 A handful of other tests carry [Fact(Skip = "...")]: NUnit [Explicit] tests
 carried over as skipped, plus two manual performance tests.
+
+PINNED RENDERS AND THE PLATFORM MATHS LIBRARY
+---------------------------------------------
+A RENDER CANNOT BE PINNED BIT FOR BIT ACROSS OPERATING SYSTEMS. Four tests used
+to try - two in SfzRenderRegressionTests and two in MpeSfzEngineTests - and they
+passed on Linux, where their numbers were recorded, and failed on Windows the
+first time anyone ran them there. Nothing was wrong with the library. The numbers
+were only ever a description of one machine's C runtime.
+
+WHY. MathF.Sin and MathF.Pow compile to the platform's sinf and powf: UCRT on
+Windows, glibc on Linux, Apple's libm on macOS. None of the three is correctly
+rounded and they do not agree. Measured on Windows against a correctly-rounded
+reference, sinf differs by one ulp on 34 arguments in 20,000, and powf on about
+600 in 1,000. Both reach these tests - sinf built the sine WAV the fixtures play,
+and powf is in the gain and envelope paths of every render. There is no build
+switch for this and no way to opt out; the functions are the platform's.
+
+The same applies to any Linux-versus-Linux pair, which is the part that makes
+per-platform constants a dead end rather than merely ugly: glibc has changed sinf
+across releases, musl is not glibc, and arm64 macOS is neither. Pinning a set of
+numbers per platform means pinning them per libc version per architecture, and
+finding out which by watching CI break.
+
+WHAT IS SAFE TO PIN, AND WHAT IS NOT. Two things in the engines are exactly
+specified everywhere, and both are worth knowing before anyone tries to "fix"
+them:
+
+  - SfzOscillator resamples in FIXED POINT (position_fp, fracBits = 24), so
+    playback phase cannot drift between platforms. A looped render measured
+    identical at 30 turns and at 220. Do not convert it to a float accumulator.
+  - ArrayMath.MultiplyAdd is the only SIMD in the library and it is elementwise,
+    so Vector<float>.Count going from 8 on AVX2 to 4 on NEON to 16 on AVX-512
+    changes nothing. Do not add a horizontal reduction to it without thinking
+    about this. .NET does not contract multiply-add into FMA on its own, so arm64
+    does not diverge there either.
+
+Everything else - anything downstream of sinf or powf - needs a tolerance.
+
+HOW THESE TESTS ARE FENCED NOW. Three mechanisms, in the order to reach for them:
+
+  1. COMPARE TWO RENDERS ON THE SAME MACHINE where the test's claim allows it.
+     the_mpe_settings_do_not_reach_a_render_with_the_zones_switched_off is not
+     really claiming "the render is this number", it is claiming the MPE settings
+     never reach the render. So it renders the performance twice - once with the
+     settings applied and switched off, once on a synthesizer that never had them
+     - and demands the digests match. That is stricter than a pinned digest, and
+     it cannot care what platform it runs on. Prefer this shape wherever a test
+     is really asserting an invariance.
+
+  2. PIN SAMPLES WITH A TOLERANCE for the genuine regression fences. See
+     tests/CodeBrix.Audio.Tests/Synth/PinnedRender.cs - one place, one tolerance,
+     so there is one number to argue with. Samples are read at a fixed stride
+     ACROSS the render rather than from its first block, because loop drift shows
+     up nowhere near the start.
+
+     Individual samples, NOT an aggregate. RMS over a block is the tempting shape
+     and the wrong one: the RMS of a sine does not depend on its phase, so it is
+     blind to exactly the loop drift these tests exist to catch. A sum over the
+     whole render is kept alongside the samples, with its own looser tolerance,
+     as aggregate cover over the frames not spot-checked.
+
+  3. KEEP THE BIT-EXACT ASSERTIONS THAT ARE ACTUALLY BIT-EXACT. Two renders on
+     one machine must still agree exactly - SfzRenderRegressionTests still opens
+     with first.Should().Equal(second), and that is not a candidate for a
+     tolerance.
+
+WHY 1e-4, AND THE ROOM EITHER SIDE OF IT. The tolerance was not guessed. On these
+renders, whose signal peaks around 0.11:
+
+    cross-platform noise, no filter in path         7.5e-9
+    cross-platform noise, through a resonant biquad  5.4e-7   worst measured
+    ------------------------------------------------------ SampleTolerance 1e-4
+    one cent of detune                               1.6e-2   subtlest defect
+    one frame of loop drift                          1.1e-1
+
+That is about four orders of margin on each side. The biquad row is the one to
+remember: a low-pass usually rounds the one-ulp differences away to nothing, but
+its recursion can sustain one instead, so error downstream of a filter is NOT
+bounded at an ulp. The measured amplification ranged from 0 to 85x and was not
+monotonic in cutoff or resonance - do not assume a well-behaved bound.
+
+The fence was checked in both directions, which is the part worth repeating if
+the tolerance is ever changed: a 0.5% gain change injected into SfzVoice makes
+all three pinned tests fail, and a 0.01% change - 1.1e-5, inside the tolerance -
+correctly does not.
+
+THE FIXTURES ARE LIBM-FREE. SfzTestInstruments.WriteSineWav no longer calls
+MathF.Sin. It computes the sine from a phase in REVOLUTIONS with a Taylor series,
+using only IEEE-754 add, subtract, multiply, divide and floor - all exactly
+specified, all identical on every platform and architecture - so the WAV it
+writes is byte-identical everywhere. This is not what makes the tests pass; the
+tolerance does that, and powf in the render path would still diverge with a
+perfect fixture. It is what makes a FAILURE mean something: with the input
+identical everywhere, a pinned render that moves has moved because the DSP moved.
+
+IF A PLATFORM LANDS OUTSIDE THE TOLERANCE. Do not re-pin the numbers to whichever
+machine you are sitting at, and do not add a per-platform branch. Measure the
+actual delta first. Anything in the 1e-7 range is the libm noise described above
+and the tolerance should widen a little; anything in the 1e-3 range or beyond is
+a real difference in the DSP and wants finding, not absorbing.
 
 CORPORA NEVER ENTER THE REPOSITORY
 ----------------------------------

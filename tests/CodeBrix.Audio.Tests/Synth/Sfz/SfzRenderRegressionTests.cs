@@ -1,5 +1,4 @@
 using System;
-using System.Globalization;
 using CodeBrix.Audio.Synth.Sfz;
 using SilverAssertions;
 using Xunit;
@@ -20,13 +19,57 @@ namespace CodeBrix.Audio.Tests.Synth.Sfz;
 /// the shared DSP changed, not that the expectation is stale.
 /// </para>
 /// <para>
-/// The values are a checksum over a whole render rather than a handful of samples, because a loop that
-/// drifts by one frame after ten seconds shows up in the sum and not in the first block.
+/// The values are sampled ACROSS the whole render rather than taken from its first block, because a
+/// loop that drifts by one frame after ten seconds shows up nowhere near the start. They were pinned
+/// with a tolerance rather than a checksum so that the same numbers hold on Windows, Linux and macOS -
+/// see <see cref="PinnedRender"/> for why a checksum cannot.
 /// </para>
 /// </remarks>
 public class SfzRenderRegressionTests
 {
     private const int Rate = 44100;
+
+    /// <summary>Every 128th frame of the one-shot render, from frame zero.</summary>
+    private static readonly double[] OneShotReference =
+    [
+        0.000000000, -0.083809063, 0.108017027, -0.055408310,
+        -0.036604218, 0.102585524, -0.095612787, 0.020644683,
+        0.069004960, -0.109581485, 0.072228767, 0.016489690,
+        -0.093481444, 0.103993550, -0.040550284, -0.051730458,
+        0.107222900, -0.086463422, 0.004215173, 0.081030704,
+        -0.108651318, 0.059004176, 0.032603990, -0.101025715,
+        0.097602651, -0.024769133, -0.065679044, 0.109419346,
+        -0.075345702, -0.012310296, 0.091211781, -0.105247699,
+        0.044436350, 0.047976062, -0.106270127, 0.088989832,
+        -0.008424110, -0.078132443, 0.109124847, -0.062512733,
+        -0.028555522, 0.099316426, -0.099448107, 0.028856931,
+        0.062255949, -0.109095298, 0.078351147, 0.008112688,
+        -0.088807158, 0.106346115, -0.048256665, -0.044150677,
+        0.105160117, -0.091384575, 0.012620581, 0.075118586,
+        -0.109436907, 0.065928802, 0.024464801, -0.097460173,
+        0.101146415, -0.032902032, -0.058740743, 0.108609833,
+    ];
+
+    /// <summary>Every 512th frame of the looped render, from frame zero - thirty turns of the loop.</summary>
+    private static readonly double[] LoopedReference =
+    [
+        0.000000000, -0.036604218, 0.069004960, -0.093481444,
+        0.108567469, -0.107350588, 0.089533508, -0.063280031,
+        0.022176147, 0.014944282, -0.057150215, 0.085102811,
+        -0.105631225, 0.109329306, -0.097100519, 0.074548125,
+        -0.036162317, -0.000468467, 0.044293560, -0.075232223,
+        0.100843132, -0.109391324, 0.102965228, -0.084509298,
+        0.049514517, -0.014015562, -0.030660382, 0.064042710,
+        -0.094287135, 0.107535586, -0.107024841, 0.092988916,
+        -0.061998662, 0.028253881, 0.016489690, -0.051730458,
+        0.086078160, -0.103794612, 0.109208167, -0.099838316,
+        0.073395900, -0.041996870, -0.002029913, 0.045717377,
+        -0.076360129, 0.101444565, -0.109476946, 0.102419674,
+        -0.083506413, 0.048116412, -0.012465451, -0.032156434,
+        0.065303408, -0.095073678, 0.107826442, -0.106677361,
+        0.092152946, -0.060704704, 0.026742281, 0.018031750,
+        -0.053101838, 0.087036036, -0.104285613, 0.109064870,
+    ];
 
     [Fact]
     public void a_plain_one_shot_renders_the_values_it_always_did()
@@ -43,8 +86,8 @@ public class SfzRenderRegressionTests
         var render = Render(instrument, 60, 8192);
 
         //Assert
-        Checksum(render).Should().Be("139517359957290");
-        Sum(render).Should().BeApproximately(1.190061321362208, 1e-9);
+        PinnedRender.ShouldStillRender(render, 128, OneShotReference);
+        PinnedRender.Sum(render).Should().BeApproximately(1.190069357631728, PinnedRender.SumTolerance);
     }
 
     [Fact]
@@ -90,9 +133,11 @@ public class SfzRenderRegressionTests
         var second = Render(instrument, 60, 32768);
 
         //Assert
+        // Two renders on one machine ARE required to agree bit for bit; only the pinned values need a
+        // tolerance, because only they came from a different machine.
         first.Should().Equal(second);
-        Checksum(first).Should().Be("75345306110086");
-        Sum(first).Should().BeApproximately(3.0018009736813838, 1e-9);
+        PinnedRender.ShouldStillRender(first, 512, LoopedReference);
+        PinnedRender.Sum(first).Should().BeApproximately(3.0018201072816737, PinnedRender.SumTolerance);
     }
 
     private static float[] Render(SfzInstrument instrument, int note, int frames)
@@ -105,29 +150,6 @@ public class SfzRenderRegressionTests
         synthesizer.Render(left, right);
 
         return left;
-    }
-
-    private static double Sum(float[] samples)
-    {
-        var total = 0.0;
-        foreach (var sample in samples)
-        {
-            total += sample;
-        }
-
-        return total;
-    }
-
-    private static string Checksum(float[] samples)
-    {
-        var hash = 17L;
-
-        foreach (var sample in samples)
-        {
-            hash = (hash * 31 + BitConverter.SingleToInt32Bits(sample)) & 0x7FFFFFFFFFFF;
-        }
-
-        return hash.ToString(CultureInfo.InvariantCulture);
     }
 
     private static double Peak(float[] samples, int offset, int length)

@@ -22,9 +22,54 @@ public class MpeSfzEngineTests
 {
     private const int Key = MpeEngineFixtures.SfzKey;
 
-    // The performance that the byte-identity fence renders, digested from the engine BEFORE the zone
-    // rules existed. MpeMode.Off must still produce it sample for sample.
-    private const ulong LegacyRenderDigest = 0x7C63E95292CA82F1UL;
+    /// <summary>Frames between the samples pinned in <see cref="LegacyRenderLeft"/> and its twin.</summary>
+    private const int LegacyStride = 1536;
+
+    // The performance that the byte-identity fence renders, sampled from the engine BEFORE the zone
+    // rules existed. MpeMode.Off must still produce it. These were a single digest until they had to
+    // pass on Windows, Linux and macOS at once, which no digest of a render can - see PinnedRender.
+    private static readonly double[] LegacyRenderLeft =
+    [
+        0.000000000, 0.005057688, 0.010112597, 0.015162038,
+        0.020203318, 0.025233762, 0.030250689, 0.035251427,
+        0.040233318, 0.045193713, 0.050129972, 0.055039462,
+        0.000000000, 0.000000000, 0.000000000, 0.000000000,
+        0.000000000, 0.000000000, 0.192594424, 0.087585002,
+        -0.054491621, -0.173508406, -0.219096661, -0.171962082,
+        -0.052050531, 0.089892246, 0.193795592, 0.215685576,
+        0.146295458, 0.000000000, 0.000000000, 0.000000000,
+        0.000000000, 0.000000000, 0.000000000, 0.103312097,
+        -0.041114416, -0.024779918, 0.088443838, -0.144057572,
+        0.186683133, -0.212383747, 0.218788326, -0.205473065,
+        0.173498958, -0.125787064, 0.004585469, 0.000000000,
+        0.000000000, 0.000000000, 0.000000000, 0.000000000,
+        0.041289367, -0.210495397, 0.150237173, 0.073796898,
+        -0.217383832, 0.123997323, 0.104560569, -0.219135374,
+        0.094827361, 0.132853419, -0.215708658, 0.063416585,
+    ];
+
+    // The right channel is pinned separately rather than asserted equal to the left. It happens to be
+    // identical today, because nothing in this performance moves the SFZ engine off centre, but that
+    // is an observation about the fixture and not a rule the engine promises.
+    private static readonly double[] LegacyRenderRight =
+    [
+        0.000000000, 0.005057688, 0.010112597, 0.015162038,
+        0.020203318, 0.025233762, 0.030250689, 0.035251427,
+        0.040233318, 0.045193713, 0.050129972, 0.055039462,
+        0.000000000, 0.000000000, 0.000000000, 0.000000000,
+        0.000000000, 0.000000000, 0.192594424, 0.087585002,
+        -0.054491621, -0.173508406, -0.219096661, -0.171962082,
+        -0.052050531, 0.089892246, 0.193795592, 0.215685576,
+        0.146295458, 0.000000000, 0.000000000, 0.000000000,
+        0.000000000, 0.000000000, 0.000000000, 0.103312097,
+        -0.041114416, -0.024779918, 0.088443838, -0.144057572,
+        0.186683133, -0.212383747, 0.218788326, -0.205473065,
+        0.173498958, -0.125787064, 0.004585469, 0.000000000,
+        0.000000000, 0.000000000, 0.000000000, 0.000000000,
+        0.041289367, -0.210495397, 0.150237173, 0.073796898,
+        -0.217383832, 0.123997323, 0.104560569, -0.219135374,
+        0.094827361, 0.132853419, -0.215708658, 0.063416585,
+    ];
 
     [Fact]
     public void an_export_with_no_configuration_message_gives_each_note_its_own_bend()
@@ -406,7 +451,8 @@ public class MpeSfzEngineTests
         var audio = fixtures.RenderSfzStereo(sequence, 3.0);
 
         //Assert
-        MpeEngineFixtures.Digest(audio.Left, audio.Right).Should().Be(LegacyRenderDigest);
+        PinnedRender.ShouldStillRender(audio.Left, LegacyStride, LegacyRenderLeft);
+        PinnedRender.ShouldStillRender(audio.Right, LegacyStride, LegacyRenderRight);
     }
 
     [Fact]
@@ -414,19 +460,27 @@ public class MpeSfzEngineTests
     {
         //Arrange
         using var fixtures = MpeEngineFixtures.Create();
-        var sequence = MpeSequences.Sequence(MpeEngineFixtures.ExpressivePerformance(Key));
 
-        //Act
-        var audio = fixtures.RenderSfzStereo(sequence, 3.0, synthesizer =>
-        {
-            synthesizer.MpeMemberBendRange = 96.0;
-            synthesizer.MpeLowerZoneMemberCount = 15;
-            synthesizer.MpeUpperZoneMemberCount = 15;
-            synthesizer.MpeMode = MpeMode.Auto;
-            synthesizer.MpeMode = MpeMode.Off;
-        });
+        //Act - the same performance twice: once through a synthesizer that was given the zone settings
+        //and then switched off, once through one that never heard of them.
+        var configured = fixtures.RenderSfzStereo(
+            MpeSequences.Sequence(MpeEngineFixtures.ExpressivePerformance(Key)), 3.0, synthesizer =>
+            {
+                synthesizer.MpeMemberBendRange = 96.0;
+                synthesizer.MpeLowerZoneMemberCount = 15;
+                synthesizer.MpeUpperZoneMemberCount = 15;
+                synthesizer.MpeMode = MpeMode.Auto;
+                synthesizer.MpeMode = MpeMode.Off;
+            });
+
+        var untouched = fixtures.RenderSfzStereo(
+            MpeSequences.Sequence(MpeEngineFixtures.ExpressivePerformance(Key)), 3.0);
 
         //Assert
-        MpeEngineFixtures.Digest(audio.Left, audio.Right).Should().Be(LegacyRenderDigest);
+        // This one needs no pinned numbers and no tolerance. The claim is that the settings do not
+        // reach the render, and two renders on the SAME machine settle that bit for bit - which is
+        // both a stricter test than a pinned digest and one that cannot care what platform it is on.
+        MpeEngineFixtures.Digest(configured.Left, configured.Right)
+            .Should().Be(MpeEngineFixtures.Digest(untouched.Left, untouched.Right));
     }
 }

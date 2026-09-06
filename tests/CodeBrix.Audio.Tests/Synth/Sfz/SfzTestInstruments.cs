@@ -65,12 +65,62 @@ internal sealed class SfzTestInstruments : IDisposable
             var samples = new float[frames];
             for (var i = 0; i < frames; i++)
             {
-                samples[i] = amplitude * MathF.Sin(2f * MathF.PI * frequency * i / sampleRate);
+                samples[i] = (float)(amplitude * Sine((double)frequency * i / sampleRate));
             }
             writer.WriteSamples(samples, 0, samples.Length);
         }
 
         return path;
+    }
+
+    /// <summary>
+    /// Sine of a phase given in REVOLUTIONS, computed without the platform maths library so that every
+    /// operating system writes a byte-identical fixture.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>MathF.Sin</c> compiles to the platform's <c>sinf</c> - UCRT on Windows, glibc on Linux,
+    /// Apple's libm on macOS - and none of the three is correctly rounded, so they disagree by one ulp
+    /// on a few arguments in every thousand. That is harmless for a test that asserts within a
+    /// tolerance and fatal for one that pins a render, so the fixture must not depend on it. Only
+    /// IEEE-754 add, subtract, multiply, divide and floor appear below, and every one of those is
+    /// exactly specified: same bits on every platform and architecture.
+    /// </para>
+    /// <para>
+    /// The phase arrives in revolutions rather than radians so that reducing it is an exact
+    /// <see cref="Math.Floor"/> rather than a division by pi. What is left is folded onto the first
+    /// quarter turn by the sine's own symmetry and evaluated with the Taylor series through x^15,
+    /// whose error over that range is about 1e-12 - four orders finer than the float the sample ends
+    /// up in.
+    /// </para>
+    /// </remarks>
+    private static double Sine(double revolutions)
+    {
+        var turn = revolutions - Math.Floor(revolutions);
+        var sign = 1.0;
+
+        if (turn >= 0.5)
+        {
+            turn -= 0.5;
+            sign = -1.0;
+        }
+
+        if (turn > 0.25)
+        {
+            turn = 0.5 - turn;
+        }
+
+        var x = turn * (2.0 * Math.PI);
+        var square = x * x;
+
+        return sign * x * (1.0
+            + square * (-1.0 / 6.0
+            + square * (1.0 / 120.0
+            + square * (-1.0 / 5040.0
+            + square * (1.0 / 362880.0
+            + square * (-1.0 / 39916800.0
+            + square * (1.0 / 6227020800.0
+            + square * (-1.0 / 1307674368000.0))))))));
     }
 
     /// <summary>
