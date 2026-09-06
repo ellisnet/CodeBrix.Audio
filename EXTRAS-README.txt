@@ -4,10 +4,11 @@ Samples, tools and other content in this repository that is not part of a NuGet
 package
 ================================================================================
 
-This repository ships one NuGet package and has no sample applications and no
-demo projects. Everything below is developer tooling and test data: none of it
-is packed, and none of it is needed to consume
-CodeBrix.Audio.MitLicenseForever.
+This repository ships two NuGet packages - CodeBrix.Audio.MitLicenseForever and
+the CodeBrix.Audio.ModestSynth.MitLicenseForever add-on - and has no sample
+applications and no demo projects. Everything below is developer tooling and
+test data: none of it is packed, and none of it is needed to consume either
+package.
 
 Each tool carries its own README.txt with the full detail; the entries here say
 what it is, how to run it, and why it exists. NOTHING IN tools/ INSTALLS
@@ -161,6 +162,57 @@ tools/sfz_opcode_survey/ - measure SFZ opcode coverage over real libraries
     opcodes, or names containing '$', that is the first thing to check.
 
 
+tools/ds_feature_survey/ - measure Decent Sampler feature coverage over real libraries
+=====================================================================================
+  Path:   tools/ds_feature_survey/  (read its README.txt first)
+
+  WHAT IT IS
+    The Decent Sampler counterpart of sfz_opcode_survey, and the same idea: the
+    developer guide says what the format CAN express, not what the libraries you
+    own actually use, and not whether this engine understands them. This parses a
+    folder of real libraries with CodeBrix.Audio's own parser and reports, per
+    library and per preset, every element and attribute they use alongside how
+    much of it the engine recognises. Like its sibling it needs the parser, so it
+    is a small console project referencing the library; it is not packable and is
+    not in CodeBrix.Audio.slnx.
+
+  HOW TO RUN IT
+      cd tools/ds_feature_survey
+      dotnet run -- <corpus-directory> [output-directory]
+
+    Each IMMEDIATE SUBDIRECTORY of <corpus-directory> is treated as one library;
+    every .dspreset, .dslibrary and .dsbundle under it is read recursively, and
+    archives are read in place rather than unpacked.
+
+  PREREQUISITES (installed by YOU)
+    The .NET SDK, and a corpus of Decent Sampler libraries you supply. Nothing is
+    downloaded.
+
+  WHAT IT WRITES
+    libraries.md   per-preset breakdown - groups, samples, oscillators, size, and
+                   every problem listed in full. This is where an authoring
+                   mistake in a library shows up.
+    attributes.md  every element, attribute, effect type, binding type, binding
+                   level, binding parameter, waveform, modulator and sample
+                   extension found, with library/preset/raw counts and an example
+                   value.
+    coverage.md    coverage against DecentSamplerSupportedFeatures, read out of
+                   the assembly the tool builds against, so it stays truthful as
+                   the engine grows. This is the report to re-run over a new
+                   library before promising it will play.
+
+  WHAT IT DEMONSTRATES / WHY IT MATTERS
+    Two counting rules make the numbers mean something. Names are ranked by the
+    number of LIBRARIES that use them and never by raw occurrence, or one
+    sprawling library decides the ranking on its own. And attributes are counted
+    from the RAW XML rather than from the parsed model: the model keeps only the
+    attributes the parser did not understand, so counting from it would turn the
+    coverage figure into a restatement of what the engine already knows.
+    Controller-indexed names are folded to one entry (loCC64 and loCC11 both count
+    as loCCN) by the same helper the engine uses, so the survey and the feature
+    list can never disagree about names.
+
+
 tests/Assets/ - the committed fixture sets
 ==========================================
   Path:   tests/Assets/audio/      (manifest: AUDIO-FIXTURES.txt)
@@ -181,6 +233,7 @@ tests/ - the test projects
 ==========================
   Path:   tests/CodeBrix.Audio.Tests/
           tests/CodeBrix.Audio.Engine.Tests/
+          tests/CodeBrix.Audio.ModestSynth.Tests/
 
   Not samples, but they are the other non-package content in the repository and
   they are the best worked examples of every public API. AGENT-README.txt's
@@ -193,6 +246,14 @@ tests/ - the test projects
 
   The tests that open a real audio device and MAKE SOUND are opt-in, so an
   ordinary run is silent and headless-safe:
-      CODEBRIX_AUDIO_RUN_PLAYBACK_TESTS=1 dotnet test          # main suite
+      CODEBRIX_AUDIO_RUN_PLAYBACK_TESTS=1 dotnet test          # main suite and
+                                                              #   the add-on's
       CODEBRIX_AUDIO_ENGINE_RUN_PLAYBACK_TESTS=1 dotnet test   # Engine suite
+
+  Tests that need a corpus of real material - stems downloads, sampler
+  libraries, a General MIDI SoundFont - are opt-in the same way and SKIP rather
+  than fail when the variable is unset. Nothing from a corpus is committed here;
+  see MAINTAINER-README.txt, "CORPORA NEVER ENTER THE REPOSITORY".
+      CODEBRIX_AUDIO_SUNO_CORPUS=... CODEBRIX_AUDIO_DS_CORPUS=... \
+      CODEBRIX_AUDIO_GM_SOUNDFONT=... dotnet test
 ================================================================================

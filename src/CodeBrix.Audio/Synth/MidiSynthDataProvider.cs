@@ -41,6 +41,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
     private readonly int _maxTailFrames;
 
     private MidiSequence _sequence;
+    private TempoSource _tempoSource;
     private MidiSequencer.MessageHook _messageFilter;
     private MidiMessageObserver _messageObserver;
     private bool _looping;
@@ -123,6 +124,16 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
     internal TimeSpan CurrentTime
     {
         get { lock (_lock) { return _sequencer.Position; } }
+    }
+
+    /// <summary>
+    /// The musical clock this provider publishes tempo and beat position into as it renders, or
+    /// <see langword="null"/> for none.
+    /// </summary>
+    internal TempoSource Tempo
+    {
+        get { lock (_lock) { return _tempoSource; } }
+        set { lock (_lock) { _tempoSource = value; PublishTempo(_tempoSource != null && _tempoSource.IsPlaying); } }
     }
 
     /// <summary>The playback speed multiplier the sequencer is running at.</summary>
@@ -216,7 +227,32 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
             _endRaised = false;
             _tailFramesRendered = 0;
             _sequencer.Play(sequence, loop);
+            PublishTempo(_tempoSource != null && _tempoSource.IsPlaying);
         }
+    }
+
+    /// <summary>
+    /// Reports the sequencer's position as musical time. Callers hold <c>_lock</c>; it allocates
+    /// nothing, because it runs on the audio thread once per block.
+    /// </summary>
+    /// <param name="isPlaying">What to report for <see cref="TempoSource.IsPlaying"/>.</param>
+    internal void PublishTempo(bool isPlaying)
+    {
+        var tempo = _tempoSource;
+        if (tempo == null)
+        {
+            return;
+        }
+
+        var map = _sequence?.TempoMap;
+        if (map == null)
+        {
+            tempo.IsPlaying = isPlaying;
+            return;
+        }
+
+        var time = _sequencer.Position;
+        tempo.Update(map.BeatsPerMinuteAt(time), map.BeatPositionAt(time), isPlaying);
     }
 
     /// <summary>Stops playback and silences all voices.</summary>
@@ -313,6 +349,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
                 _tailFramesRendered += frames;
             }
 
+            PublishTempo(true);
             PositionChanged?.Invoke(this, new PositionChangedEventArgs(Position));
 
             return frames * 2;
@@ -333,6 +370,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
             _sequencer.Seek(TimeSpan.FromSeconds(seconds));
             _endRaised = false;
             _tailFramesRendered = 0;
+            PublishTempo(_tempoSource != null && _tempoSource.IsPlaying);
         }
     }
 

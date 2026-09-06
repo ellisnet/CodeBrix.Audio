@@ -30,13 +30,28 @@ internal sealed class SfzChannel
     private int lastNoteOnKey;
     private int lastNoteOnVelocity;
 
-    internal SfzChannel(SfzInstrument instrument)
+    internal SfzChannel(SfzInstrument instrument, int index)
     {
         this.instrument = instrument;
+        Index = index;
         Reset();
     }
 
+    // Which MIDI channel this is, 0-based. The channel needs to know, because the MPE rules are
+    // stated in terms of which channel a value came from and which zone that channel belongs to.
+    public int Index { get; }
+
     public float PitchBend => pitchBend;
+
+    // How far the wheel reaches relative to MIDI's own two semitones, from RPN 0. One until the music
+    // says otherwise, so a file that never sends RPN 0 behaves exactly as it always did.
+    //
+    // The SFZ format states a region's bend range itself, in cents, with bend_up and bend_down; this
+    // SCALES that range rather than replacing it, so a region that asks for an octave still bends
+    // twelve times as far as one that asks for a semitone. A performance recorded from an expressive
+    // controller sets RPN 0 to 48 and gets its whole range through either way.
+    public float BendRangeScale { get; set; } = 1f;
+
     public int HeldKeyCount => heldKeyCount;
     public int LastKeyswitch => lastKeyswitch;
     public int PreviousNote => previousNote;
@@ -61,6 +76,7 @@ internal sealed class SfzChannel
         Array.Clear(noteOnFrames, 0, noteOnFrames.Length);
 
         pitchBend = 0f;
+        BendRangeScale = 1f;
         heldKeyCount = 0;
         lastKeyswitch = -1;
         previousNote = -1;
@@ -141,6 +157,18 @@ internal sealed class SfzChannel
 
         heldKeys[key] = false;
         previousNote = key;
+    }
+
+    // Every key comes up at once: what All Notes Off and All Sound Off mean for trigger=first and
+    // trigger=legato, which count physically held keys. Without this the engine goes on believing a key
+    // is down after a panic and a trigger=first region never fires again.
+    //
+    // previousNote is deliberately left alone: a panic is not a performance gesture, so it does not
+    // become the note a later legato region measures its interval against.
+    public void ReleaseAllKeys()
+    {
+        Array.Clear(heldKeys, 0, heldKeys.Length);
+        heldKeyCount = 0;
     }
 
     public int NoteOnVelocity(int key) => 0 <= key && key <= 127 ? noteOnVelocities[key] : 0;

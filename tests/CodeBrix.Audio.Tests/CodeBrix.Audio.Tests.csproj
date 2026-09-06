@@ -27,13 +27,15 @@
 
   <!--
     Generated audio fixtures shared with CodeBrix.Audio.Engine.Tests. They are synthesized and
-    encoded by tools/make_test_fixtures/make_fixtures.sh - no third-party audio is bundled. WAV
-    and MP3 cases are still built in code (TestAudio.cs); these files exist because Ogg Vorbis
-    and FLAC cannot reasonably be hand-assembled. Each .flac ships with the .wav it was encoded
-    from, which is the ground truth the lossless round-trip tests compare against.
+    encoded by tools/make_test_fixtures/make_fixtures.sh - no third-party audio is bundled. Most
+    WAV and MP3 cases are still built in code (TestAudio.cs); these files exist because Ogg
+    Vorbis and FLAC cannot reasonably be hand-assembled, and because the one MP3 case that a
+    hand-built frame cannot cover - a real encoder's Xing/LAME delay and padding - needs a real
+    encoder. Each .flac and the .mp3 ship with the .wav they were encoded from, which is the
+    ground truth the round-trip tests compare against.
   -->
   <ItemGroup>
-    <Content Include="..\Assets\audio\*.ogg;..\Assets\audio\*.flac;..\Assets\audio\*.wav">
+    <Content Include="..\Assets\audio\*.ogg;..\Assets\audio\*.flac;..\Assets\audio\*.mp3;..\Assets\audio\*.wav">
       <Link>Assets\audio\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
@@ -53,6 +55,18 @@
     </Content>
     <Content Include="..\Assets\synth\**\*">
       <Link>Assets\synth\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
+    The Decent Sampler name list the feature cross-check reads. It is derived from the developer
+    guide and lives beside the tests that use it rather than in tests/Assets, because it is a list
+    of names rather than generated audio.
+  -->
+  <ItemGroup>
+    <Content Include="Synth\DecentSampler\decent-sampler-guide-names.txt">
+      <Link>Assets\decent-sampler\decent-sampler-guide-names.txt</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

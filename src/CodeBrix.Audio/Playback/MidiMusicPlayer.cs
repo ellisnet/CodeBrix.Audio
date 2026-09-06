@@ -3,6 +3,8 @@ using System.IO;
 using System.Threading;
 using CodeBrix.Audio.Engine.Components;
 using CodeBrix.Audio.Synth;
+using CodeBrix.Audio.Synth.DecentSampler;
+using CodeBrix.Audio.Synth.Mpe;
 using CodeBrix.Audio.Synth.Sfz;
 using CodeBrix.Audio.Wave;
 using EnginePlaybackState = CodeBrix.Audio.Engine.Enums.PlaybackState;
@@ -40,8 +42,10 @@ namespace CodeBrix.Audio.Playback;
 public sealed class MidiMusicPlayer : IDisposable
 {
     private readonly object _lock = new object();
+    private readonly TempoSource _tempoSource = new TempoSource();
 
     private IMidiSynthesizer _synthesizer;
+    private IMpeSynthesizer _mpe;
     private MidiSynthDataProvider _provider;
     private SoundPlayer _player;
     private SynchronizationContext _syncContext;
@@ -49,9 +53,14 @@ public sealed class MidiMusicPlayer : IDisposable
     private MidiSequencer.MessageHook _messageFilter;
     private MidiMessageObserver _messageObserver;
     private float _volume = 1.0f;
+    private bool _dropAuxiliaryOutputs;
     private float _speed = 1.0f;
     private bool _isLooping;
     private bool _disposed;
+    private MpeMode _mpeMode = MpeMode.Off;
+    private double _mpeMemberBendRange = MpeChannelState.DefaultMemberBendRange;
+    private int _mpeLowerZoneMemberCount;
+    private int _mpeUpperZoneMemberCount;
 
     /// <summary>
     /// Raised when a non-looping sequence reaches its end and its final voices finish sounding, so
@@ -103,6 +112,34 @@ public sealed class MidiMusicPlayer : IDisposable
     }
 
     /// <summary>
+    /// Whether an instrument's AUXILIARY STEREO OUTPUTS are thrown away instead of being folded into
+    /// the stereo mix. False by default, so nothing an instrument makes is silently lost.
+    /// </summary>
+    /// <remarks>
+    /// A Decent Sampler preset can route a group, a zone or a bus to one of sixteen auxiliary stereo
+    /// outputs. A plug-in host would give those their own outputs; this player has one stereo pair, so
+    /// it adds them into the mix. Set this when a preset uses auxiliary outputs for something a
+    /// listener should not hear through the main pair - a cue feed, or a layer meant for an external
+    /// processor. Formats without auxiliary outputs are unaffected. Persists across loads.
+    /// </remarks>
+    public bool DropAuxiliaryOutputs
+    {
+        get { lock (_lock) { return _dropAuxiliaryOutputs; } }
+        set
+        {
+            lock (_lock)
+            {
+                _dropAuxiliaryOutputs = value;
+
+                if (_synthesizer is IMultiOutputRenderer renderer)
+                {
+                    renderer.FoldAuxiliaryOutputs = !value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Whether the sequence repeats. Loop points come from the sequence itself (see
     /// <see cref="MidiSequenceLoopType"/>); a sequence with no loop point repeats from the start.
     /// Persists across loads.
@@ -119,6 +156,195 @@ public sealed class MidiMusicPlayer : IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// The live musical clock of the sequence being played: its tempo at the current position, and
+    /// how far into it the transport has travelled in beats.
+    /// </summary>
+    /// <remarks>
+    /// Fed from the loaded sequence's own tempo map as the music renders, so a sequence with tempo
+    /// changes reports the tempo in force right now rather than the one it started at. Before
+    /// anything is loaded it reports the MIDI default of 120 BPM at beat zero. Reads are lock-free
+    /// and safe from any thread, including the audio thread.
+    /// </remarks>
+    public TempoSource TempoSource => _tempoSource;
+
+    /// <summary>
+    /// How the player reads the MIDI Polyphonic Expression zones of the music it plays.
+    /// <see cref="CodeBrix.Audio.Synth.Mpe.MpeMode.Off"/> by default. Persists across loads.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A performance recorded from an expressive controller spreads each note onto its own MIDI
+    /// channel so that it can bend, brighten and swell alone. Exporters normally leave out the
+    /// configuration message that says so, which is what <see cref="CodeBrix.Audio.Synth.Mpe.MpeMode.Auto"/> is for:
+    /// notes spread over channels 2 to 16 with per-channel bends, and nothing on channel 1, are read
+    /// as a lower zone. <see cref="CodeBrix.Audio.Synth.Mpe.MpeMode.LowerZone"/> pins the same layout for a file the
+    /// detector is not sure about.
+    /// </para>
+    /// <para>
+    /// All three sampled instrument formats - SoundFont, SFZ and Decent Sampler - read a performance
+    /// the same way, so the same recording plays alike through any of them. A synthesizer of your
+    /// own follows too when it implements <see cref="IMpeSynthesizer"/>.
+    /// </para>
+    /// </remarks>
+    public MpeMode MpeMode
+    {
+        get { lock (_lock) { return _mpeMode; } }
+        set
+        {
+            lock (_lock)
+            {
+                _mpeMode = value;
+
+                var mpe = MpeSynthesizer();
+                if (mpe != null)
+                {
+                    mpe.MpeMode = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// How far a member channel's pitch bend reaches when the music never says, in semitones.
+    /// Forty-eight by default, the value expressive controllers ship with. Persists across loads.
+    /// </summary>
+    /// <remarks>RPN 0 in the music overrides this, per channel and per zone.</remarks>
+    public double MpeMemberBendRange
+    {
+        get { lock (_lock) { return _mpeMemberBendRange; } }
+        set
+        {
+            lock (_lock)
+            {
+                _mpeMemberBendRange = value;
+
+                var mpe = MpeSynthesizer();
+                if (mpe != null)
+                {
+                    mpe.MpeMemberBendRange = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// How many member channels the lower zone holds in an explicit <see cref="MpeMode"/>. Zero, the
+    /// default, means fifteen when only the lower zone is on and seven when both zones are. Persists
+    /// across loads.
+    /// </summary>
+    /// <remarks>Use this to pin a file the automatic detector reads differently from how it was played.</remarks>
+    public int MpeLowerZoneMemberCount
+    {
+        get { lock (_lock) { return _mpeLowerZoneMemberCount; } }
+        set
+        {
+            lock (_lock)
+            {
+                _mpeLowerZoneMemberCount = value;
+
+                var mpe = MpeSynthesizer();
+                if (mpe != null)
+                {
+                    mpe.MpeLowerZoneMemberCount = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>The upper zone's equivalent of <see cref="MpeLowerZoneMemberCount"/>.</summary>
+    public int MpeUpperZoneMemberCount
+    {
+        get { lock (_lock) { return _mpeUpperZoneMemberCount; } }
+        set
+        {
+            lock (_lock)
+            {
+                _mpeUpperZoneMemberCount = value;
+
+                var mpe = MpeSynthesizer();
+                if (mpe != null)
+                {
+                    mpe.MpeUpperZoneMemberCount = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The lower MPE zone as the loaded instrument currently reads it - master channel 1, its
+    /// members, and the bend ranges in force.
+    /// </summary>
+    /// <remarks>
+    /// Reads back what a configuration message in the music, or automatic detection, decided. An
+    /// inactive zone is reported while nothing is loaded, or while the loaded instrument is played
+    /// by a synthesizer that does not implement <see cref="IMpeSynthesizer"/>.
+    /// </remarks>
+    public MpeZoneInfo MpeLowerZone
+    {
+        get
+        {
+            lock (_lock)
+            {
+                var mpe = MpeSynthesizer();
+                return mpe == null ? default(MpeZoneInfo) : mpe.MpeLowerZone;
+            }
+        }
+    }
+
+    /// <summary>The upper MPE zone as the loaded instrument currently reads it, with master channel 16.</summary>
+    public MpeZoneInfo MpeUpperZone
+    {
+        get
+        {
+            lock (_lock)
+            {
+                var mpe = MpeSynthesizer();
+                return mpe == null ? default(MpeZoneInfo) : mpe.MpeUpperZone;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The note-off ("lift") velocity of the last note-off for a key on a channel, 0 to 127, or -1
+    /// when the loaded instrument format does not capture it.
+    /// </summary>
+    /// <param name="channel">The MIDI channel, 0 to 15.</param>
+    /// <param name="key">The MIDI note number, 0 to 127.</param>
+    /// <returns>The release velocity, 0 when that key has not been released, or -1 when unavailable.</returns>
+    /// <remarks>
+    /// <para>
+    /// An expressive controller sends how quickly a finger left the key, and a MIDI file records it.
+    /// No sample format in this package defines what it should DO, so it changes nothing about how a
+    /// preset sounds; it is here so a host can react to it.
+    /// </para>
+    /// <para>
+    /// To watch lifts as they happen rather than ask afterwards, use
+    /// <see cref="MidiMessageProcessed"/>: a note-off carries the lift as its second data byte.
+    /// Every instrument format in this package answers this; a synthesizer of your own answers when
+    /// it implements <see cref="IMpeSynthesizer"/>.
+    /// </para>
+    /// </remarks>
+    public int GetReleaseVelocity(int channel, int key)
+    {
+        RequireChannel(channel);
+
+        lock (_lock)
+        {
+            var mpe = MpeSynthesizer();
+            return mpe == null ? -1 : mpe.ReleaseVelocity(channel, key);
+        }
+    }
+
+    // The loaded synthesizer's MPE surface, or null when nothing is loaded or the loaded
+    // synthesizer has none. Called with the lock held.
+    private IMpeSynthesizer MpeSynthesizer() => _mpe;
+
+    // Resolved once per load rather than on every read: every synthesizer in the package that reads
+    // MPE declares the interface, and one that does not simply has no MPE surface.
+    private static IMpeSynthesizer ResolveMpe(IMidiSynthesizer synthesizer) =>
+        synthesizer as IMpeSynthesizer;
 
     /// <summary>The number of voices currently sounding. Useful for diagnostics and polyphony tuning.</summary>
     public int ActiveVoiceCount
@@ -324,10 +550,22 @@ public sealed class MidiMusicPlayer : IDisposable
 
     /// <summary>
     /// Loads an instrument and a MIDI file by path, positioned at the start and stopped. The
-    /// instrument's extension decides the synthesizer: <c>.sfz</c> loads an SFZ instrument, anything
-    /// else a SoundFont.
+    /// instrument's extension decides the synthesizer: <c>.sfz</c> loads an SFZ instrument,
+    /// <c>.dspreset</c>, <c>.dslibrary</c> and <c>.dsbundle</c> load a Decent Sampler instrument, and
+    /// anything else a SoundFont. A FOLDER holding a Decent Sampler preset works too, which is how a
+    /// <c>.dsbundle</c> appears on macOS.
     /// </summary>
-    /// <param name="instrumentPath">Path to a <c>.sf2</c> or <c>.sfz</c> file.</param>
+    /// <remarks>
+    /// A Decent Sampler instrument loaded this way is held in a process-wide cache
+    /// (<see cref="SharedDecentSamplerCache"/>), because its decoded samples run to hundreds of
+    /// megabytes and every player that names the same path should share one copy. The other two formats
+    /// keep their existing behaviour of loading a fresh instance; use the overloads that take an
+    /// instrument to share those.
+    /// </remarks>
+    /// <param name="instrumentPath">
+    /// Path to a <c>.sf2</c>, <c>.sfz</c>, <c>.dspreset</c>, <c>.dslibrary</c> or <c>.dsbundle</c>, or
+    /// to a folder holding a Decent Sampler preset.
+    /// </param>
     /// <param name="midiFilePath">Path to a Standard MIDI File.</param>
     /// <exception cref="ArgumentNullException">Either path is null.</exception>
     public void Load(string instrumentPath, string midiFilePath)
@@ -342,14 +580,51 @@ public sealed class MidiMusicPlayer : IDisposable
             throw new ArgumentNullException(nameof(midiFilePath));
         }
 
-        if (string.Equals(Path.GetExtension(instrumentPath), ".sfz", StringComparison.OrdinalIgnoreCase))
+        var extension = Path.GetExtension(instrumentPath);
+
+        if (string.Equals(extension, ".sfz", StringComparison.OrdinalIgnoreCase))
         {
             Load(new SfzInstrument(instrumentPath), new MidiSequence(midiFilePath));
+        }
+        else if (IsDecentSamplerPath(instrumentPath, extension))
+        {
+            Load(SharedDecentSamplerCache.Get(instrumentPath), new MidiSequence(midiFilePath));
         }
         else
         {
             Load(new SoundFont(instrumentPath), new MidiSequence(midiFilePath));
         }
+    }
+
+    /// <summary>
+    /// The process-wide cache behind the path form of <see cref="Load(string, string)"/> for Decent
+    /// Sampler instruments. Exposed so an application can pre-load a library, count what is held, or
+    /// clear it when nothing is playing.
+    /// </summary>
+    /// <remarks>
+    /// Never disposed by the player. Clearing it disposes the instruments it holds, so do that only when
+    /// no player is rendering from one.
+    /// </remarks>
+    public static DecentSamplerInstrumentCache SharedDecentSamplerCache { get; } =
+        new DecentSamplerInstrumentCache();
+
+    private static bool IsDecentSamplerPath(string path, string extension)
+    {
+        if (string.Equals(extension, ".dspreset", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".dslibrary", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(extension, ".dsbundle", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // A folder is a Decent Sampler instrument when it holds a preset; a .dsbundle on macOS is a
+        // folder, and so is an unpacked library.
+        if (!Directory.Exists(path))
+        {
+            return false;
+        }
+
+        return Directory.EnumerateFiles(path, "*.dspreset", SearchOption.AllDirectories).GetEnumerator().MoveNext();
     }
 
     /// <summary>
@@ -387,6 +662,92 @@ public sealed class MidiMusicPlayer : IDisposable
         LoadCore(rate => new SfzSynthesizer(instrument, rate), sequence);
     }
 
+    /// <summary>
+    /// Loads a shared Decent Sampler instrument and a MIDI sequence. This is the overload to prefer for
+    /// the format: the instrument can come from a <see cref="DecentSamplerInstrumentCache"/> and be
+    /// shared across every player in the process.
+    /// </summary>
+    /// <remarks>
+    /// The synthesizer reads this player's <see cref="TempoSource"/>, so a note delay or a retrigger
+    /// interval written in beats follows the MIDI file's own tempo map.
+    /// </remarks>
+    /// <param name="instrument">The Decent Sampler instrument to render with.</param>
+    /// <param name="sequence">The sequence to play.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    public void Load(DecentSamplerInstrument instrument, MidiSequence sequence)
+    {
+        if (instrument == null)
+        {
+            throw new ArgumentNullException(nameof(instrument));
+        }
+
+        LoadCore(
+            rate => new DecentSamplerSynthesizer(instrument, rate)
+            {
+                TempoSource = _tempoSource,
+                MpeMemberBendRange = _mpeMemberBendRange,
+                MpeMode = _mpeMode,
+            },
+            sequence);
+    }
+
+    /// <summary>
+    /// Loads a synthesizer of your own and a MIDI sequence - a synthesizer this package knows nothing
+    /// about, such as the standalone one in CodeBrix.Audio.ModestSynth.
+    /// </summary>
+    /// <param name="synthesizer">
+    /// The synthesizer to play. The player takes it as it is; see the remarks about its sample rate.
+    /// </param>
+    /// <param name="sequence">The sequence to play.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    /// <remarks>
+    /// <para>
+    /// The player renders through the shared audio device, and an already-built synthesizer cannot
+    /// change the rate it synthesizes at. Its <see cref="IMidiSynthesizer.SampleRate"/> should
+    /// therefore be the rate the device settled on, or everything it plays is transposed and
+    /// time-stretched by the ratio between the two. Prefer
+    /// <see cref="Load(Func{int, IMidiSynthesizer}, MidiSequence)"/>, which is handed the device's own
+    /// rate and builds the synthesizer at it.
+    /// </para>
+    /// <para>
+    /// The player does not dispose the synthesizer, and a synthesizer must not be shared between
+    /// players: one belongs to one rendering thread.
+    /// </para>
+    /// </remarks>
+    public void Load(IMidiSynthesizer synthesizer, MidiSequence sequence)
+    {
+        if (synthesizer == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizer));
+        }
+
+        LoadCore(_ => synthesizer, sequence);
+    }
+
+    /// <summary>
+    /// Loads a MIDI sequence and a factory that builds the synthesizer to play it with, at whatever
+    /// rate the shared audio device settled on.
+    /// </summary>
+    /// <param name="synthesizerFactory">
+    /// Builds the synthesizer. Its argument is the device's sample rate in Hz, and the synthesizer it
+    /// returns must render at that rate. Called once per load, on the calling thread.
+    /// </param>
+    /// <param name="sequence">The sequence to play.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    /// <remarks>
+    /// This is the general form the format-specific overloads are built on, and the one to prefer for
+    /// any synthesizer this package does not have an overload for.
+    /// </remarks>
+    public void Load(Func<int, IMidiSynthesizer> synthesizerFactory, MidiSequence sequence)
+    {
+        if (synthesizerFactory == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizerFactory));
+        }
+
+        LoadCore(synthesizerFactory, sequence);
+    }
+
     private void LoadCore(Func<int, IMidiSynthesizer> createSynthesizer, MidiSequence sequence)
     {
         if (sequence == null)
@@ -410,6 +771,12 @@ public sealed class MidiMusicPlayer : IDisposable
             try
             {
                 synthesizer = createSynthesizer(deviceRate);
+
+                if (synthesizer is IMultiOutputRenderer renderer)
+                {
+                    renderer.FoldAuxiliaryOutputs = !_dropAuxiliaryOutputs;
+                }
+
                 provider = new MidiSynthDataProvider(synthesizer);
 
                 // Speed and the two message hooks are properties of the PLAYER, not of any one
@@ -418,6 +785,7 @@ public sealed class MidiMusicPlayer : IDisposable
                 provider.Speed = _speed;
                 provider.MessageFilter = _messageFilter;
                 provider.MessageObserver = _messageObserver;
+                provider.Tempo = _tempoSource;
 
                 provider.Start(sequence, _isLooping);
 
@@ -446,9 +814,22 @@ public sealed class MidiMusicPlayer : IDisposable
             }
 
             _synthesizer = synthesizer;
+            _mpe = ResolveMpe(synthesizer);
             _provider = provider;
             _player = player;
             _sequence = sequence;
+
+            // The MPE settings belong to the PLAYER, not to any one instrument, so they are applied
+            // to whatever was just loaded - the same rule Speed and the message hooks follow. A
+            // format-specific overload may already have passed them to its own settings object;
+            // setting them again lands on the same values.
+            if (_mpe != null)
+            {
+                _mpe.MpeMemberBendRange = _mpeMemberBendRange;
+                _mpe.MpeLowerZoneMemberCount = _mpeLowerZoneMemberCount;
+                _mpe.MpeUpperZoneMemberCount = _mpeUpperZoneMemberCount;
+                _mpe.MpeMode = _mpeMode;
+            }
 
             if (_syncContext == null)
             {
@@ -465,6 +846,7 @@ public sealed class MidiMusicPlayer : IDisposable
         {
             ThrowIfDisposed();
             RequireLoaded();
+            _tempoSource.IsPlaying = true;
             _player.Play();
         }
     }
@@ -479,6 +861,7 @@ public sealed class MidiMusicPlayer : IDisposable
                 return;
             }
             _player.Pause();
+            _tempoSource.IsPlaying = false;
         }
     }
 
@@ -493,6 +876,7 @@ public sealed class MidiMusicPlayer : IDisposable
             }
 
             _player.Stop();
+            _tempoSource.IsPlaying = false;
 
             // Rewind by restarting the sequence: a stopped MIDI player should be at bar one with no
             // note, controller or pitch-bend state left over from where it was interrupted.
@@ -546,6 +930,8 @@ public sealed class MidiMusicPlayer : IDisposable
     // Fires on the engine's real-time audio thread; marshal off it before raising the public event.
     private void OnEnginePlaybackEnded(object sender, EventArgs e)
     {
+        _tempoSource.IsPlaying = false;
+
         var handler = PlaybackEnded;
         if (handler == null)
         {
@@ -581,7 +967,9 @@ public sealed class MidiMusicPlayer : IDisposable
         }
 
         _synthesizer = null;
+        _mpe = null;
         _sequence = null;
+        _tempoSource.IsPlaying = false;
     }
 
     private static PlaybackState Map(EnginePlaybackState state)

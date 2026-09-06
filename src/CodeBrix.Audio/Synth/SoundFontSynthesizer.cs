@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using CodeBrix.Audio.Synth.Mpe;
 
 // ReSharper disable once CheckNamespace
 namespace CodeBrix.Audio.Synth; //was previously: MeltySynth
@@ -13,7 +14,7 @@ namespace CodeBrix.Audio.Synth; //was previously: MeltySynth
 /// If you want to send notes and render the waveform in separate threads,
 /// you must make sure that the methods are not called at the same time.
 /// </remarks>
-public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IAudioRenderer only; IMidiSynthesizer added for SFZ parity
+public sealed class SoundFontSynthesizer : IMidiSynthesizer, IMpeSynthesizer //was previously: IAudioRenderer only; IMidiSynthesizer added for SFZ parity
 {
     private static readonly int channelCount = 16;
     private static readonly int percussionChannel = 9;
@@ -30,6 +31,13 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
     private readonly Preset defaultPreset;
 
     private readonly Channel[] channels;
+
+    // The MIDI Polyphonic Expression contract, shared with every other synthesizer in this package:
+    // zones, per-channel bend ranges from RPN 0, the registered tunings, per-note pressure and
+    // timbre, and which note owns its channel's expression. It is fed every message, but nothing
+    // below reads it while no zone is active - which is what keeps MpeMode.Off byte-for-byte
+    // identical to the engine as it was before any of this existed.
+    private readonly MpeChannelState mpe = new MpeChannelState();
 
     private readonly VoiceCollection voices;
 
@@ -137,6 +145,11 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
 
         voices = new VoiceCollection(this, maximumPolyphony);
 
+        mpe.MemberBendRange = settings.MpeMemberBendRange;
+        mpe.LowerZoneMemberCount = settings.MpeLowerZoneMemberCount;
+        mpe.UpperZoneMemberCount = settings.MpeUpperZoneMemberCount;
+        mpe.Mode = settings.MpeMode;
+
         blockLeft = new float[blockSize];
         blockRight = new float[blockSize];
 
@@ -176,6 +189,10 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
         }
 
         var channelInfo = channels[channel];
+
+        // Everything the MPE contract knows arrives here, including the note-off lift velocity that
+        // the NoteOff(channel, key) entry point has no room for.
+        mpe.ProcessMessage(channel, command, data1, data2);
 
         switch (command)
         {
@@ -298,6 +315,10 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
             return;
         }
 
+        // The lift velocity was captured by ProcessMidiMessage when the note-off arrived as a
+        // message; a caller reaching this entry point directly has none to give.
+        mpe.NoteOff(channel, key, mpe.ReleaseVelocity(channel, key));
+
         foreach (var voice in voices)
         {
             if (voice.Channel == channel && voice.Key == key)
@@ -327,6 +348,8 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
         }
 
         var channelInfo = channels[channel];
+
+        mpe.NoteOn(channel, key);
 
         var presetId = (channelInfo.BankNumber << 16) | channelInfo.PatchNumber;
 
@@ -427,6 +450,11 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
         {
             channel.ResetAllControllers();
         }
+
+        for (var channel = 0; channel < channels.Length; channel++)
+        {
+            mpe.ResetControllers(channel);
+        }
     }
 
     /// <summary>
@@ -441,6 +469,7 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
         }
 
         channels[channel].ResetAllControllers();
+        mpe.ResetControllers(channel);
     }
 
     /// <summary>
@@ -454,6 +483,8 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
         {
             channel.Reset();
         }
+
+        mpe.Reset();
 
         if (enableReverbAndChorus)
         {
@@ -588,6 +619,86 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
     /// </summary>
     public SoundFont SoundFont => soundFont;
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// Changing this reconfigures the zones at once and forgets any configuration message the music
+    /// has already delivered. An MPE Configuration Message arriving later is honoured in every mode
+    /// but <see cref="Mpe.MpeMode.Off"/>, which is the way to insist a file is played as plain MIDI.
+    /// </para>
+    /// <para>
+    /// While no zone is active - which is always the case in <see cref="Mpe.MpeMode.Off"/> - the
+    /// engine reads its own per-channel state exactly as it always has, so a file that is not an
+    /// expressive performance renders identically whatever this is set to.
+    /// </para>
+    /// </remarks>
+    public MpeMode MpeMode
+    {
+        get => mpe.Mode;
+        set => mpe.Mode = value;
+    }
+
+    /// <inheritdoc/>
+    public double MpeMemberBendRange
+    {
+        get => mpe.MemberBendRange;
+        set => mpe.MemberBendRange = value;
+    }
+
+    /// <inheritdoc/>
+    public int MpeLowerZoneMemberCount
+    {
+        get => mpe.LowerZoneMemberCount;
+        set => mpe.LowerZoneMemberCount = value;
+    }
+
+    /// <inheritdoc/>
+    public int MpeUpperZoneMemberCount
+    {
+        get => mpe.UpperZoneMemberCount;
+        set => mpe.UpperZoneMemberCount = value;
+    }
+
+    /// <inheritdoc/>
+    public MpeZoneInfo MpeLowerZone => mpe.LowerZone;
+
+    /// <inheritdoc/>
+    public MpeZoneInfo MpeUpperZone => mpe.UpperZone;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The SoundFont format defines no consumer for release velocity, so this changes nothing about
+    /// how a preset sounds. It is captured because a MIDI file can carry it and a host may want it.
+    /// </remarks>
+    public int ReleaseVelocity(int channel, int key) => mpe.ReleaseVelocity(channel, key);
+
+    /// <summary>
+    /// The timbre ("slide" on an expressive controller) of a channel, 0 to 1: its CC 74 with its
+    /// zone master's folded in.
+    /// </summary>
+    /// <param name="channel">The MIDI channel, 0 to 15.</param>
+    /// <returns>The timbre, 0 to 1.</returns>
+    /// <remarks>
+    /// The SoundFont modulator model names no default destination for CC 74, so this engine stores
+    /// the value and changes nothing about the sound with it. It is here for hosts, and because the
+    /// SFZ and Decent Sampler engines DO have consumers for it and all three read the same state.
+    /// </remarks>
+    public double MpeTimbre(int channel) => mpe.Timbre(channel);
+
+    /// <summary>
+    /// The pressure of one sounding note, 0 to 1: its own polyphonic pressure when the music carries
+    /// one and its channel's otherwise, with its zone master's folded in.
+    /// </summary>
+    /// <param name="channel">The MIDI channel, 0 to 15.</param>
+    /// <param name="key">The MIDI note number, 0 to 127.</param>
+    /// <returns>The pressure, 0 to 1.</returns>
+    /// <remarks>
+    /// The SoundFont default modulator set routes channel pressure to vibrato depth, and this engine
+    /// does the same while an MPE zone is active: pressure deepens a note's vibrato exactly as the
+    /// modulation wheel does, fifty cents at full scale.
+    /// </remarks>
+    public double MpePressure(int channel, int key) => mpe.Pressure(channel, key);
+
     /// <summary>
     /// The sample rate for synthesis.
     /// </summary>
@@ -609,4 +720,51 @@ public sealed class SoundFontSynthesizer : IMidiSynthesizer //was previously: IA
 
     internal int MinimumVoiceDuration => minimumVoiceDuration;
     internal Channel[] Channels => channels;
+
+    // ---- what a voice reads, with the MPE zone rules folded in --------------------------------
+    //
+    // Every reader below takes the same shape: while no zone is active it hands back exactly the
+    // channel state the engine has always read, and while one is it applies the master/member rules.
+    // No zone is EVER active in MpeMode.Off, so that mode is byte-for-byte what it was.
+
+    // Whether a zone is switched on at all - the one test a voice makes before doing any of this.
+    internal bool MpeZoneActive => mpe.HasActiveZone;
+
+    // Whether this sounding note still owns its channel's expression. A newer note on the same
+    // member channel takes it, and the older one freezes where it was.
+    internal bool OwnsChannelExpression(int channel, int key) => mpe.OwnsChannelExpression(channel, key);
+
+    // The semitones a voice adds to its key: bend over the channel's own range, the zone master's
+    // bend over the master's, and the registered tunings of both.
+    internal float ChannelPitch(int channel) =>
+        mpe.HasActiveZone
+            ? (float)mpe.PitchOffsetSemitones(channel)
+            : channels[channel].Tune + channels[channel].PitchBend;
+
+    // The SoundFont default modulator set routes channel pressure to vibrato depth with the same
+    // fifty-cent full scale as the modulation wheel. Under MPE it is the NOTE's pressure - its own
+    // polyphonic pressure when the music sends one, its channel's otherwise - plus the zone master's.
+    internal float PressureVibratoCents(int channel, int key) => (float)(50.0 * mpe.Pressure(channel, key));
+
+    internal float ChannelModulation(int channel) => ControllerSource(channel, 1).Modulation;
+
+    internal float ChannelVolume(int channel) => ControllerSource(channel, 7).Volume;
+
+    internal float ChannelPan(int channel) => ControllerSource(channel, 10).Pan;
+
+    internal float ChannelExpression(int channel) => ControllerSource(channel, 11).Expression;
+
+    internal float ChannelReverbSend(int channel) => ControllerSource(channel, 91).ReverbSend;
+
+    internal float ChannelChorusSend(int channel) => ControllerSource(channel, 93).ChorusSend;
+
+    // A switch takes whichever of the member and its master is down, so a master's sustain pedal
+    // holds every note in the zone - which is what a performance's global pedal is for.
+    internal bool ChannelHoldPedal(int channel) => ControllerSource(channel, 64).HoldPedal;
+
+    // Which channel's own state a controller must be read from. Reading the CHANNEL rather than the
+    // contract's seven-bit copy keeps the fourteen-bit coarse-and-fine resolution the SoundFont
+    // engine stores.
+    private Channel ControllerSource(int channel, int controller) =>
+        mpe.HasActiveZone ? channels[mpe.ControllerSourceChannel(channel, controller)] : channels[channel];
 }

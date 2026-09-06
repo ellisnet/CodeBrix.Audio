@@ -92,6 +92,29 @@ public sealed class MidiSynthDataProviderTests
         endRaised.Should().Be(2);
     }
 
+    [Fact]
+    public void the_tempo_source_follows_the_sequences_tempo_map_as_it_renders()
+    {
+        //Arrange - 480 ppq: 100 BPM for the first two beats (1.2 s), then 150 BPM.
+        using var provider = CreateProvider();
+        var tempo = new TempoSource();
+        provider.Tempo = tempo;
+        provider.Start(MultiTrackTestSong.BuildTempoSequence([(0, 100.0), (960, 150.0)], lengthTicks: 4800), loop: false);
+
+        //Act
+        var buffer = new float[SampleRate * 2];
+        provider.ReadBytes(buffer);
+        var early = (tempo.BeatsPerMinute, tempo.BeatPosition);
+        provider.ReadBytes(buffer);
+        var late = (tempo.BeatsPerMinute, tempo.BeatPosition);
+
+        //Assert
+        early.BeatsPerMinute.Should().BeApproximately(100.0, 0.05);
+        early.BeatPosition.Should().BeApproximately(100.0 / 60.0, 1e-2);
+        late.BeatsPerMinute.Should().BeApproximately(150.0, 0.05);
+        late.BeatPosition.Should().BeApproximately(4.0, 1e-2);
+    }
+
     private static MidiSynthDataProvider CreateProvider()
     {
         var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);

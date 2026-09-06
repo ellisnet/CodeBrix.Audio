@@ -177,6 +177,55 @@ public class SfzSynthesizerTests
     }
 
     [Fact]
+    public void a_panic_clears_the_held_keys_so_trigger_first_works_again()
+    {
+        //Arrange - the same shape the Decent Sampler engine had this bug in: without clearing the held
+        //keys, All Notes Off leaves the engine believing a key is still down and trigger=first never
+        //fires again.
+        using var fixture = SfzTestInstruments.Create();
+        fixture.WriteConstantWav("first.wav", 1f, Rate, Rate);
+        var instrument = fixture.Load("<region> sample=first.wav trigger=first loop_mode=loop_continuous");
+        var synthesizer = new SfzSynthesizer(instrument, Rate);
+
+        //Act
+        synthesizer.NoteOn(0, 60, 127);
+        synthesizer.NoteOffAll(immediate: true);
+        synthesizer.NoteOn(0, 62, 127);
+
+        //Assert
+        synthesizer.ActiveVoiceCount.Should().Be(1, "every key came up with the panic");
+    }
+
+    [Fact]
+    public void a_per_channel_panic_clears_only_that_channel_s_held_keys()
+    {
+        //Arrange
+        using var fixture = SfzTestInstruments.Create();
+        fixture.WriteConstantWav("first.wav", 1f, Rate, Rate);
+        var instrument = fixture.Load("<region> sample=first.wav trigger=first loop_mode=loop_continuous");
+        var synthesizer = new SfzSynthesizer(instrument, Rate);
+
+        //Act
+        synthesizer.NoteOn(0, 60, 127);
+        synthesizer.NoteOn(1, 60, 127);
+        synthesizer.NoteOffAll(0, immediate: true);
+        RenderPeak(synthesizer, 64);
+
+        var remaining = synthesizer.ActiveVoiceCount;
+
+        synthesizer.NoteOn(0, 62, 127);
+        var afterCleared = synthesizer.ActiveVoiceCount;
+
+        synthesizer.NoteOn(1, 62, 127);
+        var afterUntouched = synthesizer.ActiveVoiceCount;
+
+        //Assert
+        remaining.Should().Be(1, "only channel 0's voice was stopped");
+        afterCleared.Should().Be(2, "channel 0 has no key down any more");
+        afterUntouched.Should().Be(2, "channel 1 still holds a key, so trigger=first does not fire");
+    }
+
+    [Fact]
     public void release_regions_fire_on_note_off_and_rt_decay_fades_them_with_hold_time()
     {
         //Arrange

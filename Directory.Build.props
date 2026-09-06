@@ -1,0 +1,61 @@
+<Project>
+
+  <!--
+    Repo-wide build version. Imported automatically by every project in this repository
+    (MSBuild walks up from each project directory looking for Directory.Build.props), so
+    CodeBrix.Audio, CodeBrix.Audio.Engine and CodeBrix.Audio.ModestSynth all read the SAME
+    $(BuildVersion) instead of each computing its own. That matters because the two PACKAGES
+    this repository publishes - CodeBrix.Audio.MitLicenseForever and
+    CodeBrix.Audio.ModestSynth.MitLicenseForever - must carry one version so the add-on's
+    dependency on the core resolves exactly, and because the Engine assembly is bundled inside
+    the core package and would look odd carrying a version a minute away from it.
+
+    Package / assembly version: date-stamped and auto-incrementing.
+
+    Format:  1.<x>.<y>.<z>   (every field is derived from UTC "now")
+
+      1  (major)     Always 1 for this library.
+      x  (minor)     Whole years since $(_VersionBaseYear).
+                     With base 2026: 2026=0, 2027=1, 2028=2, ...
+      y  (build)     Day of year, 1-based inclusive, UTC.
+                     Jan 1 = 1, Feb 1 = 32, Dec 31 = 365 (366 in a leap year).
+      z  (revision)  Minute of day, UTC, range 0 to 1439.
+                     00:00 = 0, 23:59 = 1439.
+
+    The version is always strictly increasing over time:
+      * within a day, z grows;
+      * at a day boundary, y increments and outranks z resetting to 0;
+      * at a (UTC) year boundary, x increments and outranks y and z resetting.
+
+    Notes / caveats:
+      * All fields read from System.DateTime.UtcNow, so a local dev build and a
+        UTC CI build agree on the value. Math.Floor on the minutes keeps z in
+        0..1439 (plain rounding could land on 1440 late in the day).
+      * Because the value depends on the clock, every build produces a NEW
+        version. With GeneratePackageOnBuild=true that means a fresh .nupkg on
+        each build, and two builds in the SAME UTC minute produce the SAME
+        version (so do not publish two packages from within one minute).
+      * This is date-stamp versioning, not SemVer: minor encodes the year and
+        major is pinned to 1, so major/minor do not signal API compatibility.
+      * To re-baseline the minor number, change _VersionBaseYear below.
+      * MSBuild evaluates this file once per project, not once per build, so two projects
+        whose evaluations straddle a UTC minute boundary during a long build would still
+        differ in z. $(BuildVersion) is therefore only computed when it was not supplied,
+        and a PUBLISH build pins it on the command line - a global property reaches every
+        project in the build, including inner project-reference builds:
+            dotnet build CodeBrix.Audio.slnx -c Release -p:BuildVersion=1.0.249.640
+        See MAINTAINER-README.txt, "PACKAGING AND PUBLISHING". Ordinary development builds
+        need none of this; the version they stamp is throwaway either way.
+      * Only $(BuildVersion) is defined here. Mapping it onto Version/AssemblyVersion/
+        FileVersion is each packable project's business, so test and tools projects keep
+        the SDK's default 1.0.0 and are unaffected.
+  -->
+  <PropertyGroup>
+    <_VersionBaseYear>2026</_VersionBaseYear>
+    <_VersionYears>$([MSBuild]::Subtract($([System.DateTime]::UtcNow.Year), $(_VersionBaseYear)))</_VersionYears>
+    <_VersionDayOfYear>$([System.DateTime]::UtcNow.DayOfYear)</_VersionDayOfYear>
+    <_VersionMinuteOfDay>$([System.Convert]::ToInt32($([System.Math]::Floor($([System.DateTime]::UtcNow.TimeOfDay.TotalMinutes)))))</_VersionMinuteOfDay>
+    <BuildVersion Condition="'$(BuildVersion)' == ''">1.$(_VersionYears).$(_VersionDayOfYear).$(_VersionMinuteOfDay)</BuildVersion>
+  </PropertyGroup>
+
+</Project>

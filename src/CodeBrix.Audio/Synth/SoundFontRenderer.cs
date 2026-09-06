@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using CodeBrix.Audio.Synth.DecentSampler;
 using CodeBrix.Audio.Synth.Sfz;
 using CodeBrix.Audio.Wave;
 
@@ -111,7 +112,142 @@ public static class SoundFontRenderer
         return RenderCore(new SfzSynthesizer(instrument, sampleRate), sequence, sampleRate, tail);
     }
 
+    /// <summary>
+    /// Renders a whole sequence through a Decent Sampler instrument to interleaved stereo float samples.
+    /// </summary>
+    /// <param name="instrument">The Decent Sampler instrument to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="sampleRate">Output sample rate in Hz.</param>
+    /// <param name="tail">
+    /// Extra time rendered after the sequence ends, so release tails decay away instead of being cut
+    /// off. Pass <see cref="TimeSpan.Zero"/> to stop exactly at the end. A Decent Sampler zone that
+    /// declares no release still rings for half a second, so leave room for it.
+    /// </param>
+    /// <returns>Interleaved stereo samples: left, right, left, right, ...</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="instrument"/> or <paramref name="sequence"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive, or <paramref name="tail"/> is negative.</exception>
+    public static float[] Render(
+        DecentSamplerInstrument instrument,
+        MidiSequence sequence,
+        int sampleRate = DefaultSampleRate,
+        TimeSpan tail = default)
+    {
+        if (instrument == null)
+        {
+            throw new ArgumentNullException(nameof(instrument));
+        }
+
+        if (sequence == null)
+        {
+            throw new ArgumentNullException(nameof(sequence));
+        }
+
+        if (sampleRate <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "The sample rate must be positive.");
+        }
+
+        if (tail < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tail), tail, "The tail length cannot be negative.");
+        }
+
+        // Offline streaming: this call is not an audio callback, so it fetches its own streamed frames
+        // rather than racing a background reader. An offline render can then never underrun, however
+        // fast it runs, and it renders the same samples every time.
+        var synthesizer = new DecentSamplerSynthesizer(
+            instrument,
+            new DecentSamplerSynthesizerSettings(sampleRate)
+            {
+                StreamingMode = DecentSampler.Streaming.DecentSamplerStreamingMode.Offline,
+            });
+
+        if (sequence.TempoMap != null)
+        {
+            synthesizer.TempoSource.BeatsPerMinute = sequence.TempoMap.InitialBeatsPerMinute;
+        }
+
+        return RenderCore(synthesizer, sequence, sampleRate, tail);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through a synthesizer of your own - the standalone one in
+    /// CodeBrix.Audio.ModestSynth, for instance - to interleaved stereo float samples.
+    /// </summary>
+    /// <param name="synthesizer">
+    /// The synthesizer to render with. The output is produced at its own
+    /// <see cref="IMidiSynthesizer.SampleRate"/>, so there is no rate argument.
+    /// </param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="tail">
+    /// Extra time rendered after the sequence ends, so release tails decay away instead of being cut
+    /// off. Pass <see cref="TimeSpan.Zero"/> to stop exactly at the end.
+    /// </param>
+    /// <returns>Interleaved stereo samples: left, right, left, right, ...</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="synthesizer"/> or <paramref name="sequence"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The synthesizer's sample rate is not positive, or <paramref name="tail"/> is negative.</exception>
+    /// <remarks>
+    /// The synthesizer is played from its current state and is not reset first, so render a fresh one
+    /// - or call <see cref="IMidiSynthesizer.Reset"/> - when you need the same bytes every time.
+    /// </remarks>
+    public static float[] Render(IMidiSynthesizer synthesizer, MidiSequence sequence, TimeSpan tail = default)
+    {
+        if (synthesizer == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizer));
+        }
+
+        if (sequence == null)
+        {
+            throw new ArgumentNullException(nameof(sequence));
+        }
+
+        if (synthesizer.SampleRate <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(synthesizer), synthesizer.SampleRate, "The sample rate must be positive.");
+        }
+
+        if (tail < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tail), tail, "The tail length cannot be negative.");
+        }
+
+        return RenderCore(synthesizer, sequence, synthesizer.SampleRate, tail);
+    }
+
     private static float[] RenderCore(IMidiSynthesizer synthesizer, MidiSequence sequence, int sampleRate, TimeSpan tail)
+    {
+        // Every render this class does is OFFLINE, and it runs as fast as the machine allows. A Decent
+        // Sampler synthesizer streaming its samples in the real-time mode would outrun its background
+        // reader and write starved blocks as silence, so it is switched over for the render and put
+        // back afterwards. The instrument-taking overloads build their synthesizer offline already;
+        // this covers one a consumer built and handed in.
+        var decentSampler = synthesizer as DecentSampler.DecentSamplerSynthesizer;
+        var previousStreamingMode = decentSampler == null
+            ? DecentSampler.Streaming.DecentSamplerStreamingMode.Offline
+            : decentSampler.StreamingMode;
+
+        if (decentSampler != null)
+        {
+            decentSampler.StreamingMode = DecentSampler.Streaming.DecentSamplerStreamingMode.Offline;
+        }
+
+        try
+        {
+            return RenderFrames(synthesizer, sequence, sampleRate, tail);
+        }
+        finally
+        {
+            if (decentSampler != null)
+            {
+                decentSampler.StreamingMode = previousStreamingMode;
+            }
+        }
+    }
+
+    private static float[] RenderFrames(
+        IMidiSynthesizer synthesizer, MidiSequence sequence, int sampleRate, TimeSpan tail)
     {
         var sequencer = new MidiSequencer(synthesizer);
         sequencer.Play(sequence, loop: false);
@@ -194,6 +330,35 @@ public static class SoundFontRenderer
     }
 
     /// <summary>
+    /// Renders a whole sequence through a Decent Sampler instrument straight to a 32-bit float stereo
+    /// WAV file.
+    /// </summary>
+    /// <param name="instrument">The Decent Sampler instrument to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="outputPath">Path of the <c>.wav</c> file to write. Overwritten if it exists.</param>
+    /// <param name="sampleRate">Output sample rate in Hz.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive, or <paramref name="tail"/> is negative.</exception>
+    public static void RenderToWavFile(
+        DecentSamplerInstrument instrument,
+        MidiSequence sequence,
+        string outputPath,
+        int sampleRate = DefaultSampleRate,
+        TimeSpan tail = default)
+    {
+        if (outputPath == null)
+        {
+            throw new ArgumentNullException(nameof(outputPath));
+        }
+
+        using (var stream = File.Create(outputPath))
+        {
+            RenderToWavStream(instrument, sequence, stream, sampleRate, tail, leaveOpen: true);
+        }
+    }
+
+    /// <summary>
     /// Renders a whole sequence to a 32-bit float stereo WAV stream.
     /// </summary>
     /// <param name="soundFont">The SoundFont to render with.</param>
@@ -245,6 +410,90 @@ public static class SoundFontRenderer
         }
 
         WriteWav(Render(instrument, sequence, sampleRate, tail), output, sampleRate, leaveOpen);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through a Decent Sampler instrument to a 32-bit float stereo WAV stream.
+    /// </summary>
+    /// <param name="instrument">The Decent Sampler instrument to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="output">The stream to write the WAV file to. Must be writable and seekable.</param>
+    /// <param name="sampleRate">Output sample rate in Hz.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <param name="leaveOpen">When <see langword="true"/>, the stream is left open once writing finishes.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive, or <paramref name="tail"/> is negative.</exception>
+    public static void RenderToWavStream(
+        DecentSamplerInstrument instrument,
+        MidiSequence sequence,
+        Stream output,
+        int sampleRate = DefaultSampleRate,
+        TimeSpan tail = default,
+        bool leaveOpen = false)
+    {
+        if (output == null)
+        {
+            throw new ArgumentNullException(nameof(output));
+        }
+
+        WriteWav(Render(instrument, sequence, sampleRate, tail), output, sampleRate, leaveOpen);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through a synthesizer of your own straight to a 32-bit float stereo
+    /// WAV file.
+    /// </summary>
+    /// <param name="synthesizer">The synthesizer to render with, at its own sample rate.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="outputPath">Path of the <c>.wav</c> file to write. Overwritten if it exists.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The synthesizer's sample rate is not positive, or <paramref name="tail"/> is negative.</exception>
+    public static void RenderToWavFile(
+        IMidiSynthesizer synthesizer,
+        MidiSequence sequence,
+        string outputPath,
+        TimeSpan tail = default)
+    {
+        if (outputPath == null)
+        {
+            throw new ArgumentNullException(nameof(outputPath));
+        }
+
+        using (var stream = File.Create(outputPath))
+        {
+            RenderToWavStream(synthesizer, sequence, stream, tail, leaveOpen: true);
+        }
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through a synthesizer of your own to a 32-bit float stereo WAV stream.
+    /// </summary>
+    /// <param name="synthesizer">The synthesizer to render with, at its own sample rate.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="output">The stream to write the WAV file to. Must be writable and seekable.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <param name="leaveOpen">When <see langword="true"/>, the stream is left open once writing finishes.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The synthesizer's sample rate is not positive, or <paramref name="tail"/> is negative.</exception>
+    public static void RenderToWavStream(
+        IMidiSynthesizer synthesizer,
+        MidiSequence sequence,
+        Stream output,
+        TimeSpan tail = default,
+        bool leaveOpen = false)
+    {
+        if (output == null)
+        {
+            throw new ArgumentNullException(nameof(output));
+        }
+
+        if (synthesizer == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizer));
+        }
+
+        WriteWav(Render(synthesizer, sequence, tail), output, synthesizer.SampleRate, leaveOpen);
     }
 
     private static void WriteWav(float[] samples, Stream output, int sampleRate, bool leaveOpen)

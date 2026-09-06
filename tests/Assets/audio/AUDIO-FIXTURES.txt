@@ -30,6 +30,11 @@ WHAT EACH FIXTURE IS FOR
                                       reader reporting the declared rate as the real one
   opus-tone-stereo-48000.opus         the everyday Opus case; with the mono file it
                                       pins the pre-skip subtraction in the duration
+  mp3-gapless-sweep-stereo-44100.mp3  carries a Xing/LAME encoder delay and padding;
+                                      ships with the .wav it was encoded from, so the
+                                      reader's gapless trim can be checked by
+                                      cross-correlating the two. A sweep, because a
+                                      tone cannot tell a lag of zero from one cycle
 
   flac-tone-mono-16bit-22050          fixed predictors only, independent channels
   flac-tone-stereo-16bit-44100-*side  the four stereo decorrelation modes
@@ -47,11 +52,16 @@ NOTE: the .opus fixtures both carry a pre-skip of 312 and a final granule positi
 CONTAINER duration reads 0.2565 s - ffprobe reports that too - because the granule
 counts the priming samples; the numbers are pinned in the tests for that reason.
 
+NOTE: the .mp3 fixture declares an encoder delay of 576 and a padding that depends on
+the encoder build. Its decoded, gapless-trimmed length is exactly the 22,050 frames of
+its .wav; without the trim it is one MP3 frame longer and starts 1,105 samples late
+(576 of encoder delay plus the 529-sample decoder delay every gapless reader assumes).
+
 NOTE ON REGENERATION: an Ogg muxer picks a RANDOM stream serial number per run, so
 re-running make_fixtures.sh always produces different .ogg and .opus bytes even on the
 same ffmpeg build. The SHA256s below identify the committed files; they are not a
-reproducibility check for those two formats. The .flac and .wav files do reproduce
-byte-identically.
+reproducibility check for those two formats. The .flac, .mp3 and .wav files do
+reproduce byte-identically.
 
 SHA256
 ------------------------------------------------------------------------------
@@ -59,8 +69,6 @@ efa2ac1e1a4c2e46ec6f8b57c2a358378150355cf9b8285c1d6adf773b9c06ea  vorbis-sweep-s
 a5f2c5474ff41a4bee0a1bce33d39f1bb8b698ff6164c5e896829e8b7b91a562  vorbis-tone-mono-22050.ogg
 0e2bdc4c9793183bd0e27ef45da6772f56c3bc097afd779934a4d20deaab29fb  vorbis-tone-stereo-44100.ogg
 9d6a58204f31d233ce480bf94a413eb990c6cfb762d0bfa3e8a893be8520cb8e  vorbis-truncated.ogg
-d1f1933edaffa87d5ae2de972c6894b280087e79dae0494506c21e52878a73e1  opus-tone-mono-from-16000.opus
-e40f8ed0abe8a24b06fa63784436e61e12e76c3b9c94f82f04913ea85d9755ce  opus-tone-stereo-48000.opus
 675824512973e30e609220bf5a2c0c8177fd703bfde58870eae8c82e4758e88e  flac-noise-stereo-16bit-44100.flac
 98842a941958174a9f935c180777c34752db681e53c73624dac43d12a315663f  flac-silence-stereo-16bit-44100.flac
 bb1d84cf520561442690c77cd0941dbd4bb7518d317a8b75e9a56e345d31bcd7  flac-tone-mono-16bit-22050.flac
@@ -70,6 +78,9 @@ fc066eeb1f09d8816526d3df6850d48e4949498c53851215bb04f7b8ae5a665e  flac-tone-ster
 073bf26fed77f3ffb0e403f04a066257e38d16e7c4d01706c9ca59763575c028  flac-tone-stereo-16bit-44100-rightside.flac
 4299ff9c14d6119d2e2e73bc16b96e01005e4305741d19a25f5b7d3da03f73cc  flac-tone-stereo-24bit-48000.flac
 0215c5840f757e2ce10bfcd4589da29f27feee0b2ba1788ffae11b61456e4895  flac-truncated.flac
+d1f1933edaffa87d5ae2de972c6894b280087e79dae0494506c21e52878a73e1  opus-tone-mono-from-16000.opus
+e40f8ed0abe8a24b06fa63784436e61e12e76c3b9c94f82f04913ea85d9755ce  opus-tone-stereo-48000.opus
+09b779a59ae4ad6b6727cf0f9bc373febd5b3e47ff97d7e17d17a6a02687b5a3  mp3-gapless-sweep-stereo-44100.mp3
 c49864c44465149d5c159812dc7b71cf18efcc6ceb600cf1a9e255456de12036  flac-noise-stereo-16bit-44100.wav
 3cc12ee8fbf5df518a96c335ba6e462d24e27e009d4a4ae399b74b452e83ec3b  flac-silence-stereo-16bit-44100.wav
 968ea77e1a2c8ffed06241d5bc5f0967123df31b06a283f17fc52914e3fc08b3  flac-tone-mono-16bit-22050.wav
@@ -78,3 +89,4 @@ c49864c44465149d5c159812dc7b71cf18efcc6ceb600cf1a9e255456de12036  flac-noise-ste
 7c013d113d74c1e6d5f923401ef3fc27c0e08b67f54ae9a0d4cc763989c9e667  flac-tone-stereo-16bit-44100-oddlength.wav
 9930d336fcb4c13422931b08f9cb01ea15b0c6f2c705fde5b797f39684104afa  flac-tone-stereo-16bit-44100-rightside.wav
 7a407639c7e1e72a15543bb96739fd7c484ff190ce6ab3c2a2c98c84a4873863  flac-tone-stereo-24bit-48000.wav
+3d16538c8e343900c6cca235879da7d219bbb01e75b9d238356f5debf6be61e1  mp3-gapless-sweep-stereo-44100.wav

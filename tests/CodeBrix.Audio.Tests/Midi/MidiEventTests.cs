@@ -260,11 +260,13 @@ public class MidiEventTests
     [Fact]
     public void ReadNextEventWithRunningStatusAndNoPreviousThrows()
     {
+        // A running-status byte with nothing to run from is a malformed track, and is reported as
+        // one. It used to surface as a NullReferenceException from the missing previous event.
         var bytes = new byte[] { 0x00, 0x3C, 0x40 };
         using (var ms = new MemoryStream(bytes))
         using (var br = new BinaryReader(ms))
         {
-            Assert.Throws<NullReferenceException>(() => MidiEvent.ReadNextEvent(br, null));
+            Assert.Throws<FormatException>(() => MidiEvent.ReadNextEvent(br, null));
         }
     }
 

@@ -62,6 +62,12 @@ internal sealed class Voice
     // This is used to smooth out the cutoff frequency.
     private float smoothedCutoff;
 
+    // The MPE pitch offset this voice last read, in semitones. A newer note on the same member
+    // channel takes the channel's expression, and this voice then keeps the bend it had at that
+    // moment for the rest of its life - the MPE rule for a controller that reuses a channel while
+    // the older note is still sounding.
+    private float mpePitchSemitones;
+
     private VoiceState voiceState;
     private int voiceLength;
 
@@ -129,6 +135,7 @@ internal sealed class Voice
         filter.SetLowPassFilter(cutoff, resonance);
 
         smoothedCutoff = cutoff;
+        mpePitchSemitones = synthesizer.MpeZoneActive ? synthesizer.ChannelPitch(channel) : 0F;
 
         voiceState = VoiceState.Playing;
         voiceLength = 0;
@@ -155,8 +162,9 @@ internal sealed class Voice
         }
 
         var channelInfo = synthesizer.Channels[channel];
+        var mpeActive = synthesizer.MpeZoneActive;
 
-        ReleaseIfNecessary(channelInfo);
+        ReleaseIfNecessary();
 
         if (!volEnv.Process())
         {
@@ -167,9 +175,32 @@ internal sealed class Voice
         vibLfo.Process();
         modLfo.Process();
 
-        var vibPitchChange = (0.01F * channelInfo.Modulation + vibLfoToPitch) * vibLfo.Value;
+        var modulationCents = synthesizer.ChannelModulation(channel);
+        if (mpeActive)
+        {
+            // The SoundFont default modulator set routes channel pressure to vibrato depth beside
+            // the modulation wheel, which is how a finger leaning into a key adds vibrato.
+            modulationCents += synthesizer.PressureVibratoCents(channel, key);
+        }
+
+        var vibPitchChange = (0.01F * modulationCents + vibLfoToPitch) * vibLfo.Value;
         var modPitchChange = modLfoToPitch * modLfo.Value + modEnvToPitch * modEnv.Value;
-        var channelPitchChange = channelInfo.Tune + channelInfo.PitchBend;
+
+        float channelPitchChange;
+        if (mpeActive)
+        {
+            if (synthesizer.OwnsChannelExpression(channel, key))
+            {
+                mpePitchSemitones = synthesizer.ChannelPitch(channel);
+            }
+
+            channelPitchChange = mpePitchSemitones;
+        }
+        else
+        {
+            channelPitchChange = channelInfo.Tune + channelInfo.PitchBend;
+        }
+
         var pitch = key + vibPitchChange + modPitchChange + channelPitchChange;
         if (!oscillator.Process(block, pitch))
         {
@@ -197,7 +228,7 @@ internal sealed class Voice
         previousChorusSend = currentChorusSend;
 
         // According to the GM spec, the following value should be squared.
-        var ve = channelInfo.Volume * channelInfo.Expression;
+        var ve = synthesizer.ChannelVolume(channel) * synthesizer.ChannelExpression(channel);
         var channelGain = ve * ve;
 
         var mixGain = noteGain * channelGain * volEnv.Value;
@@ -207,7 +238,7 @@ internal sealed class Voice
             mixGain *= SoundFontMath.DecibelsToLinear(decibels);
         }
 
-        var angle = (MathF.PI / 200F) * (channelInfo.Pan + instrumentPan + 50F);
+        var angle = (MathF.PI / 200F) * (synthesizer.ChannelPan(channel) + instrumentPan + 50F);
         if (angle <= 0F)
         {
             currentMixGainLeft = mixGain;
@@ -224,8 +255,8 @@ internal sealed class Voice
             currentMixGainRight = mixGain * MathF.Sin(angle);
         }
 
-        currentReverbSend = Math.Clamp(channelInfo.ReverbSend + instrumentReverb, 0F, 1F);
-        currentChorusSend = Math.Clamp(channelInfo.ChorusSend + instrumentChorus, 0F, 1F);
+        currentReverbSend = Math.Clamp(synthesizer.ChannelReverbSend(channel) + instrumentReverb, 0F, 1F);
+        currentChorusSend = Math.Clamp(synthesizer.ChannelChorusSend(channel) + instrumentChorus, 0F, 1F);
 
         if (voiceLength == 0)
         {
@@ -240,14 +271,16 @@ internal sealed class Voice
         return true;
     }
 
-    private void ReleaseIfNecessary(Channel channelInfo)
+    private void ReleaseIfNecessary()
     {
         if (voiceLength < synthesizer.MinimumVoiceDuration)
         {
             return;
         }
 
-        if (voiceState == VoiceState.ReleaseRequested && !channelInfo.HoldPedal)
+        // A zone master's sustain pedal holds every note in its zone, which is how a performance's
+        // global pedal arrives.
+        if (voiceState == VoiceState.ReleaseRequested && !synthesizer.ChannelHoldPedal(channel))
         {
             volEnv.Release();
             modEnv.Release();

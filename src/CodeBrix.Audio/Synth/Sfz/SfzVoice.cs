@@ -60,6 +60,11 @@ internal sealed class SfzVoice
     private float alternate;
     private float keyDelta;
 
+    // The MPE pitch offset this voice last read, in cents. A newer note on the same member channel
+    // takes the channel's expression, and this voice then keeps the bend it had at that moment for
+    // the rest of its life - the MPE rule for a controller that reuses a channel too soon.
+    private float mpeBendCents;
+
     private SfzLfoUnit[] lfoUnits;
     private SfzModEnvelopeUnit filEgUnit;
     private SfzModEnvelopeUnit pitchEgUnit;
@@ -108,6 +113,7 @@ internal sealed class SfzVoice
         keyDelta = channelState.LastNoteOnKey >= 0 ? key - channelState.LastNoteOnKey : 0;
         unipolarRandom = synthesizer.NextRandomValue();
         bipolarRandom = synthesizer.NextRandomValue() * 2f - 1f;
+        mpeBendCents = synthesizer.MpeZoneActive ? MpeBendCents() : 0f;
 
         // Envelope stage times latch their CC modulation at note start (unless ampeg_dynamic retimes
         // them later); vel2 opcodes add their full value at velocity 127.
@@ -924,7 +930,7 @@ internal sealed class SfzVoice
             return;
         }
 
-        if (voiceState == VoiceState.ReleaseRequested && !channelState.IsSustainDown(region.SustainCc))
+        if (voiceState == VoiceState.ReleaseRequested && !synthesizer.IsSustainDown(channel, region.SustainCc))
         {
             envelope.Release();
             ReleaseModulationUnits();
@@ -936,16 +942,57 @@ internal sealed class SfzVoice
 
     private float BendCents()
     {
+        if (synthesizer.MpeZoneActive)
+        {
+            // A superseded note keeps the bend it had when a newer note took its member channel.
+            if (synthesizer.OwnsChannelExpression(channel, key))
+            {
+                mpeBendCents = MpeBendCents();
+            }
+
+            return mpeBendCents;
+        }
+
         var bend = channelState.PitchBend;
+        var scale = channelState.BendRangeScale;
+
         if (bend > 0f)
         {
-            return bend * region.BendUp;
+            return bend * region.BendUp * scale;
         }
         if (bend < 0f)
         {
-            return -bend * region.BendDown;
+            return -bend * region.BendDown * scale;
         }
         return 0f;
+    }
+
+    // The pitch offset an MPE zone asks for, in cents.
+    //
+    // The bend arrives from the contract in SEMITONES - this channel's own bend over its own range
+    // plus its zone master's over the master's - and is then scaled against MIDI's two semitones by
+    // the region's own bend_up/bend_down, exactly as the plain per-channel bend range is. A region
+    // that says nothing keeps the SFZ default of two semitones each way and therefore reproduces the
+    // performance's own arithmetic; one that asks for an octave still bends six times as far.
+    //
+    // The registered channel tunings are a transposition rather than a bend, so they are added
+    // straight through without that scaling.
+    private float MpeBendCents()
+    {
+        var semitones = synthesizer.MpeBendSemitones(channel);
+        var tuning = (float)(100.0 * synthesizer.MpeTuningSemitones(channel));
+
+        if (semitones > 0.0)
+        {
+            return (float)(0.5 * semitones * region.BendUp) + tuning;
+        }
+
+        if (semitones < 0.0)
+        {
+            return (float)(-0.5 * semitones * region.BendDown) + tuning;
+        }
+
+        return tuning;
     }
 
     // ---- crossfades ---------------------------------------------------------
@@ -1011,13 +1058,15 @@ internal sealed class SfzVoice
         for (var i = 0; i < inRanges.Count; i++)
         {
             var range = inRanges[i];
-            gain *= XfInGain(channelState.GetCcMidiValue(range.CcNumber), range.Low, range.High, region.XfCcCurve);
+            gain *= XfInGain(
+                synthesizer.CcMidiValue(channel, range.CcNumber), range.Low, range.High, region.XfCcCurve);
         }
 
         for (var i = 0; i < outRanges.Count; i++)
         {
             var range = outRanges[i];
-            gain *= XfOutGain(channelState.GetCcMidiValue(range.CcNumber), range.Low, range.High, region.XfCcCurve);
+            gain *= XfOutGain(
+                synthesizer.CcMidiValue(channel, range.CcNumber), range.Low, range.High, region.XfCcCurve);
         }
 
         return gain;
@@ -1083,6 +1132,9 @@ internal sealed class SfzVoice
             case 133: // note number
                 return key / 127f;
 
+            case 132: // note-off ("lift") velocity of this voice's own note
+                return synthesizer.ReleaseVelocity(channel, key) / 127f;
+
             case 134: // key gate: any key held
                 return channelState.HeldKeyCount > 0 ? 1f : 0f;
 
@@ -1093,7 +1145,7 @@ internal sealed class SfzVoice
                 return alternate;
 
             default: // real controllers, plus stored extended ones (129/130 aftertouch)
-                return channelState.GetCc(cc);
+                return synthesizer.ControllerValue(channel, key, cc);
         }
     }
 

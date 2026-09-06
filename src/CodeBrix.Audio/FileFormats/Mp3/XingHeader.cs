@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 
 namespace CodeBrix.Audio.Wave; //was previously: NAudio.Wave;
 
@@ -16,15 +17,32 @@ public class XingHeader
         VbrScale = 8
     }
 
+    // The encoder extension that follows the Xing/Info fields. Its layout, from the first byte
+    // of the nine-character encoder string:
+    //     0..8    encoder version, ASCII ("LAME3.100", "Lavc60.31", ...)
+    //     9       info tag revision (high nibble) and VBR method (low nibble)
+    //     10      lowpass filter value
+    //     11..20  replay gain and encoding flags
+    //     21..23  encoder delay (12 bits) then encoder padding (12 bits)
+    //     24..35  misc, mp3gain, preset, music length, two CRCs
+    private const int EncoderTagLength = 9;
+    private const int DelayPaddingOffset = 21;
+    private const int MinimumEncoderTagBytes = DelayPaddingOffset + 3;
+    private const int MaximumInfoTagRevision = 1;
+    private const int ImplausibleEncoderDelay = 3000;
+
     private static int[] sr_table = { 44100, 48000, 32000, 99999 };
     private int vbrScale = -1;
     private int startOffset;
     private int endOffset;
-    
+
     private int tocOffset = -1;
     private int framesOffset = -1;
     private int bytesOffset = -1;
     private Mp3Frame frame;
+    private string encoderTag;
+    private int encoderDelay;
+    private int encoderPadding;
 
     private static int ReadBigEndian(byte[] buffer, int offset)
     {
@@ -126,7 +144,44 @@ public class XingHeader
             offset += 4;
         }
         xingHeader.endOffset = offset;
+        xingHeader.ReadEncoderTag();
         return xingHeader;
+    }
+
+    /// <summary>
+    /// Reads the LAME-style encoder extension that sits immediately after the Xing/Info
+    /// fields, if this frame has room for one and it looks like a real tag. Silence is the
+    /// correct outcome for a frame without one: plenty of Xing headers carry nothing here.
+    /// </summary>
+    private void ReadEncoderTag()
+    {
+        byte[] data = frame.RawData;
+        if (data == null || endOffset + MinimumEncoderTagBytes > data.Length) { return; }
+
+        for (int n = 0; n < EncoderTagLength; n++)
+        {
+            byte c = data[endOffset + n];
+            if (c < 0x20 || c > 0x7E) { return; }
+        }
+
+        // Revisions beyond 1 are not defined, and a byte that decodes to one is the cheapest
+        // evidence that what follows the encoder name really is the documented layout.
+        int revision = data[endOffset + EncoderTagLength] >> 4;
+        if (revision > MaximumInfoTagRevision) { return; }
+
+        int b0 = data[endOffset + DelayPaddingOffset];
+        int b1 = data[endOffset + DelayPaddingOffset + 1];
+        int b2 = data[endOffset + DelayPaddingOffset + 2];
+        int delay = (b0 << 4) | (b1 >> 4);
+        int padding = ((b1 & 0x0F) << 8) | b2;
+
+        // A delay of more than a couple of frames is not an encoder delay, it is a
+        // coincidence in a frame that never carried an encoder tag at all.
+        if (delay > ImplausibleEncoderDelay) { return; }
+
+        encoderTag = Encoding.ASCII.GetString(data, endOffset, EncoderTagLength);
+        encoderDelay = delay;
+        encoderPadding = padding;
     }
 
     /// <summary>
@@ -188,6 +243,46 @@ public class XingHeader
     public Mp3Frame Mp3Frame
     {
         get { return frame; }
+    }
+
+    /// <summary>
+    /// The nine-character encoder signature from the LAME-style extension that follows the
+    /// Xing/Info fields - "LAME3.100", "Lavc60.31" and so on - or <c>null</c> when this header
+    /// carries no such extension.
+    /// </summary>
+    public string EncoderTag
+    {
+        get { return encoderTag; }
+    }
+
+    /// <summary>
+    /// True when the encoder extension was found and <see cref="EncoderDelay"/> and
+    /// <see cref="EncoderPadding"/> came from it rather than being unknown.
+    /// </summary>
+    public bool HasEncoderDelayInfo
+    {
+        get { return encoderTag != null; }
+    }
+
+    /// <summary>
+    /// How many samples of silence the encoder put in front of the audio, per channel. These
+    /// are priming samples that were never in the original signal; a gapless decoder discards
+    /// them, along with the decoder's own 529-sample delay. Zero when the header carries no
+    /// encoder extension.
+    /// </summary>
+    public int EncoderDelay
+    {
+        get { return encoderDelay; }
+    }
+
+    /// <summary>
+    /// How many samples of silence the encoder added after the audio to fill the last frame,
+    /// per channel. A gapless decoder drops them, so that the decoded length matches the
+    /// original. Zero when the header carries no encoder extension.
+    /// </summary>
+    public int EncoderPadding
+    {
+        get { return encoderPadding; }
     }
 
 }

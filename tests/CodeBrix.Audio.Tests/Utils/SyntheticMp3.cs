@@ -45,6 +45,62 @@ internal static class SyntheticMp3
         return bytes;
     }
 
+    /// <summary>The number of audio frames <see cref="CreateBytesWithLameHeader"/> writes.</summary>
+    public static int AudioFramesForSeconds(double seconds) => FramesForSeconds(seconds);
+
+    /// <summary>
+    /// Bytes of a synthetic MP3 whose first frame carries a full Xing header (all four
+    /// fields) followed by a LAME-style encoder extension declaring the given encoder delay
+    /// and padding. This is the shape a gapless-aware reader has to recognise.
+    /// </summary>
+    /// <param name="audioSeconds">How much audio to write after the header frame.</param>
+    /// <param name="encoderDelay">The encoder delay to declare, in samples (12 bits).</param>
+    /// <param name="encoderPadding">The encoder padding to declare, in samples (12 bits).</param>
+    /// <param name="encoderTag">The nine-character encoder signature, e.g. "LAME3.100".</param>
+    /// <param name="infoTagRevision">
+    /// The revision nibble. Anything above 1 is undefined and a reader should decline the tag.
+    /// </param>
+    public static byte[] CreateBytesWithLameHeader(double audioSeconds, int encoderDelay,
+        int encoderPadding, string encoderTag = "LAME3.100", int infoTagRevision = 0)
+    {
+        int audioFrames = FramesForSeconds(audioSeconds);
+        byte[] bytes = CreateFrames(audioFrames + 1);
+
+        // Xing/Info offset within frame for MPEG-1 stereo: 32 (side-info) + 4 (header) = 36.
+        int offset = 36;
+        bytes[offset++] = (byte)'X';
+        bytes[offset++] = (byte)'i';
+        bytes[offset++] = (byte)'n';
+        bytes[offset++] = (byte)'g';
+        // Flags: frames | bytes | toc | vbr scale
+        bytes[offset++] = 0x00;
+        bytes[offset++] = 0x00;
+        bytes[offset++] = 0x00;
+        bytes[offset++] = 0x0F;
+        WriteBigEndian(bytes, ref offset, audioFrames);
+        WriteBigEndian(bytes, ref offset, audioFrames * FrameSize);
+        offset += 100;                              // table of contents, all zero
+        WriteBigEndian(bytes, ref offset, 0);       // VBR scale
+
+        for (int n = 0; n < 9; n++)
+        {
+            bytes[offset + n] = n < encoderTag.Length ? (byte)encoderTag[n] : (byte)' ';
+        }
+        bytes[offset + 9] = (byte)((infoTagRevision << 4) | 0x01);
+        bytes[offset + 21] = (byte)((encoderDelay >> 4) & 0xFF);
+        bytes[offset + 22] = (byte)(((encoderDelay & 0x0F) << 4) | ((encoderPadding >> 8) & 0x0F));
+        bytes[offset + 23] = (byte)(encoderPadding & 0xFF);
+        return bytes;
+    }
+
+    private static void WriteBigEndian(byte[] bytes, ref int offset, int value)
+    {
+        bytes[offset++] = (byte)((value >> 24) & 0xFF);
+        bytes[offset++] = (byte)((value >> 16) & 0xFF);
+        bytes[offset++] = (byte)((value >> 8) & 0xFF);
+        bytes[offset++] = (byte)(value & 0xFF);
+    }
+
     /// <summary>
     /// Bytes of a synthetic MP3 with an injected Xing/Info tag in the first frame's
     /// payload. The reader sees the tag, treats it as a non-audio frame, and reads

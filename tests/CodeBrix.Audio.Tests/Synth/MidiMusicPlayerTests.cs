@@ -61,6 +61,21 @@ public sealed class MidiMusicPlayerTests : IDisposable
     }
 
     [Fact]
+    public void auxiliary_outputs_are_folded_into_the_mix_unless_they_are_dropped()
+    {
+        //Arrange
+        using var player = new MidiMusicPlayer();
+        var byDefault = player.DropAuxiliaryOutputs;
+
+        //Act
+        player.DropAuxiliaryOutputs = true;
+
+        //Assert
+        byDefault.Should().BeFalse();
+        player.DropAuxiliaryOutputs.Should().BeTrue();
+    }
+
+    [Fact]
     public void speed_defaults_to_one_and_persists_before_a_load()
     {
         //Arrange
@@ -103,6 +118,19 @@ public sealed class MidiMusicPlayerTests : IDisposable
         //Assert
         player.MidiMessageProcessed.Should().BeSameAs(observer);
         player.MidiMessageFilter.Should().BeSameAs(filter);
+    }
+
+    [Fact]
+    public void the_tempo_source_reports_the_midi_defaults_before_a_load()
+    {
+        //Arrange & Act
+        using var player = new MidiMusicPlayer();
+
+        //Assert
+        player.TempoSource.Should().NotBeNull();
+        player.TempoSource.BeatsPerMinute.Should().Be(120.0);
+        player.TempoSource.BeatPosition.Should().Be(0.0);
+        player.TempoSource.IsPlaying.Should().BeFalse();
     }
 
     [Fact]

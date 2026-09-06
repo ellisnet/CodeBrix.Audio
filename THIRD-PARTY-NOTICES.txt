@@ -1,5 +1,9 @@
 THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 
+This file is packed into BOTH packages built from this repository -
+CodeBrix.Audio.MitLicenseForever and CodeBrix.Audio.ModestSynth.MitLicenseForever
+- and is the authoritative provenance record for both.
+
 The CodeBrix.Audio.MitLicenseForever NuGet package ships two assemblies:
 
   * CodeBrix.Audio        — a fully managed, cross-platform audio FILE library
@@ -16,6 +20,17 @@ The CodeBrix.Audio.MitLicenseForever NuGet package ships two assemblies:
                             backend for Windows, macOS, and Linux. Vendored from
                             SoundFlow, miniaudio and stb_vorbis (entries 3-4
                             and 6).
+
+The CodeBrix.Audio.ModestSynth.MitLicenseForever NuGet package ships one
+assembly:
+
+  * CodeBrix.Audio.ModestSynth — oscillators and creative effects for the sampler
+                            engine, plus a standalone synthesizer. Contains no
+                            native code and NO third-party source: it is original
+                            CodeBrix code written from public documentation and
+                            from published algorithm descriptions. It is listed
+                            here so that a reader of this file knows the whole of
+                            what both packages carry.
 
 Both assemblies incorporate source code (and, for the Engine, a native library)
 adapted from the open-source projects listed below. Every incorporated project
@@ -561,6 +576,32 @@ CodeBrix.Audio's own MIT license:
     from sine tones by tools/make_test_fixtures/make_soundfont.py. It is not a
     third-party SoundFont, and no third-party SoundFont is bundled: real GM
     SoundFonts run to tens of megabytes and are variously licensed.
+  * The SFZ engine (src/CodeBrix.Audio/Synth/Sfz/) is original code written from
+    the published SFZ format documentation. No other player's source was used or
+    adapted.
+  * The Decent Sampler engine (src/CodeBrix.Audio/Synth/DecentSampler/) is
+    original code written from the published Decent Sampler developer guide and
+    from measurement of the reference player's audio OUTPUT. No player's source
+    was used or adapted, and the reverb it uses is the Freeverb that arrived with
+    MeltySynth (entry 7). "Decent Sampler" and "Decent Samples" are Decidedly
+    LLC's names, used descriptively to say what the files are; no code, sample
+    content, preset or library from that project or from any sample library is
+    incorporated, referenced by a fixture, or bundled. Every test fixture for it
+    is synthetic and written at run time.
+  * The multi-track player and the stems loader (src/CodeBrix.Audio/Playback/ and
+    Playback/Suno/) are original code. The loader reads the file layout of a Suno
+    stems download, which was established by inspecting downloads rather than
+    from any published specification. "Suno" is Suno, Inc.'s name, used
+    descriptively to say what the files are; no code, audio, MIDI, model output
+    or other content from that service is incorporated, referenced by a fixture,
+    or bundled. Every stems fixture in the tests is synthetic and written at run
+    time, and copies only the SHAPE of an export.
+  * CodeBrix.Audio.ModestSynth (src/CodeBrix.Audio.ModestSynth/) is original code
+    written from public algorithm descriptions - band-limited oscillator
+    synthesis, the digital waveguide plucked string, additive and wavetable
+    synthesis, published FM algorithm charts, and the standard textbook forms of
+    the creative effects. No synthesizer's source was used or adapted, and it
+    carries no third-party code.
 
 ================================================================================
 

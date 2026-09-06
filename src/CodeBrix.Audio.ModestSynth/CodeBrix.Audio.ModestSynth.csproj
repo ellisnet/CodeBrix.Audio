@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    CodeBrix.Audio.ModestSynth - the synthesis add-on for CodeBrix.Audio: oscillators that
+    generate sound rather than play samples, and the creative DSP that belongs to a synth.
+    It is published as its own package, at the SAME version as CodeBrix.Audio (see
+    Directory.Build.props at the repo root), and depends on nothing but CodeBrix.Audio.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>CodeBrix.Audio.ModestSynth</AssemblyName>
+    <RootNamespace>CodeBrix.Audio.ModestSynth</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- Version: 1.<years since 2026>.<day of year>.<minute of day>, computed once for the whole
+       repository in Directory.Build.props at the repo root. This package and
+       CodeBrix.Audio.MitLicenseForever carry the same version by construction, which is what
+       makes the ProjectReference below emit a dependency that resolves exactly. -->
+  <PropertyGroup>
+    <Version>$(BuildVersion)</Version>
+    <AssemblyVersion>$(BuildVersion)</AssemblyVersion>
+    <FileVersion>$(BuildVersion)</FileVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>CodeBrix.Audio.ModestSynth.MitLicenseForever</PackageId>
+    <Product>CodeBrix.Audio.ModestSynth</Product>
+    <Title>CodeBrix.Audio.ModestSynth</Title>
+    <Authors>Jeremy Ellis</Authors>
+    <Description>Adds synthesis to CodeBrix.Audio: band-limited oscillators, noise, a waveguide plucked-string model, a multi-frame wavetable player, a 64-partial additive oscillator and a six-operator FM engine that generate sound instead of playing recorded samples, plus the creative effects a synth is expected to have - phaser, pitch shifter, wave folder, wave shaper, stereo simulator, bit crusher and gate. Usable on their own or as the sound generators and effects a Decent Sampler instrument asks for. Ships as a separate add-on so you only include the synthesis code when you actually need it.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/ellisnet/CodeBrix.Audio</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ellisnet/CodeBrix.Audio</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageIcon>icon-codebrix-128.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Copyright>Copyright (c) 2026 Jeremy Ellis and contributors</Copyright>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+    <IsPackable>true</IsPackable>
+    <PackageTags>audio;synth;synthesizer;oscillator;waveform;wavetable;additive;fm;polyblep;karplus-strong;pluck;noise;effects;phaser;bitcrusher;waveshaper;dsp;midi;CodeBrix</PackageTags>
+  </PropertyGroup>
+
+  <!--
+    The icon and the third-party notices come from the repo root and cover both packages; the
+    README and the agent guide are this package's OWN, living beside this csproj, because the
+    root ones describe CodeBrix.Audio. Files inside the project folder are already part of the
+    SDK's default None glob, so they are packed with Update rather than Include.
+  -->
+  <ItemGroup>
+    <None Include="..\..\icon-codebrix-128.png" Pack="true" PackagePath="" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="" />
+    <None Update="README.md" Pack="true" PackagePath="" />
+    <None Update="AGENT-README.txt" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <!--
+    An ORDINARY ProjectReference, deliberately: pack turns it into a NuGet dependency on
+    CodeBrix.Audio.MitLicenseForever at the version that project produced in this same build.
+    Do not add PrivateAssets="all" here - that is the Engine's arrangement inside the core
+    package, and the opposite of what this add-on wants.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\CodeBrix.Audio\CodeBrix.Audio.csproj" />
+  </ItemGroup>
+
+</Project>

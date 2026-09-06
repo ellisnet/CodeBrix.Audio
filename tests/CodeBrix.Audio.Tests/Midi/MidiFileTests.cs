@@ -146,6 +146,8 @@ public class MidiFileTests
     [Fact]
     public void NonStrictCheckingAllowsUnmatchedNoteOn()
     {
+        // Tolerant reading closes a note that was never released, at the end of its track, and says
+        // so in Problems. It used to leave OffEvent null, which made NoteLength throw.
         var track = new byte[]
         {
             0x00, 0x90, 0x3C, 0x64,
@@ -157,10 +159,12 @@ public class MidiFileTests
         {
             var midiFile = new MidiFile(stream, false);
 
-            Assert.Equal(2, midiFile.Events[0].Count);
+            Assert.Equal(3, midiFile.Events[0].Count);
             Assert.IsType<NoteOnEvent>(midiFile.Events[0][0]);
             var noteOn = (NoteOnEvent)midiFile.Events[0][0];
-            Assert.Null(noteOn.OffEvent);
+            Assert.NotNull(noteOn.OffEvent);
+            Assert.True(MidiEvent.IsEndTrack(midiFile.Events[0][2]));
+            Assert.Single(midiFile.Problems);
         }
     }
 

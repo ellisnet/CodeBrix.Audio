@@ -1,4 +1,5 @@
 using System;
+using CodeBrix.Audio.Synth.Mpe;
 
 namespace CodeBrix.Audio.Synth.Sfz;
 
@@ -31,6 +32,8 @@ public sealed class SfzSynthesizerSettings
         blockSize = defaultBlockSize;
         maximumPolyphony = defaultMaximumPolyphony;
         RandomSeed = defaultRandomSeed;
+        MpeMode = MpeMode.Off;
+        MpeMemberBendRange = MpeChannelState.DefaultMemberBendRange;
     }
 
     /// <summary>The synthesis sample rate in Hz. 16000 to 192000.</summary>
@@ -71,6 +74,27 @@ public sealed class SfzSynthesizerSettings
     /// identically.
     /// </summary>
     public int RandomSeed { get; set; }
+
+    /// <summary>
+    /// How the synthesizer reads the MIDI Polyphonic Expression zones of the music it is given.
+    /// <see cref="Mpe.MpeMode.Off"/> by default, which plays every channel as ordinary MIDI.
+    /// </summary>
+    public MpeMode MpeMode { get; set; }
+
+    /// <summary>
+    /// How far a member channel's pitch bend reaches when the music never says, in semitones.
+    /// Forty-eight by default, which is what expressive controllers ship with.
+    /// </summary>
+    public double MpeMemberBendRange { get; set; }
+
+    /// <summary>
+    /// How many member channels the lower zone holds in an explicit mode. Zero, the default, means
+    /// fifteen when only the lower zone is on and seven when both zones are.
+    /// </summary>
+    public int MpeLowerZoneMemberCount { get; set; }
+
+    /// <summary>The upper zone's equivalent of <see cref="MpeLowerZoneMemberCount"/>.</summary>
+    public int MpeUpperZoneMemberCount { get; set; }
 
     private static void CheckSampleRate(int value)
     {

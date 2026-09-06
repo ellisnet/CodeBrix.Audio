@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Collections.Generic;
+using CodeBrix.Audio.Midi.Internal;
 using CodeBrix.Audio.Utils;
 
 namespace CodeBrix.Audio.Midi; //was previously: NAudio.Midi;
@@ -9,20 +10,40 @@ namespace CodeBrix.Audio.Midi; //was previously: NAudio.Midi;
 /// <summary>
 /// Class able to read a MIDI file
 /// </summary>
-public class MidiFile 
+/// <remarks>
+/// <para>
+/// Reading is <see cref="MidiReadMode.Tolerant"/> unless a mode is asked for: a file that breaks the
+/// Standard MIDI File specification still loads, and every departure is listed in
+/// <see cref="Problems"/>. <see cref="MidiReadMode.Strict"/> restores the validating behaviour and
+/// throws instead.
+/// </para>
+/// <para>
+/// What tolerance covers: out-of-range key signatures (kept as raw bytes), meta events whose payload
+/// does not match their declared type or length (kept as <see cref="RawMetaEvent"/>), meta event
+/// types this package does not model (kept as <see cref="RawMetaEvent"/>), chunks that are not
+/// tracks (skipped), note-on events with no note-off (closed at the end of their track), note-off
+/// events with no note-on (kept), events after the end-of-track event (kept), and a track whose
+/// bytes stop making sense (the rest of that track is skipped, the rest of the file is read).
+/// </para>
+/// </remarks>
+public class MidiFile
 {
     private readonly MidiEventCollection events;
     private readonly ushort fileFormat;
     //private ushort tracks;
     private readonly ushort deltaTicksPerQuarterNote;
     private readonly bool strictChecking;
+    private readonly MidiReadMode readMode;
+    private readonly IReadOnlyList<string> problems;
 
     /// <summary>
-    /// Opens a MIDI file for reading
+    /// Opens a MIDI file for reading, tolerating content the specification does not allow.
     /// </summary>
     /// <param name="filename">Name of MIDI file</param>
+    /// <remarks>Anything that could not be honoured is listed in <see cref="Problems"/>. Pass
+    /// <see cref="MidiReadMode.Strict"/> to have such content throw instead.</remarks>
     public MidiFile(string filename)
-        : this(filename,true)
+        : this(filename, MidiReadMode.Tolerant)
     {
     }
 
@@ -35,9 +56,30 @@ public class MidiFile
     /// Opens a MIDI file for reading
     /// </summary>
     /// <param name="filename">Name of MIDI file</param>
-    /// <param name="strictChecking">If true will error on non-paired note events</param>
+    /// <param name="strictChecking">If true will error on non-paired note events; shorthand for
+    /// <see cref="MidiReadMode.Strict"/> against <see cref="MidiReadMode.Tolerant"/></param>
     public MidiFile(string filename, bool strictChecking) :
-        this(File.OpenRead(filename), strictChecking, true)
+        this(File.OpenRead(filename), ToReadMode(strictChecking), true)
+    {
+    }
+
+    /// <summary>
+    /// Opens a MIDI file for reading
+    /// </summary>
+    /// <param name="filename">Name of MIDI file</param>
+    /// <param name="readMode">Whether to tolerate content the specification does not allow, or throw</param>
+    public MidiFile(string filename, MidiReadMode readMode) :
+        this(File.OpenRead(filename), readMode, true)
+    {
+    }
+
+    /// <summary>
+    /// Opens a MIDI file stream for reading, tolerating content the specification does not allow.
+    /// </summary>
+    /// <param name="inputStream">The input stream containing a MIDI file</param>
+    /// <remarks>Anything that could not be honoured is listed in <see cref="Problems"/>.</remarks>
+    public MidiFile(Stream inputStream) :
+        this(inputStream, MidiReadMode.Tolerant, false)
     {
     }
 
@@ -45,18 +87,35 @@ public class MidiFile
     /// Opens a MIDI file stream for reading
     /// </summary>
     /// <param name="inputStream">The input stream containing a MIDI file</param>
-    /// <param name="strictChecking">If true will error on non-paired note events</param>
+    /// <param name="strictChecking">If true will error on non-paired note events; shorthand for
+    /// <see cref="MidiReadMode.Strict"/> against <see cref="MidiReadMode.Tolerant"/></param>
     public MidiFile(Stream inputStream, bool strictChecking) :
-        this(inputStream, strictChecking, false)
+        this(inputStream, ToReadMode(strictChecking), false)
     {
     }
 
-    private MidiFile(Stream inputStream, bool strictChecking, bool ownInputStream)
+    /// <summary>
+    /// Opens a MIDI file stream for reading
+    /// </summary>
+    /// <param name="inputStream">The input stream containing a MIDI file</param>
+    /// <param name="readMode">Whether to tolerate content the specification does not allow, or throw</param>
+    public MidiFile(Stream inputStream, MidiReadMode readMode) :
+        this(inputStream, readMode, false)
     {
-        this.strictChecking = strictChecking;
-        
+    }
+
+    private static MidiReadMode ToReadMode(bool strictChecking) =>
+        strictChecking ? MidiReadMode.Strict : MidiReadMode.Tolerant;
+
+    private MidiFile(Stream inputStream, MidiReadMode readMode, bool ownInputStream)
+    {
+        this.readMode = readMode;
+        strictChecking = readMode == MidiReadMode.Strict;
+        var context = new MidiReadContext(readMode);
+        problems = context.Problems;
+
         var br = new BinaryReader(inputStream);
-        try 
+        try
         {
             string chunkHeader = Encoding.UTF8.GetString(br.ReadBytes(4));
             if (chunkHeader == "RIFF")
@@ -71,36 +130,47 @@ public class MidiFile
                 throw new FormatException("Not a MIDI file - header chunk missing");
             }
             uint chunkSize = SwapUInt32(br.ReadUInt32());
-            
-            if(chunkSize != 6) 
+
+            if(chunkSize < 6)
             {
                 throw new FormatException("Unexpected header chunk length");
+            }
+            if(chunkSize != 6)
+            {
+                if (strictChecking)
+                {
+                    throw new FormatException("Unexpected header chunk length");
+                }
+                context.Add($"The header chunk declares {chunkSize} bytes instead of 6; the extra bytes were skipped.");
             }
             // 0 = single track, 1 = multi-track synchronous, 2 = multi-track asynchronous
             fileFormat = SwapUInt16(br.ReadUInt16());
             int tracks = SwapUInt16(br.ReadUInt16());
             deltaTicksPerQuarterNote = SwapUInt16(br.ReadUInt16());
+            if (chunkSize > 6)
+            {
+                br.BaseStream.Position += chunkSize - 6;
+            }
 
             events = new MidiEventCollection(fileFormat, deltaTicksPerQuarterNote);
             for (int n = 0; n < tracks; n++)
             {
                 events.AddTrack();
             }
-            
+
             long absoluteTime = 0;
-            
-            for(int track = 0; track < tracks; track++) 
+
+            for(int track = 0; track < tracks; track++)
             {
-                if(fileFormat != 0) 
+                if(fileFormat != 0)
                 {
                     absoluteTime = 0;
                 }
-                chunkHeader = Encoding.UTF8.GetString(br.ReadBytes(4));
-                if(chunkHeader != "MTrk") 
+                if (!SeekToNextTrackChunk(br, context, out chunkSize))
                 {
-                    throw new FormatException("Invalid chunk header");
+                    context.Add($"The file declares {tracks} track(s) but only {track} were found.");
+                    break;
                 }
-                chunkSize = SwapUInt32(br.ReadUInt32());
 
                 long startPos = br.BaseStream.Position;
                 MidiEvent me = null;
@@ -109,21 +179,25 @@ public class MidiFile
                 // (issue #205).
                 MidiEvent runningStatus = null;
                 var outstandingNoteOns = new List<NoteOnEvent>();
+                var orphanNoteOffs = 0;
+                var reportedEventsAfterEndTrack = false;
+                var abandonedTrack = false;
                 while(br.BaseStream.Position < startPos + chunkSize)
                 {
                     try
                     {
-                        me = MidiEvent.ReadNextEvent(br, runningStatus);
+                        me = MidiEvent.ReadNextEvent(br, runningStatus, context);
                     }
-                    catch (InvalidDataException)
+                    catch (Exception exception) when (!strictChecking && IsRecoverableReadFailure(exception))
                     {
-                        if (strictChecking) throw;
-                        continue;
-                    }
-                    catch (FormatException)
-                    {
-                        if (strictChecking) throw;
-                        continue;
+                        // The stream is no longer on an event boundary and there is no way to find
+                        // the next one: what follows would be parsed as noise. Give up on this
+                        // track, keep what was read, and carry on with the next one.
+                        context.Add(
+                            $"Track {track}: reading stopped {br.BaseStream.Position - startPos} byte(s) into the " +
+                            $"track ({exception.Message}); the rest of the track was skipped.");
+                        abandonedTrack = true;
+                        break;
                     }
 
                     if (me.CommandCode < MidiCommandCode.Sysex)
@@ -133,54 +207,84 @@ public class MidiFile
                     absoluteTime += me.DeltaTime;
                     me.AbsoluteTime = absoluteTime;
                     events[track].Add(me);
-                    if (me.CommandCode == MidiCommandCode.NoteOn) 
+                    if (me.CommandCode == MidiCommandCode.NoteOn)
                     {
                         var ne = (NoteEvent) me;
-                        if(ne.Velocity > 0) 
+                        if(ne.Velocity > 0)
                         {
                             outstandingNoteOns.Add((NoteOnEvent) ne);
                         }
-                        else 
+                        else
                         {
                             // don't remove the note offs, even though
                             // they are annoying
                             // events[track].Remove(me);
-                            FindNoteOn(ne,outstandingNoteOns);
+                            if (!FindNoteOn(ne, outstandingNoteOns))
+                            {
+                                orphanNoteOffs++;
+                            }
                         }
                     }
-                    else if(me.CommandCode == MidiCommandCode.NoteOff) 
+                    else if(me.CommandCode == MidiCommandCode.NoteOff)
                     {
-                        FindNoteOn((NoteEvent) me,outstandingNoteOns);
+                        if (!FindNoteOn((NoteEvent)me, outstandingNoteOns))
+                        {
+                            orphanNoteOffs++;
+                        }
                     }
-                    else if(me.CommandCode == MidiCommandCode.MetaEvent) 
+                    else if(me.CommandCode == MidiCommandCode.MetaEvent)
                     {
                         MetaEvent metaEvent = (MetaEvent) me;
-                        if(metaEvent.MetaEventType == MetaEventType.EndTrack) 
+                        if(metaEvent.MetaEventType == MetaEventType.EndTrack)
                         {
                             //break;
                             // some dodgy MIDI files have an event after end track
-                            if (strictChecking)
+                            if (br.BaseStream.Position < startPos + chunkSize)
                             {
-                                if (br.BaseStream.Position < startPos + chunkSize)
+                                if (strictChecking)
                                 {
                                     throw new FormatException(
                                         $"End Track event was not the last MIDI event on track {track}");
+                                }
+                                if (!reportedEventsAfterEndTrack)
+                                {
+                                    reportedEventsAfterEndTrack = true;
+                                    context.Add(
+                                        $"Track {track}: more events follow the end-of-track event; they were kept.");
                                 }
                             }
                         }
                     }
                 }
-                if(outstandingNoteOns.Count > 0) 
+                if(outstandingNoteOns.Count > 0)
                 {
                     if (strictChecking)
                     {
                         throw new FormatException(
                             $"Note ons without note offs {outstandingNoteOns.Count} (file format {fileFormat})");
                     }
+                    context.Add(
+                        $"Track {track}: {outstandingNoteOns.Count} note on event(s) had no note off; " +
+                        "each was closed at the end of the track.");
+                    CloseOutstandingNoteOns(events[track], outstandingNoteOns, absoluteTime);
                 }
-                if(br.BaseStream.Position != startPos + chunkSize) 
+                if (orphanNoteOffs > 0)
                 {
-                    throw new FormatException($"Read too far {chunkSize}+{startPos}!={br.BaseStream.Position}");
+                    context.Add($"Track {track}: {orphanNoteOffs} note off event(s) had no matching note on.");
+                }
+                if(br.BaseStream.Position != startPos + chunkSize)
+                {
+                    if (strictChecking)
+                    {
+                        throw new FormatException($"Read too far {chunkSize}+{startPos}!={br.BaseStream.Position}");
+                    }
+                    if (!abandonedTrack)
+                    {
+                        context.Add(
+                            $"Track {track}: the track chunk declares {chunkSize} byte(s) but " +
+                            $"{br.BaseStream.Position - startPos} were read; the reader was moved to the end of the chunk.");
+                    }
+                    br.BaseStream.Position = startPos + chunkSize;
                 }
             }
         }
@@ -193,10 +297,95 @@ public class MidiFile
         }
     }
 
+    private static bool IsRecoverableReadFailure(Exception exception) =>
+        exception is FormatException
+        || exception is InvalidDataException
+        || exception is EndOfStreamException
+        || exception is ArgumentException
+        || exception is OverflowException;
+
+    // Finds the next MTrk chunk, skipping any chunk that is not one (the specification says an
+    // unrecognised chunk type must be skipped, but the strict reader has always refused). Returns
+    // false when the file ends before another track chunk turns up.
+    private bool SeekToNextTrackChunk(BinaryReader br, MidiReadContext context, out uint chunkSize)
+    {
+        while (true)
+        {
+            byte[] headerBytes = br.ReadBytes(4);
+            if (headerBytes.Length < 4)
+            {
+                if (strictChecking)
+                {
+                    throw new FormatException("Invalid chunk header");
+                }
+                chunkSize = 0;
+                return false;
+            }
+
+            string chunkHeader = Encoding.UTF8.GetString(headerBytes);
+            if (chunkHeader != "MTrk" && strictChecking)
+            {
+                throw new FormatException("Invalid chunk header");
+            }
+
+            chunkSize = SwapUInt32(br.ReadUInt32());
+            if (chunkHeader == "MTrk")
+            {
+                return true;
+            }
+
+            context.Add($"Chunk '{chunkHeader}' is not a track chunk; its {chunkSize} byte(s) were skipped.");
+            long target = br.BaseStream.Position + chunkSize;
+            if (target > br.BaseStream.Length)
+            {
+                chunkSize = 0;
+                return false;
+            }
+            br.BaseStream.Position = target;
+        }
+    }
+
+    // Gives every note-on left hanging at the end of a track a note-off at the track's last tick,
+    // inserted before the end-of-track event so that the track stays exportable. Without this a
+    // consumer reading NoteOnEvent.NoteLength gets an InvalidOperationException instead of a note.
+    private static void CloseOutstandingNoteOns(IList<MidiEvent> trackEvents, List<NoteOnEvent> outstandingNoteOns, long endTime)
+    {
+        int insertAt = trackEvents.Count;
+        if (insertAt > 0 && MidiEvent.IsEndTrack(trackEvents[insertAt - 1]))
+        {
+            insertAt--;
+        }
+
+        foreach (NoteOnEvent noteOnEvent in outstandingNoteOns)
+        {
+            long offTime = Math.Max(endTime, noteOnEvent.AbsoluteTime);
+            var offEvent = new NoteEvent(offTime, noteOnEvent.Channel, MidiCommandCode.NoteOff,
+                noteOnEvent.NoteNumber, 0);
+            noteOnEvent.OffEvent = offEvent;
+            trackEvents.Insert(insertAt, offEvent);
+            insertAt++;
+        }
+    }
+
     /// <summary>
     /// The collection of events in this MIDI file
     /// </summary>
     public MidiEventCollection Events => events;
+
+    /// <summary>
+    /// The mode this file was read in.
+    /// </summary>
+    public MidiReadMode ReadMode => readMode;
+
+    /// <summary>
+    /// Everything in the file that could not be honoured as written, one human-readable line each:
+    /// out-of-range values kept as raw bytes, meta events that could not be decoded, notes that were
+    /// never released, bytes that were skipped. Empty for a file that follows the specification.
+    /// Never thrown; reading with <see cref="MidiReadMode.Strict"/> throws instead of filling this.
+    /// </summary>
+    /// <remarks>The list is capped, so a thoroughly corrupt file cannot grow it without bound; the
+    /// last entry then says that further problems were not recorded.</remarks>
+    public IReadOnlyList<string> Problems => problems;
 
     /// <summary>
     /// Number of tracks in this MIDI file
@@ -208,12 +397,12 @@ public class MidiFile
     /// </summary>
     public int DeltaTicksPerQuarterNote => deltaTicksPerQuarterNote;
 
-    private void FindNoteOn(NoteEvent offEvent, List<NoteOnEvent> outstandingNoteOns)
+    private bool FindNoteOn(NoteEvent offEvent, List<NoteOnEvent> outstandingNoteOns)
     {
         bool found = false;
         foreach(NoteOnEvent noteOnEvent in outstandingNoteOns)
         {
-            if ((noteOnEvent.Channel == offEvent.Channel) && (noteOnEvent.NoteNumber == offEvent.NoteNumber)) 
+            if ((noteOnEvent.Channel == offEvent.Channel) && (noteOnEvent.NoteNumber == offEvent.NoteNumber))
             {
                 noteOnEvent.OffEvent = offEvent;
                 outstandingNoteOns.Remove(noteOnEvent);
@@ -221,13 +410,14 @@ public class MidiFile
                 break;
             }
         }
-        if(!found) 
+        if(!found)
         {
             if (strictChecking)
             {
                 throw new FormatException($"Got an off without an on {offEvent}");
             }
         }
+        return found;
     }
     
     private static void SeekToRmidMidiData(BinaryReader br)

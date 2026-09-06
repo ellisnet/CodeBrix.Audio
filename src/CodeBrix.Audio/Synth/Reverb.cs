@@ -120,33 +120,46 @@ internal sealed class Reverb
 
     public void Process(float[] input, float[] outputLeft, float[] outputRight)
     {
-        Array.Clear(outputLeft, 0, outputLeft.Length);
-        Array.Clear(outputRight, 0, outputRight.Length);
+        Process(input, outputLeft, outputRight, outputLeft.Length);
+    }
+
+    // The same reverb over the first `count` frames of the buffers, so a caller whose block is shorter
+    // than its scratch arrays does not advance the reverb through the unused tail. The Length-based
+    // overload above delegates here, so the SoundFont path is unchanged.
+    public void Process(float[] input, float[] outputLeft, float[] outputRight, int count)
+    {
+        if (count <= 0)
+        {
+            return;
+        }
+
+        Array.Clear(outputLeft, 0, count);
+        Array.Clear(outputRight, 0, count);
 
         foreach (var cf in cfsL)
         {
-            cf.Process(input, outputLeft);
+            cf.Process(input, outputLeft, count);
         }
 
         foreach (var apf in apfsL)
         {
-            apf.Process(outputLeft);
+            apf.Process(outputLeft, count);
         }
 
         foreach (var cf in cfsR)
         {
-            cf.Process(input, outputRight);
+            cf.Process(input, outputRight, count);
         }
 
         foreach (var apf in apfsR)
         {
-            apf.Process(outputRight);
+            apf.Process(outputRight, count);
         }
 
         // With the default settings, we can skip this part.
         if (1F - wet1 > 1.0E-3 || wet2 > 1.0E-3)
         {
-            for (var t = 0; t < input.Length; t++)
+            for (var t = 0; t < count; t++)
             {
                 var left = outputLeft[t];
                 var right = outputRight[t];
@@ -292,8 +305,13 @@ internal sealed class Reverb
 
         public void Process(float[] inputBlock, float[] outputBlock)
         {
+            Process(inputBlock, outputBlock, outputBlock.Length);
+        }
+
+        public void Process(float[] inputBlock, float[] outputBlock, int count)
+        {
             var blockIndex = 0;
-            while (blockIndex < outputBlock.Length)
+            while (blockIndex < count)
             {
                 if (bufferIndex == buffer.Length)
                 {
@@ -301,7 +319,7 @@ internal sealed class Reverb
                 }
 
                 var srcRem = buffer.Length - bufferIndex;
-                var dstRem = outputBlock.Length - blockIndex;
+                var dstRem = count - blockIndex;
                 var rem = Math.Min(srcRem, dstRem);
 
                 for (var t = 0; t < rem; t++)
@@ -381,8 +399,13 @@ internal sealed class Reverb
 
         public void Process(float[] block)
         {
+            Process(block, block.Length);
+        }
+
+        public void Process(float[] block, int count)
+        {
             var blockIndex = 0;
-            while (blockIndex < block.Length)
+            while (blockIndex < count)
             {
                 if (bufferIndex == buffer.Length)
                 {
@@ -390,7 +413,7 @@ internal sealed class Reverb
                 }
 
                 var srcRem = buffer.Length - bufferIndex;
-                var dstRem = block.Length - blockIndex;
+                var dstRem = count - blockIndex;
                 var rem = Math.Min(srcRem, dstRem);
 
                 for (var t = 0; t < rem; t++)

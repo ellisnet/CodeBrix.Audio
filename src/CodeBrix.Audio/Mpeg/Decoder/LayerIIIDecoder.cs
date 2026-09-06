@@ -504,7 +504,7 @@ sealed class LayerIIIDecoder : LayerDecoderBase
         // load the frame's main data
         if (!_bitRes.AddBits(frame, _mainDataBegin))
         {
-            return 0;
+            return ConcealFrame(frame, ch0, ch1);
         }
 
         // prep the reusable tables
@@ -608,6 +608,23 @@ sealed class LayerIIIDecoder : LayerDecoderBase
         }
 
         return offset;
+    }
+
+    // The reservoir could not supply this frame's main data: main_data_begin reaches further
+    // back than the bytes it still holds. The frame's audio is unrecoverable, but its DURATION
+    // is not optional. Dropping the frame outright shortens the stream and drags everything
+    // after it earlier in time - on a heavily variable-bitrate file that is a tenth of a second
+    // of drift against the audio the file was encoded from, and a decoded length that does not
+    // match the one the Xing header promises. Emit the frame as silence instead and keep the
+    // timeline; the synthesis overlap is reset so no stale tail leaks into the next frame.
+    private int ConcealFrame(IMpegFrame frame, float[] ch0, float[] ch1)
+    {
+        var granules = frame.Version == MpegVersion.Version1 ? 2 : 1;
+        var count = granules * SBLIMIT * SSLIMIT;
+        if (ch0 != null) { Array.Clear(ch0, 0, Math.Min(count, ch0.Length)); }
+        if (ch1 != null) { Array.Clear(ch1, 0, Math.Min(count, ch1.Length)); }
+        _hybrid.Reset();
+        return count;
     }
 
     internal override void ResetForSeek()

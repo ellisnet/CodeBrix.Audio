@@ -56,102 +56,133 @@ internal sealed class SfzSampleData
     {
         using (var reader = AudioFileReaderRegistry.OpenFile(path))
         {
-            long? loopStart = null;
-            long? loopEnd = null;
+            return Load(reader);
+        }
+    }
 
-            // OpenFile pairs the reader with the file handle it owns; the smpl chunk lives on the
-            // reader itself.
-            var inner = reader is FileOwningWaveStream owning ? owning.Reader : reader;
+    /// <summary>
+    /// Decodes an already-open reader into planar float channels.
+    /// </summary>
+    /// <remarks>
+    /// The Decent Sampler engine uses this overload: it opens AIFF - which the reader registry does not
+    /// map to an extension - and reads samples out of a <c>.dslibrary</c> archive, where there is a
+    /// stream but no file.
+    /// </remarks>
+    /// <param name="reader">The reader, positioned at the start of the audio. Not disposed here.</param>
+    /// <returns>The decoded sample.</returns>
+    public static SfzSampleData Load(WaveStream reader)
+    {
+        ReadEmbeddedLoop(reader, out var loopStart, out var loopEnd);
 
-            if (inner is WaveFileReader waveReader)
+        var format = reader.WaveFormat;
+        var sourceChannels = Math.Max(1, format.Channels);
+
+        var provider = reader.ToSampleProvider();
+
+        var interleaved = new float[8192 * sourceChannels];
+        var blocks = new List<float[]>();
+        var totalSamples = 0L;
+
+        int read;
+        while ((read = provider.Read(interleaved)) > 0)
+        {
+            var block = new float[read];
+            Array.Copy(interleaved, block, read);
+            blocks.Add(block);
+            totalSamples += read;
+        }
+
+        var frames = totalSamples / sourceChannels;
+
+        // Fold anything beyond stereo down to stereo; regions have no use for surround stems.
+        var targetChannels = Math.Min(sourceChannels, 2);
+        var channels = new float[targetChannels][];
+        for (var c = 0; c < targetChannels; c++)
+        {
+            channels[c] = new float[frames];
+        }
+
+        var frameIndex = 0L;
+        var carry = 0;
+        var carrySamples = new float[sourceChannels];
+
+        foreach (var block in blocks)
+        {
+            var offset = 0;
+
+            // A block boundary can split a frame; stitch the partial frame back together.
+            if (carry > 0)
             {
-                ReadSmplLoop(waveReader, ref loopStart, ref loopEnd);
-            }
+                var needed = sourceChannels - carry;
+                var available = Math.Min(needed, block.Length);
+                Array.Copy(block, 0, carrySamples, carry, available);
+                carry += available;
+                offset = available;
 
-            var format = reader.WaveFormat;
-            var sourceChannels = Math.Max(1, format.Channels);
-
-            var provider = reader.ToSampleProvider();
-
-            var interleaved = new float[8192 * sourceChannels];
-            var blocks = new List<float[]>();
-            var totalSamples = 0L;
-
-            int read;
-            while ((read = provider.Read(interleaved)) > 0)
-            {
-                var block = new float[read];
-                Array.Copy(interleaved, block, read);
-                blocks.Add(block);
-                totalSamples += read;
-            }
-
-            var frames = totalSamples / sourceChannels;
-
-            // Fold anything beyond stereo down to stereo; regions have no use for surround stems.
-            var targetChannels = Math.Min(sourceChannels, 2);
-            var channels = new float[targetChannels][];
-            for (var c = 0; c < targetChannels; c++)
-            {
-                channels[c] = new float[frames];
-            }
-
-            var frameIndex = 0L;
-            var carry = 0;
-            var carrySamples = new float[sourceChannels];
-
-            foreach (var block in blocks)
-            {
-                var offset = 0;
-
-                // A block boundary can split a frame; stitch the partial frame back together.
-                if (carry > 0)
+                if (carry == sourceChannels)
                 {
-                    var needed = sourceChannels - carry;
-                    var available = Math.Min(needed, block.Length);
-                    Array.Copy(block, 0, carrySamples, carry, available);
-                    carry += available;
-                    offset = available;
-
-                    if (carry == sourceChannels)
-                    {
-                        WriteFrame(channels, carrySamples, sourceChannels, targetChannels, frameIndex);
-                        frameIndex++;
-                        carry = 0;
-                    }
-                }
-
-                var wholeFrames = (block.Length - offset) / sourceChannels;
-                for (var f = 0; f < wholeFrames; f++)
-                {
-                    var basePosition = offset + f * sourceChannels;
-                    for (var c = 0; c < targetChannels; c++)
-                    {
-                        channels[c][frameIndex] = block[basePosition + c];
-                    }
+                    WriteFrame(channels, carrySamples, sourceChannels, targetChannels, frameIndex);
                     frameIndex++;
+                    carry = 0;
                 }
+            }
 
-                var used = offset + wholeFrames * sourceChannels;
-                var remainder = block.Length - used;
-                if (remainder > 0)
+            var wholeFrames = (block.Length - offset) / sourceChannels;
+            for (var f = 0; f < wholeFrames; f++)
+            {
+                var basePosition = offset + f * sourceChannels;
+                for (var c = 0; c < targetChannels; c++)
                 {
-                    Array.Copy(block, used, carrySamples, 0, remainder);
-                    carry = remainder;
+                    channels[c][frameIndex] = block[basePosition + c];
                 }
+                frameIndex++;
             }
 
-            if (loopEnd.HasValue && loopEnd.Value >= frames)
+            var used = offset + wholeFrames * sourceChannels;
+            var remainder = block.Length - used;
+            if (remainder > 0)
             {
-                loopEnd = frames - 1;
+                Array.Copy(block, used, carrySamples, 0, remainder);
+                carry = remainder;
             }
-            if (loopStart.HasValue && (loopStart.Value < 0 || (loopEnd.HasValue && loopStart.Value > loopEnd.Value)))
-            {
-                loopStart = null;
-                loopEnd = null;
-            }
+        }
 
-            return new SfzSampleData(channels, format.SampleRate, frames, loopStart, loopEnd);
+        if (loopEnd.HasValue && loopEnd.Value >= frames)
+        {
+            loopEnd = frames - 1;
+        }
+        if (loopStart.HasValue && (loopStart.Value < 0 || (loopEnd.HasValue && loopStart.Value > loopEnd.Value)))
+        {
+            loopStart = null;
+            loopEnd = null;
+        }
+
+        return new SfzSampleData(channels, format.SampleRate, frames, loopStart, loopEnd);
+    }
+
+    /// <summary>
+    /// Reads a file's own loop markers off an open reader, when it has any.
+    /// </summary>
+    /// <remarks>
+    /// Shared with the Decent Sampler streaming source, which needs the markers without decoding the
+    /// audio. Only WAV carries them here, in the <c>smpl</c> chunk. The end frame is inclusive, and the
+    /// pair is left unset when the chunk is missing, empty or unreadable.
+    /// </remarks>
+    /// <param name="reader">The reader, already positioned by its own constructor.</param>
+    /// <param name="loopStart">The first frame of the loop, or null.</param>
+    /// <param name="loopEnd">The last frame of the loop, inclusive, or null.</param>
+    internal static void ReadEmbeddedLoop(WaveStream reader, out long? loopStart, out long? loopEnd)
+    {
+        loopStart = null;
+        loopEnd = null;
+
+        // OpenFile pairs the reader with the file handle it owns; the smpl chunk lives on the
+        // reader itself.
+        var inner = reader is FileOwningWaveStream owning ? owning.Reader : reader;
+
+        if (inner is WaveFileReader waveReader)
+        {
+            ReadSmplLoop(waveReader, ref loopStart, ref loopEnd);
         }
     }
 

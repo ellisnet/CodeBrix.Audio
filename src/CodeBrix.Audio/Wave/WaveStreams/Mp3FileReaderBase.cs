@@ -39,10 +39,21 @@ public class Mp3FileReaderBase : WaveStream
 
     private long totalSamples;
     private bool isLengthExact;
+    private bool scannedToEndOfFile;
     private long scannedToFilePosition;
     private long scannedToSamplePosition;
     private readonly int bytesPerSample;
     private readonly int bytesPerDecodedFrame;
+
+    private readonly int encoderDelay;
+    private readonly int encoderPadding;
+    private bool gaplessTrimming = true;
+    private bool hasRead;
+
+    // The MPEG Layer III decoder's own latency, which every gapless implementation assumes and
+    // no encoder writes down: the samples the encoder says it prepended are 529 samples further
+    // into the decoded stream than the tag's number alone would suggest.
+    private const int DecoderDelaySamples = 529;
 
     private IMp3FrameDecompressor decompressor;
     
@@ -130,6 +141,12 @@ public class Mp3FileReaderBase : WaveStream
 
             mp3DataLength = mp3Stream.Length - dataStartPosition;
 
+            if (xingHeader != null)
+            {
+                encoderDelay = xingHeader.EncoderDelay;
+                encoderPadding = xingHeader.EncoderPadding;
+            }
+
             // try for an ID3v1 tag as well
             mp3Stream.Position = mp3Stream.Length - 128;
             byte[] tag = new byte[128];
@@ -146,7 +163,21 @@ public class Mp3FileReaderBase : WaveStream
             Mp3WaveFormat = new Mp3WaveFormat(firstFrame.SampleRate,
                 firstFrame.ChannelMode == ChannelMode.Mono ? 1 : 2, firstFrame.FrameLength, firstFrame.BitRate);
 
-            SeedTableOfContents(firstFrame);
+            // The Xing/Info frame carries no audio and is not decoded into the output, so the
+            // frame index has to start at the first frame that IS audio - otherwise every
+            // sample position in the table is one frame further on than the sample it names.
+            Mp3Frame firstAudioFrame;
+            if (xingHeader == null)
+            {
+                firstAudioFrame = firstFrame;
+            }
+            else
+            {
+                // firstFrame is the header frame, unless the sample-rate workaround above
+                // already replaced it with the second frame - which is audio.
+                firstAudioFrame = ReferenceEquals(firstFrame, secondFrame) ? firstFrame : secondFrame;
+            }
+            SeedTableOfContents(firstAudioFrame);
             EstimateTotalSamples(firstFrame);
 
             mp3Stream.Position = dataStartPosition;
@@ -172,20 +203,28 @@ public class Mp3FileReaderBase : WaveStream
     /// <returns>An MP3 Frame decompressor</returns>
     public delegate IMp3FrameDecompressor FrameDecompressorBuilder(WaveFormat mp3Format);
 
-    private void SeedTableOfContents(Mp3Frame firstFrame)
+    private void SeedTableOfContents(Mp3Frame firstAudioFrame)
     {
         tableOfContents = new List<Mp3Index>();
+        tocIndex = 0;
+        if (firstAudioFrame == null)
+        {
+            // A Xing frame whose audio frames have not been seen yet: start the index empty
+            // and let the first scan or sequential read fill it in from dataStartPosition.
+            scannedToFilePosition = dataStartPosition;
+            scannedToSamplePosition = 0;
+            return;
+        }
         var index = new Mp3Index
         {
-            FilePosition = firstFrame.FileOffset,
+            FilePosition = firstAudioFrame.FileOffset,
             SamplePosition = 0,
-            SampleCount = firstFrame.SampleCount,
-            ByteCount = firstFrame.FrameLength,
+            SampleCount = firstAudioFrame.SampleCount,
+            ByteCount = firstAudioFrame.FrameLength,
         };
         tableOfContents.Add(index);
-        scannedToFilePosition = firstFrame.FileOffset + firstFrame.FrameLength;
-        scannedToSamplePosition = firstFrame.SampleCount;
-        tocIndex = 0;
+        scannedToFilePosition = firstAudioFrame.FileOffset + firstAudioFrame.FrameLength;
+        scannedToSamplePosition = firstAudioFrame.SampleCount;
     }
 
     private void EstimateTotalSamples(Mp3Frame firstFrame)
@@ -206,19 +245,23 @@ public class Mp3FileReaderBase : WaveStream
     }
 
     // Caller must hold repositionLock. Saves and restores mp3Stream.Position.
-    // Scans frame headers (no PCM data) appending to TOC until scannedToSamplePosition >=
-    // targetSamplePosition or EOF is reached. On EOF, isLengthExact is set true and
-    // totalSamples is replaced with the exact frame-summed value.
+    // Scans frame headers (no PCM data) appending to TOC until the frame CONTAINING
+    // targetSamplePosition has an entry, or EOF is reached. On EOF, the length becomes exact
+    // unless a Xing/Info header already made it so.
+    //
+    // n.b. the guard is scannedToEndOfFile, NOT isLengthExact: a file with a Xing header knows
+    // its length from the first frame and has scanned nothing, and conflating the two left
+    // every such file unable to seek anywhere but back to the beginning.
     private void ExtendTableOfContentsTo(long targetSamplePosition, CancellationToken cancellationToken)
     {
-        if (isLengthExact) return;
-        if (scannedToSamplePosition >= targetSamplePosition) return;
+        if (scannedToEndOfFile) return;
+        if (scannedToSamplePosition > targetSamplePosition) return;
 
         long savedPosition = mp3Stream.Position;
         try
         {
             mp3Stream.Position = scannedToFilePosition;
-            while (scannedToSamplePosition < targetSamplePosition)
+            while (scannedToSamplePosition <= targetSamplePosition)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 Mp3Frame frame;
@@ -232,8 +275,7 @@ public class Mp3FileReaderBase : WaveStream
                 }
                 if (frame == null)
                 {
-                    isLengthExact = true;
-                    totalSamples = scannedToSamplePosition;
+                    ReachedEndOfFile();
                     break;
                 }
                 ValidateFrameFormat(frame);
@@ -261,6 +303,19 @@ public class Mp3FileReaderBase : WaveStream
         tableOfContents.Add(entry);
         scannedToFilePosition = mp3Stream.Position;
         scannedToSamplePosition += frame.SampleCount;
+    }
+
+    // The scan or the sequential read has run out of frames. The index now covers the file;
+    // the length becomes exact unless a Xing/Info header had already given an exact one, whose
+    // frame count is authoritative and excludes the header frame itself.
+    private void ReachedEndOfFile()
+    {
+        scannedToEndOfFile = true;
+        if (!isLengthExact)
+        {
+            isLengthExact = true;
+            totalSamples = scannedToSamplePosition;
+        }
     }
 
     private void ValidateFrameFormat(Mp3Frame frame)
@@ -300,10 +355,17 @@ public class Mp3FileReaderBase : WaveStream
     /// Reads the next mp3 frame
     /// </summary>
     /// <returns>Next mp3 frame, or null if EOF</returns>
+    /// <remarks>
+    /// This is the frame-level view of the file and it works in RAW decoded space: it steps
+    /// over the encoder's priming samples and its padding like any other audio, and moves
+    /// <see cref="Position"/> by a whole frame regardless of <see cref="GaplessTrimming"/>.
+    /// Mixing it with <see cref="Read(Span{byte})"/> on the same reader is not meaningful.
+    /// </remarks>
     public Mp3Frame ReadNextFrame()
     {
         lock (repositionLock)
         {
+            hasRead = true;
             ApplyPendingReposition();
             var frame = ReadNextFrame(true);
             if (frame != null) position += frame.SampleCount * bytesPerSample;
@@ -326,11 +388,10 @@ public class Mp3FileReaderBase : WaveStream
                 AppendIfNewFrame(frame);
                 tocIndex++;
             }
-            else if (!isLengthExact)
+            else
             {
-                // EOF reached during sequential read — we now know the exact length.
-                isLengthExact = true;
-                totalSamples = scannedToSamplePosition;
+                // EOF reached during sequential read - we now know the exact length.
+                ReachedEndOfFile();
             }
         }
         catch (EndOfStreamException)
@@ -350,9 +411,75 @@ public class Mp3FileReaderBase : WaveStream
     /// write one), or for CBR files (computed from the first frame's bitrate). For headerless
     /// VBR files Length is an estimate until enough of the file has been read sequentially or
     /// <see cref="EnsureExactLengthAsync"/> has run. Check <see cref="IsLengthExact"/> to
-    /// disambiguate.
+    /// disambiguate. With <see cref="GaplessTrimming"/> on - the default - the encoder delay
+    /// and padding declared in the Xing/LAME header are excluded, so this is the length of the
+    /// audio that was encoded rather than of the frames that carry it.
     /// </remarks>
-    public override long Length => totalSamples * bytesPerSample;
+    public override long Length => TrimmedTotalSamples * bytesPerSample;
+
+    /// <summary>
+    /// How many samples of encoder priming this file declares in its Xing/LAME header, per
+    /// channel, or zero when it declares none. See <see cref="GaplessTrimming"/>.
+    /// </summary>
+    public int EncoderDelay => encoderDelay;
+
+    /// <summary>
+    /// How many samples of padding this file declares in its Xing/LAME header, per channel, or
+    /// zero when it declares none. See <see cref="GaplessTrimming"/>.
+    /// </summary>
+    public int EncoderPadding => encoderPadding;
+
+    /// <summary>
+    /// Whether the encoder delay and padding declared in the Xing/LAME header are removed, so
+    /// that sample position zero is the first sample of the ORIGINAL audio and
+    /// <see cref="Length"/> excludes the padding. On by default, which is what makes an MP3
+    /// line up with the WAV it was encoded from.
+    /// </summary>
+    /// <remarks>
+    /// Turn it off only to see the decoder's raw output - comparing against another decoder,
+    /// or inspecting the priming samples themselves. Doing so shifts every position by
+    /// <c>EncoderDelay + 529</c> samples and lengthens the stream by the padding. It can only
+    /// be changed before the first read; after that the stream is committed to one meaning of
+    /// position.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">Set after reading has begun.</exception>
+    public bool GaplessTrimming
+    {
+        get => gaplessTrimming;
+        set
+        {
+            lock (repositionLock)
+            {
+                if (value == gaplessTrimming) { return; }
+                if (hasRead)
+                {
+                    throw new InvalidOperationException(
+                        "GaplessTrimming cannot be changed once the stream has been read from.");
+                }
+                gaplessTrimming = value;
+            }
+        }
+    }
+
+    // How much decoded audio is discarded at the front: what the encoder says it prepended,
+    // plus the decoder's own delay. Zero when there is nothing to trim.
+    private long TrimStartBytes =>
+        gaplessTrimming && (encoderDelay > 0 || encoderPadding > 0)
+            ? (encoderDelay + DecoderDelaySamples) * (long)bytesPerSample
+            : 0L;
+
+    // The playable sample count once the priming and the padding are gone.
+    private long TrimmedTotalSamples
+    {
+        get
+        {
+            if (!gaplessTrimming || (encoderDelay == 0 && encoderPadding == 0)) { return totalSamples; }
+            long usable = totalSamples - encoderDelay - encoderPadding;
+            long available = totalSamples - encoderDelay - DecoderDelaySamples;
+            long trimmed = Math.Min(usable, available);
+            return trimmed > 0 ? trimmed : 0;
+        }
+    }
 
     /// <summary>
     /// Returns <c>true</c> if <see cref="Length"/> reflects the exact frame-summed sample
@@ -395,7 +522,8 @@ public class Mp3FileReaderBase : WaveStream
     {
         get
         {
-            return position;
+            long trimmed = position - TrimStartBytes;
+            return trimmed > 0 ? trimmed : 0;
         }
         set
         {
@@ -406,7 +534,7 @@ public class Mp3FileReaderBase : WaveStream
             // don't fight the user's drag.
             lock (repositionLock)
             {
-                value = Math.Max(Math.Min(value, Length), 0);
+                value = Math.Max(Math.Min(value, Length), 0) + TrimStartBytes;
                 var now = Environment.TickCount64;
                 if (lastRepositionTickCount >= 0 && now - lastRepositionTickCount < ScrubDetectionWindowMs)
                 {
@@ -428,16 +556,19 @@ public class Mp3FileReaderBase : WaveStream
         if (pendingPosition is not long target) return;
         pendingPosition = null;
 
-        // Re-clamp: Length may have changed since the setter was called (e.g. concurrent
+        // Re-clamp: the raw length may have changed since the setter was called (e.g. concurrent
         // EnsureExactLengthAsync, or our own ExtendTableOfContentsTo below shrinking the
-        // estimate to the real EOF).
-        target = Math.Max(Math.Min(target, Length), 0);
+        // estimate to the real EOF). Everything from here on is in RAW decoded space, before
+        // any gapless trim.
+        long rawLength = totalSamples * bytesPerSample;
+        target = Math.Max(Math.Min(target, rawLength), 0);
         var samplePosition = target / bytesPerSample;
 
-        if (samplePosition > scannedToSamplePosition && !isLengthExact)
+        if (samplePosition >= scannedToSamplePosition && !scannedToEndOfFile)
         {
             ExtendTableOfContentsTo(samplePosition, CancellationToken.None);
-            target = Math.Max(Math.Min(target, Length), 0);
+            rawLength = totalSamples * bytesPerSample;
+            target = Math.Max(Math.Min(target, rawLength), 0);
             samplePosition = target / bytesPerSample;
         }
 
@@ -476,12 +607,18 @@ public class Mp3FileReaderBase : WaveStream
     /// <summary>
     /// Reads decompressed PCM data from our MP3 file.
     /// </summary>
+    /// <param name="sampleBuffer">The buffer to fill with decoded PCM.</param>
+    /// <returns>How many bytes were written, which is zero at the end of the stream.</returns>
+    /// <remarks>
+    /// With <see cref="GaplessTrimming"/> on - the default - the first byte returned is the
+    /// first sample of the original audio, not of the encoder's priming, and the stream ends
+    /// where the original audio ended rather than at the end of the padded final frame.
+    /// </remarks>
     public override int Read(Span<byte> sampleBuffer)
     {
-        int numBytes = sampleBuffer.Length;
-        int bytesRead = 0;
         lock (repositionLock)
         {
+            hasRead = true;
             if (pendingPosition.HasValue && inScrubMode)
             {
                 // While scrubbing rapidly, hold silence until repositions stop for
@@ -490,99 +627,143 @@ public class Mp3FileReaderBase : WaveStream
                 var elapsed = Environment.TickCount64 - lastRepositionTickCount;
                 if (elapsed < SettleWindowMs)
                 {
-                    sampleBuffer.Clear();
-                    return numBytes;
+                    int silence = (int)Math.Min(sampleBuffer.Length, RemainingPlayableBytes());
+                    if (silence <= 0) { return 0; }
+                    sampleBuffer.Slice(0, silence).Clear();
+                    return silence;
                 }
                 inScrubMode = false;
             }
             ApplyPendingReposition();
-            if (decompressLeftovers != 0)
+            DiscardEncoderDelay();
+
+            int allowed = (int)Math.Min(sampleBuffer.Length, RemainingPlayableBytes());
+            if (allowed <= 0) { return 0; }
+            return ReadDecoded(sampleBuffer.Slice(0, allowed));
+        }
+    }
+
+    // How much of the playable region is still ahead of the current raw position. Without this
+    // the padding at the end of a gapless MP3 would be handed to the caller.
+    private long RemainingPlayableBytes()
+    {
+        long end = TrimStartBytes + (TrimmedTotalSamples * bytesPerSample);
+        long remaining = end - position;
+        return remaining > 0 ? remaining : 0;
+    }
+
+    // Decode and throw away the encoder's priming samples, so that the first sample the caller
+    // receives is the first sample of the original audio. They have to be DECODED, not skipped:
+    // they are the decoder's warm-up as much as the encoder's padding.
+    private void DiscardEncoderDelay()
+    {
+        long trimStart = TrimStartBytes;
+        if (position >= trimStart) { return; }
+
+        var scratch = new byte[bytesPerDecodedFrame];
+        while (position < trimStart)
+        {
+            int want = (int)Math.Min(scratch.Length, trimStart - position);
+            if (ReadDecoded(scratch.AsSpan(0, want)) == 0) { break; }
+        }
+    }
+
+    // Caller must hold repositionLock. The decode path proper, in RAW decoded space: it knows
+    // nothing about the gapless trim and advances `position` by what it produced.
+    private int ReadDecoded(Span<byte> sampleBuffer)
+    {
+        int numBytes = sampleBuffer.Length;
+        int bytesRead = 0;
+        if (decompressLeftovers != 0)
+        {
+            int toCopy = Math.Min(decompressLeftovers, numBytes);
+            decompressBuffer.AsSpan(decompressBufferOffset, toCopy).CopyTo(sampleBuffer);
+            decompressLeftovers -= toCopy;
+            if (decompressLeftovers == 0)
             {
-                int toCopy = Math.Min(decompressLeftovers, numBytes);
-                decompressBuffer.AsSpan(decompressBufferOffset, toCopy).CopyTo(sampleBuffer);
-                decompressLeftovers -= toCopy;
-                if (decompressLeftovers == 0)
+                decompressBufferOffset = 0;
+            }
+            else
+            {
+                decompressBufferOffset += toCopy;
+            }
+            bytesRead += toCopy;
+        }
+
+        int targetTocIndex = tocIndex; // the frame index that contains the requested data
+
+        if (repositionedFlag)
+        {
+            decompressor.Reset();
+
+            // Seek back a few frames of the stream to get the reset decoder decode a few
+            // warm-up frames before reading the requested data. Without the warm-up phase,
+            // the first half of the frame after the reset is attenuated and does not resemble
+            // the data as it would be when reading sequentially from the beginning, because
+            // the decoder is missing the required overlap from the previous frame.
+            tocIndex = Math.Max(0, tocIndex - 3); // no warm-up at the beginning of the stream
+            if (tableOfContents.Count > 0)
+            {
+                mp3Stream.Position = tableOfContents[tocIndex].FilePosition;
+            }
+
+            repositionedFlag = false;
+        }
+
+        while (bytesRead < numBytes)
+        {
+            Mp3Frame frame = ReadNextFrame(true); // internal read - should not advance position
+            if (frame != null)
+            {
+                int decompressed = decompressor.DecompressFrame(frame, decompressBuffer.AsSpan());
+
+                if (tocIndex <= targetTocIndex || decompressed == 0)
                 {
-                    decompressBufferOffset = 0;
+                    // The first frame after a reset usually does not immediately yield decoded samples.
+                    // Because the next instructions will fail if a buffer offset is set and the frame
+                    // decoding didn't return data, we skip the part.
+                    // We skip the following instructions also after decoding a warm-up frame.
+                    continue;
+                }
+                // Two special cases can happen here:
+                // 1. We are interested in the first frame of the stream, but need to read the second frame too
+                //    for the decoder to return decoded data
+                // 2. We are interested in the second frame of the stream, but because reading the first frame
+                //    as warm-up didn't yield any data (because the decoder needs two frames to return data), we
+                //    get data from the first and second frame.
+                //    This case needs special handling, and we have to purge the data of the first frame.
+                else if (tocIndex == targetTocIndex + 1 && decompressed == bytesPerDecodedFrame * 2)
+                {
+                    // Purge the first frame's data
+                    Array.Copy(decompressBuffer, bytesPerDecodedFrame, decompressBuffer, 0, bytesPerDecodedFrame);
+                    decompressed = bytesPerDecodedFrame;
+                }
+
+                int toCopy = Math.Min(decompressed - decompressBufferOffset, numBytes - bytesRead);
+                decompressBuffer.AsSpan(decompressBufferOffset, toCopy).CopyTo(sampleBuffer.Slice(bytesRead));
+                if ((toCopy + decompressBufferOffset) < decompressed)
+                {
+                    decompressBufferOffset = toCopy + decompressBufferOffset;
+                    decompressLeftovers = decompressed - decompressBufferOffset;
                 }
                 else
                 {
-                    decompressBufferOffset += toCopy;
+                    // no lefovers
+                    decompressBufferOffset = 0;
+                    decompressLeftovers = 0;
                 }
                 bytesRead += toCopy;
             }
-
-            int targetTocIndex = tocIndex; // the frame index that contains the requested data
-
-            if (repositionedFlag)
+            else
             {
-                decompressor.Reset();
-
-                // Seek back a few frames of the stream to get the reset decoder decode a few
-                // warm-up frames before reading the requested data. Without the warm-up phase,
-                // the first half of the frame after the reset is attenuated and does not resemble
-                // the data as it would be when reading sequentially from the beginning, because
-                // the decoder is missing the required overlap from the previous frame.
-                tocIndex = Math.Max(0, tocIndex - 3); // no warm-up at the beginning of the stream
-                mp3Stream.Position = tableOfContents[tocIndex].FilePosition;
-
-                repositionedFlag = false;
-            }
-
-            while (bytesRead < numBytes)
-            {
-                Mp3Frame frame = ReadNextFrame(true); // internal read - should not advance position
-                if (frame != null)
-                {
-                    int decompressed = decompressor.DecompressFrame(frame, decompressBuffer.AsSpan());
-
-                    if (tocIndex <= targetTocIndex || decompressed == 0)
-                    {
-                        // The first frame after a reset usually does not immediately yield decoded samples.
-                        // Because the next instructions will fail if a buffer offset is set and the frame
-                        // decoding didn't return data, we skip the part.
-                        // We skip the following instructions also after decoding a warm-up frame.
-                        continue;
-                    }
-                    // Two special cases can happen here:
-                    // 1. We are interested in the first frame of the stream, but need to read the second frame too
-                    //    for the decoder to return decoded data
-                    // 2. We are interested in the second frame of the stream, but because reading the first frame
-                    //    as warm-up didn't yield any data (because the decoder needs two frames to return data), we
-                    //    get data from the first and second frame.
-                    //    This case needs special handling, and we have to purge the data of the first frame.
-                    else if (tocIndex == targetTocIndex + 1 && decompressed == bytesPerDecodedFrame * 2)
-                    {
-                        // Purge the first frame's data
-                        Array.Copy(decompressBuffer, bytesPerDecodedFrame, decompressBuffer, 0, bytesPerDecodedFrame);
-                        decompressed = bytesPerDecodedFrame;
-                    }
-
-                    int toCopy = Math.Min(decompressed - decompressBufferOffset, numBytes - bytesRead);
-                    decompressBuffer.AsSpan(decompressBufferOffset, toCopy).CopyTo(sampleBuffer.Slice(bytesRead));
-                    if ((toCopy + decompressBufferOffset) < decompressed)
-                    {
-                        decompressBufferOffset = toCopy + decompressBufferOffset;
-                        decompressLeftovers = decompressed - decompressBufferOffset;
-                    }
-                    else
-                    {
-                        // no lefovers
-                        decompressBufferOffset = 0;
-                        decompressLeftovers = 0;
-                    }
-                    bytesRead += toCopy;
-                }
-                else
-                {
-                    break;
-                }
+                break;
             }
         }
         Debug.Assert(bytesRead <= numBytes, "MP3 File Reader read too much");
         position += bytesRead;
         return bytesRead;
     }
+
 
     /// <summary>
     /// Reads decompressed PCM data from our MP3 file.

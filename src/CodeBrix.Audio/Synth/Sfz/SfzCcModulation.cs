@@ -37,8 +37,9 @@ public readonly struct SfzCcModulation
 
     /// <summary>
     /// The MIDI controller number. Values 128 and above are the ARIA extended modulation sources
-    /// (128 pitch bend, 129 channel aftertouch, 131 note-on velocity, 133 note number, 134 key gate,
-    /// 135/136 per-voice random, 137 alternate, 140/141 key delta).
+    /// (128 pitch bend, 129 channel aftertouch, 130 polyphonic aftertouch, 131 note-on velocity,
+    /// 132 note-off "lift" velocity, 133 note number, 134 key gate, 135/136 per-voice random,
+    /// 137 alternate, 140/141 key delta).
     /// </summary>
     public int CcNumber { get; }
 

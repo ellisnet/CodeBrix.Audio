@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CodeBrix.Audio.Synth.Mpe;
 
 namespace CodeBrix.Audio.Synth.Sfz;
 
@@ -26,7 +27,7 @@ namespace CodeBrix.Audio.Synth.Sfz;
 /// on every run. Vary <see cref="SfzSynthesizerSettings.RandomSeed"/> for a different performance.
 /// </para>
 /// </remarks>
-public sealed class SfzSynthesizer : IMidiSynthesizer
+public sealed class SfzSynthesizer : IMidiSynthesizer, IMpeSynthesizer
 {
     private static readonly int channelCount = 16;
 
@@ -39,6 +40,15 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
     private readonly int minimumVoiceDuration;
 
     private readonly SfzChannel[] channels;
+
+    // The shared MIDI Polyphonic Expression contract: zones, per-channel bend ranges from RPN 0, the
+    // registered tunings, per-note pressure and timbre, and which note owns its channel's
+    // expression. It is fed every message, but nothing below reads the ZONE rules while no zone is
+    // active, so MpeMode.Off plays a file exactly as this engine always has.
+    //
+    // RPN 0 is the exception, and deliberately: pitch-bend sensitivity is ordinary MIDI, not MPE, so
+    // the per-channel bend range applies in every mode.
+    private readonly MpeChannelState mpeState = new MpeChannelState();
     private readonly SfzVoiceCollection voices;
 
     private readonly List<SfzRegion> attackRegions = new List<SfzRegion>();
@@ -156,8 +166,13 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
         channels = new SfzChannel[channelCount];
         for (var i = 0; i < channels.Length; i++)
         {
-            channels[i] = new SfzChannel(instrument);
+            channels[i] = new SfzChannel(instrument, i);
         }
+
+        mpeState.MemberBendRange = settings.MpeMemberBendRange;
+        mpeState.LowerZoneMemberCount = settings.MpeLowerZoneMemberCount;
+        mpeState.UpperZoneMemberCount = settings.MpeUpperZoneMemberCount;
+        mpeState.Mode = settings.MpeMode;
 
         voices = new SfzVoiceCollection(this, maximumPolyphony);
 
@@ -180,6 +195,19 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
         }
 
         var channelInfo = channels[channel];
+
+        // Everything the MPE contract knows arrives here, including the note-off lift velocity that
+        // the NoteOff(channel, key) entry point has no room for.
+        mpeState.ProcessMessage(channel, command, data1, data2);
+
+        if (command == 0xB0)
+        {
+            // RPN 0 arrives as an ordinary controller sequence; the shared state machine has just
+            // read it and the channel's bend range follows. A zone's RPN 0 reaches every member of
+            // that zone, which is why this is asked per channel rather than remembered per message.
+            channelInfo.BendRangeScale =
+                (float)(mpeState.BendRange(channel) / MpeChannelState.DefaultBendRange);
+        }
 
         switch (command)
         {
@@ -204,6 +232,8 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
 
                     case 0x79: // Reset All Controllers
                         channelInfo.ResetControllers();
+                        channelInfo.BendRangeScale =
+                            (float)(mpeState.BendRange(channel) / MpeChannelState.DefaultBendRange);
                         break;
 
                     case 0x7B: // All Note Off
@@ -250,6 +280,8 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
         }
 
         var channelInfo = channels[channel];
+
+        mpeState.NoteOn(channel, key);
 
         if (hasKeyswitchRange && keyswitchLow <= key && key <= keyswitchHigh)
         {
@@ -299,6 +331,10 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
         var channelInfo = channels[channel];
         var wasHeld = channelInfo.IsKeyHeld(key);
 
+        // The lift velocity was captured by ProcessMidiMessage when the note-off arrived as a
+        // message; a caller reaching this entry point directly has none to give.
+        mpeState.NoteOff(channel, key, mpeState.ReleaseVelocity(channel, key));
+
         foreach (var voice in voices)
         {
             if (voice.Channel == channel && voice.Key == key && voice.Region.Trigger != SfzTrigger.Release)
@@ -346,6 +382,13 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
     /// <inheritdoc/>
     public void NoteOffAll(bool immediate)
     {
+        // Every key is up afterwards, which is what trigger=first and trigger=legato count. Without
+        // this the held-key count survives a panic and a trigger=first region never fires again.
+        foreach (var channel in channels)
+        {
+            channel.ReleaseAllKeys();
+        }
+
         if (immediate)
         {
             voices.Clear();
@@ -366,6 +409,11 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
     /// <param name="immediate">If <c>true</c>, notes will stop immediately without the release sound.</param>
     public void NoteOffAll(int channel, bool immediate)
     {
+        if (0 <= channel && channel < channels.Length)
+        {
+            channels[channel].ReleaseAllKeys();
+        }
+
         foreach (var voice in voices)
         {
             if (voice.Channel == channel)
@@ -391,6 +439,8 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
         {
             channel.Reset();
         }
+
+        mpeState.Reset();
 
         Array.Clear(seqCounters, 0, seqCounters.Length);
 
@@ -457,6 +507,86 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
         set => masterVolume = value;
     }
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// Changing this reconfigures the zones at once and forgets any configuration message the music
+    /// has already delivered. An MPE Configuration Message arriving later is honoured in every mode
+    /// but <see cref="Mpe.MpeMode.Off"/>, which is the way to insist a file is played as plain MIDI.
+    /// </para>
+    /// <para>
+    /// A region's own <c>bend_up</c> and <c>bend_down</c> still say how far it bends. A member
+    /// channel's MPE range SCALES them against MIDI's two semitones rather than replacing them, so a
+    /// region asking for an octave still bends twelve times as far as one asking for a semitone, and
+    /// a performance recorded from an expressive controller reaches its whole range either way.
+    /// </para>
+    /// </remarks>
+    public MpeMode MpeMode
+    {
+        get => mpeState.Mode;
+        set => mpeState.Mode = value;
+    }
+
+    /// <inheritdoc/>
+    public double MpeMemberBendRange
+    {
+        get => mpeState.MemberBendRange;
+        set => mpeState.MemberBendRange = value;
+    }
+
+    /// <inheritdoc/>
+    public int MpeLowerZoneMemberCount
+    {
+        get => mpeState.LowerZoneMemberCount;
+        set => mpeState.LowerZoneMemberCount = value;
+    }
+
+    /// <inheritdoc/>
+    public int MpeUpperZoneMemberCount
+    {
+        get => mpeState.UpperZoneMemberCount;
+        set => mpeState.UpperZoneMemberCount = value;
+    }
+
+    /// <inheritdoc/>
+    public MpeZoneInfo MpeLowerZone => mpeState.LowerZone;
+
+    /// <inheritdoc/>
+    public MpeZoneInfo MpeUpperZone => mpeState.UpperZone;
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Reachable from a region as the ARIA extended modulation source <c>cc132</c>, so
+    /// <c>volume_oncc132</c> on a <c>trigger=release</c> region makes a release sample follow how
+    /// quickly the finger left the key.
+    /// </remarks>
+    public int ReleaseVelocity(int channel, int key) => mpeState.ReleaseVelocity(channel, key);
+
+    /// <summary>
+    /// The timbre ("slide" on an expressive controller) of a channel, 0 to 1: its CC 74 with its
+    /// zone master's folded in.
+    /// </summary>
+    /// <param name="channel">The MIDI channel, 0 to 15.</param>
+    /// <returns>The timbre, 0 to 1.</returns>
+    /// <remarks>
+    /// This is what a region's <c>_oncc74</c> modulation and its <c>locc74</c>/<c>hicc74</c> range
+    /// see while an MPE zone is active.
+    /// </remarks>
+    public double MpeTimbre(int channel) => mpeState.Timbre(channel);
+
+    /// <summary>
+    /// The pressure of one sounding note, 0 to 1: its own polyphonic pressure when the music carries
+    /// one and its channel's otherwise, with its zone master's folded in.
+    /// </summary>
+    /// <param name="channel">The MIDI channel, 0 to 15.</param>
+    /// <param name="key">The MIDI note number, 0 to 127.</param>
+    /// <returns>The pressure, 0 to 1.</returns>
+    /// <remarks>
+    /// This is what the aftertouch modulation sources <c>cc129</c> and <c>cc130</c> read while an MPE
+    /// zone is active.
+    /// </remarks>
+    public double MpePressure(int channel, int key) => mpeState.Pressure(channel, key);
+
     internal int MinimumVoiceDuration => minimumVoiceDuration;
 
     // The per-voice random source, from the same seeded stream as layer selection, so identical input
@@ -466,6 +596,69 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
 
     // The extended alternate source (CC 137): flips on every note-on event.
     internal bool AlternateFlag => alternateFlag;
+
+    // ---- what a voice reads, with the MPE zone rules folded in --------------------------------
+    //
+    // Every reader below hands back exactly the channel state this engine has always read while no
+    // zone is active, and applies the master/member rules while one is. No zone is EVER active in
+    // MpeMode.Off, which is what keeps that mode identical to the engine as it was.
+
+    // Whether a zone is switched on at all - the one test a voice makes before doing any of this.
+    internal bool MpeZoneActive => mpeState.HasActiveZone;
+
+    // Whether this sounding note still owns its channel's expression. A newer note on the same
+    // member channel takes it, and the older one freezes where it was.
+    internal bool OwnsChannelExpression(int channel, int key) => mpeState.OwnsChannelExpression(channel, key);
+
+    // How far this channel's bend has moved, in semitones: its own bend over its own range plus its
+    // zone master's over the master's. The region's bend_up/bend_down still scales it.
+    internal double MpeBendSemitones(int channel) => mpeState.BendSemitones(channel);
+
+    // The registered channel tunings (RPN 1 fine and RPN 2 coarse) of the channel and of its zone
+    // master, in semitones. These are a transposition, not a bend, so they are added to the voice's
+    // pitch directly rather than scaled by the region's bend range.
+    internal double MpeTuningSemitones(int channel) => mpeState.TuningSemitones(channel);
+
+    // One modulation source's value for a voice, normalized 0 to 1, with the zone master folded in.
+    internal float ControllerValue(int channel, int key, int cc)
+    {
+        if (!mpeState.HasActiveZone)
+        {
+            return channels[channel].GetCc(cc);
+        }
+
+        switch (cc)
+        {
+            case 129: // channel aftertouch
+            case 130: // polyphonic aftertouch
+                // Under MPE both aftertouch sources report the NOTE's pressure: its own polyphonic
+                // pressure when the music sends one, its channel's otherwise, plus its zone
+                // master's. A library that wired its swell to either source therefore follows an
+                // expressive controller's press.
+                return (float)mpeState.Pressure(channel, key);
+
+            case MpeChannelState.TimbreController:
+                return (float)mpeState.Timbre(channel);
+
+            default:
+                return cc >= MpeChannelState.ControllerCount
+                    ? channels[channel].GetCc(cc)
+                    : channels[mpeState.ControllerSourceChannel(channel, cc)].GetCc(cc);
+        }
+    }
+
+    // The same value as a 0 to 127 MIDI number, for the region range tests.
+    internal int CcMidiValue(int channel, int cc) =>
+        mpeState.HasActiveZone
+            ? (int)MathF.Round(ControllerValue(channel, -1, cc) * 127f)
+            : channels[channel].GetCcMidiValue(cc);
+
+    // Whether the sustain pedal is down for a voice on this channel. A zone master's pedal holds
+    // every note in the zone, which is how a performance's global pedal arrives.
+    internal bool IsSustainDown(int channel, int sustainCc) =>
+        mpeState.HasActiveZone
+            ? ControllerValue(channel, -1, sustainCc) >= 0.5f
+            : channels[channel].IsSustainDown(sustainCc);
 
     private void SetControllerValue(int channel, SfzChannel channelInfo, int cc, int value)
     {
@@ -567,7 +760,7 @@ public sealed class SfzSynthesizer : IMidiSynthesizer
         var ccRanges = region.CcRanges;
         for (var i = 0; i < ccRanges.Count; i++)
         {
-            if (!ccRanges[i].Contains(channelInfo.GetCcMidiValue(ccRanges[i].CcNumber)))
+            if (!ccRanges[i].Contains(CcMidiValue(channelInfo.Index, ccRanges[i].CcNumber)))
             {
                 return false;
             }

@@ -92,20 +92,38 @@ public class MidiEvent
     /// running status. Pass null if no channel-voice event has been read yet; meta and
     /// sysex events do not update running status and should not be passed here.</param>
     /// <returns>A new MidiEvent</returns>
+    /// <exception cref="FormatException">The data is not a MIDI event, or a running-status byte
+    /// appeared before any channel-voice event.</exception>
     public static MidiEvent ReadNextEvent(BinaryReader br, MidiEvent previous)
+    {
+        return ReadNextEvent(br, previous, null);
+    }
+
+    // The lenient entry point. The context only reaches meta events, which are the ones that can be
+    // salvaged individually; everything else that goes wrong here throws, and the caller decides
+    // whether to abandon the track or give up on the file.
+    internal static MidiEvent ReadNextEvent(BinaryReader br, MidiEvent previous, Internal.MidiReadContext context)
     {
         int deltaTime = ReadVarInt(br);
         MidiCommandCode commandCode;
         int channel = 1;
         byte b = br.ReadByte();
-        if((b & 0x80) == 0) 
+        if((b & 0x80) == 0)
         {
             // a running command - command & channel are same as previous
+            if (previous == null)
+            {
+                // Without a preceding channel-voice event there is nothing to run from, and the
+                // rest of the track cannot be interpreted. Reported as a format problem rather
+                // than left to fail as a null reference.
+                throw new FormatException(
+                    $"Running status byte 0x{b:X2} appeared before any channel-voice event");
+            }
             commandCode = previous.CommandCode;
             channel = previous.Channel;
             br.BaseStream.Position--; // need to push this back
         }
-        else 
+        else
         {
             if((b & 0xF0) == 0xF0) 
             {
@@ -145,13 +163,16 @@ public class MidiEvent
         case MidiCommandCode.StartSequence:
         case MidiCommandCode.ContinueSequence:
         case MidiCommandCode.StopSequence:
+        case MidiCommandCode.AutoSensing:
+            // System real-time messages carry no data bytes. They have no business in a file, but
+            // some generators leave them in; reading them costs nothing and keeps the track aligned.
             me = new MidiEvent();
             break;
         case MidiCommandCode.Sysex:
             me = SysexEvent.ReadSysexEvent(br);
             break;
         case MidiCommandCode.MetaEvent:
-            me = MetaEvent.ReadMetaEvent(br);
+            me = MetaEvent.ReadMetaEvent(br, context);
             break;
         default:
             throw new FormatException(String.Format("Unsupported MIDI Command Code {0:X2}",(byte) commandCode));

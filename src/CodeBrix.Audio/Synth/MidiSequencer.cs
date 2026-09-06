@@ -120,7 +120,13 @@ public sealed class MidiSequencer : IAudioRenderer
         msgIndex = 0;
         loopIndex = 0;
 
-        while (msgIndex < midiSequence.Messages.Length && midiSequence.Times[msgIndex] <= position)
+        // STRICTLY earlier than the seek point, not "at or earlier". Rendering starts by calling
+        // ProcessEvents with currentTime already equal to position, which fires everything written
+        // AT position - so consuming those here would fire the controllers twice and, far worse,
+        // silently swallow every note-on that lands exactly on the seek point. Seek(TimeSpan.Zero)
+        // is the case that made it obvious: every event of a sequence that starts at tick 0 was
+        // eaten, and the sequence played as silence.
+        while (msgIndex < midiSequence.Messages.Length && midiSequence.Times[msgIndex] < position)
         {
             var msg = midiSequence.Messages[msgIndex];
 

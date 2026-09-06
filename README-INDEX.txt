@@ -12,9 +12,17 @@ AGENT-README FILES (consumer documentation, one per NuGet package)
   AGENT-README.txt
       CodeBrix.Audio.MitLicenseForever - fully managed, cross-platform audio
       file library (WAV / MP3 / Ogg Vorbis / FLAC, MIDI, ID3 and Vorbis tags,
-      SoundFont and SFZ synthesis, DSP primitives) plus the bundled
-      CodeBrix.Audio.Engine assembly for device playback and recording. One
-      file covers both assemblies, because one package ships both.
+      SoundFont, SFZ and Decent Sampler instruments, multi-track playback, DSP
+      primitives) plus the bundled CodeBrix.Audio.Engine assembly for device
+      playback and recording. One file covers both assemblies, because one
+      package ships both.
+
+  src/CodeBrix.Audio.ModestSynth/AGENT-README.txt
+      CodeBrix.Audio.ModestSynth.MitLicenseForever - the synthesis add-on:
+      oscillators that generate sound instead of playing recorded samples, a
+      standalone parameter model for them, and one call that hands them to the
+      sampler engine. Built and published from this repository at the same
+      version as CodeBrix.Audio, and packed with its own README.md.
 
 MAINTAINER AND EXTRAS
 ---------------------

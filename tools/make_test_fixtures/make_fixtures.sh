@@ -18,7 +18,10 @@
 #     * the .opus files exist for the METADATA layer, not a decoder - this library does not
 #       decode Opus (it is BSD-3-Clause, so it ships as a separate package). They pin the two
 #       things an Opus header gets wrong if read naively: the rate it declares is not the rate
-#       it decodes at, and its granule positions count priming samples nobody hears.
+#       it decodes at, and its granule positions count priming samples nobody hears;
+#     * the .mp3 file exists for the GAPLESS path: it carries a Xing/LAME encoder delay and
+#       padding, and ships with the .wav it was encoded from, so a correct reader lines the two
+#       up sample for sample.
 #
 # USAGE
 #   cd tools/make_test_fixtures
@@ -26,11 +29,12 @@
 #   OUT_DIR=/tmp/fixtures ./make_fixtures.sh
 #
 # PREREQUISITES (installed by YOU - this script never installs anything)
-#   ffmpeg, built with the libvorbis and libopus encoders and the native flac encoder.
+#   ffmpeg, built with the libvorbis, libopus and libmp3lame encoders and the native flac
+#   encoder.
 #     Debian-based Linux:  sudo apt install ffmpeg
 #     macOS (Homebrew):    brew install ffmpeg
 #     Windows (winget):    winget install Gyan.FFmpeg
-#   Verify with:           ffmpeg -hide_banner -encoders | grep -E 'libvorbis|libopus|flac'
+#   Verify with:           ffmpeg -hide_banner -encoders | grep -E 'libvorbis|libopus|libmp3lame|flac'
 #
 # NOTE ON REPRODUCIBILITY
 #   The .flac and .wav files reproduce byte-identically on the same ffmpeg build. The Ogg ones
@@ -68,7 +72,7 @@ fi
 # ffmpeg with SIGPIPE, and - under `set -o pipefail` - fail the check even on a match.)
 FFMPEG_ENCODERS="$(ffmpeg -hide_banner -encoders 2>/dev/null || true)"
 
-for enc in libvorbis libopus flac; do
+for enc in libvorbis libopus libmp3lame flac; do
     if ! printf '%s\n' "$FFMPEG_ENCODERS" | grep -E "^ [A-Z.]+ ${enc}( |\$)" > /dev/null; then
         echo "ERROR: this ffmpeg has no '${enc}' encoder. Install a full ffmpeg build." >&2
         exit 1
@@ -250,7 +254,27 @@ rm -f "$OUT_DIR/opus-tone-stereo-48000.wav"
 echo "  opus-tone-stereo-48000.opus"
 
 # ---------------------------------------------------------------------------------------------
-# 4. Manifest
+# 4. MP3 fixture - for the GAPLESS path (Xing/LAME encoder delay and padding)
+# ---------------------------------------------------------------------------------------------
+# An MP3 encoder cannot encode an arbitrary number of samples: it prepends priming samples and
+# pads the last frame, and records both in the Xing/LAME tag so a decoder can put the original
+# length back. This fixture ships with the .wav it was encoded from precisely so the trim can be
+# checked against something: decode the MP3, cross-correlate it with the WAV, and a correct
+# reader shows a lag of zero and the same number of frames.
+#
+# A SWEEP, not a tone: a steady tone correlates just as well at every multiple of its period, so
+# it cannot tell a lag of zero from a lag of one cycle. ffmpeg's mp3 muxer writes the Xing frame
+# itself, so the encoder field reads "Lavc<version>" rather than "LAME<version>" - the same tag
+# layout either way, and the one that machine-generated stem exports carry in the wild.
+echo "--- MP3 ---"
+
+sweep "$OUT_DIR/mp3-gapless-sweep-stereo-44100.wav" 44100 2 0.5
+$FF -i "$OUT_DIR/mp3-gapless-sweep-stereo-44100.wav" -c:a libmp3lame -b:a 192k -map_metadata -1 \
+    "$OUT_DIR/mp3-gapless-sweep-stereo-44100.mp3"
+echo "  mp3-gapless-sweep-stereo-44100.mp3 (+ .wav source)"
+
+# ---------------------------------------------------------------------------------------------
+# 5. Manifest
 # ---------------------------------------------------------------------------------------------
 {
     echo "=============================================================================="
@@ -285,6 +309,11 @@ echo "  opus-tone-stereo-48000.opus"
     echo "                                      reader reporting the declared rate as the real one"
     echo "  opus-tone-stereo-48000.opus         the everyday Opus case; with the mono file it"
     echo "                                      pins the pre-skip subtraction in the duration"
+    echo "  mp3-gapless-sweep-stereo-44100.mp3  carries a Xing/LAME encoder delay and padding;"
+    echo "                                      ships with the .wav it was encoded from, so the"
+    echo "                                      reader's gapless trim can be checked by"
+    echo "                                      cross-correlating the two. A sweep, because a"
+    echo "                                      tone cannot tell a lag of zero from one cycle"
     echo
     echo "  flac-tone-mono-16bit-22050          fixed predictors only, independent channels"
     echo "  flac-tone-stereo-16bit-44100-*side  the four stereo decorrelation modes"
@@ -297,11 +326,27 @@ echo "  opus-tone-stereo-48000.opus"
     echo "the reader's frame-search seek path. The SEEKTABLE path is covered by a test that"
     echo "splices a synthetic SEEKTABLE into one of these files at run time."
     echo
+    echo "NOTE: the .opus fixtures both carry a pre-skip of 312 and a final granule position of"
+    echo "12312, so their true playable length is (12312 - 312) / 48000 = exactly 0.25 s. Their"
+    echo "CONTAINER duration reads 0.2565 s - ffprobe reports that too - because the granule"
+    echo "counts the priming samples; the numbers are pinned in the tests for that reason."
+    echo
+    echo "NOTE: the .mp3 fixture declares an encoder delay of 576 and a padding that depends on"
+    echo "the encoder build. Its decoded, gapless-trimmed length is exactly the 22,050 frames of"
+    echo "its .wav; without the trim it is one MP3 frame longer and starts 1,105 samples late"
+    echo "(576 of encoder delay plus the 529-sample decoder delay every gapless reader assumes)."
+    echo
+    echo "NOTE ON REGENERATION: an Ogg muxer picks a RANDOM stream serial number per run, so"
+    echo "re-running make_fixtures.sh always produces different .ogg and .opus bytes even on the"
+    echo "same ffmpeg build. The SHA256s below identify the committed files; they are not a"
+    echo "reproducibility check for those two formats. The .flac, .mp3 and .wav files do"
+    echo "reproduce byte-identically."
+    echo
     echo "SHA256"
     echo "------------------------------------------------------------------------------"
 } > "$MANIFEST"
 
-(cd "$OUT_DIR" && sha256sum ./*.ogg ./*.flac ./*.opus ./*.wav | sed 's|\./||') >> "$MANIFEST"
+(cd "$OUT_DIR" && sha256sum ./*.ogg ./*.flac ./*.opus ./*.mp3 ./*.wav | sed 's|\./||') >> "$MANIFEST"
 
 echo
 echo "Manifest: $MANIFEST"
