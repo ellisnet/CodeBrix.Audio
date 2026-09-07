@@ -29,6 +29,10 @@ public sealed class DecentSamplerControl
     private readonly List<string> _states = [];
     private readonly List<string> _options = [];
 
+    // Which state last fired its bindings. -1 is a real selection (nothing selected), so "never
+    // fired" needs a value of its own.
+    private int _firedStateIndex = int.MinValue;
+
     internal DecentSamplerControl(
         DecentSamplerBindingEngine engine, DecentSamplerUiElement source, int index)
     {
@@ -351,4 +355,21 @@ public sealed class DecentSamplerControl
 
     internal void RaiseChanged(string propertyName) =>
         Changed?.Invoke(this, new DecentSamplerControlChangedEventArgs(this, propertyName));
+
+    // Whether the selected state has actually moved since the last time its bindings fired.
+    //
+    // MEASURED (round 4, item 52): a button's state binding fires only on a STATE CHANGE. Setting a
+    // button to the state it is already in does nothing at all, which is the practical difference
+    // between latching a sequence from a button and latching it from a <cc> - a <cc> binding fires on
+    // every controller CHANGE and so restarts the sequence each time.
+    internal bool StateSelectionChanged(int selected)
+    {
+        if (_firedStateIndex == selected)
+        {
+            return false;
+        }
+
+        _firedStateIndex = selected;
+        return true;
+    }
 }

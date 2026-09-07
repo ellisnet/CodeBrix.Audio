@@ -70,6 +70,22 @@ internal sealed class SfzOscillator
         position_fp = start << fracBits;
     }
 
+    // Moves the end bound of a voice that is already sounding.
+    //
+    // The Decent Sampler engine's SAMPLE_END binding needs this: MEASURED (round 4, item 54) the
+    // reference honours SAMPLE_END on a SOUNDING voice, and a voice whose read position is already
+    // past the new end stops at once - which is what the next Process call does with the moved bound.
+    // Nothing in SFZ moves a region's end mid-note, so this is never called on that path.
+    public void SetEnd(long endInclusive)
+    {
+        if (left == null)
+        {
+            return;
+        }
+
+        end = endInclusive < 0 ? left.Length : Math.Min(endInclusive + 1, left.Length);
+    }
+
     // A loop_sustain voice leaves its loop when the note is released and plays through to the end.
     public void Release(SfzLoopMode loopMode)
     {

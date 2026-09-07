@@ -234,6 +234,63 @@ public class ModestVoiceSourceTests
     }
 
     [Fact]
+    public void a_fm6op_voice_ends_on_its_operator_release_not_the_groups()
+    {
+        //Arrange
+        // MEASURED (round 4, item 56): every six-operator case was written with a GROUP release of
+        // 3.0 s, and with operator releases of 0.02 s the sound was at the silence floor half a
+        // second after the note-off. A fm6op voice ends when its operators' envelopes end.
+        using DecentSamplerFixtures fixtures = DecentSamplerFixtures.Create();
+        using DecentSamplerInstrument instrument = fixtures.LoadPreset(PresetXml.Wrap(
+            null,
+            "    <group attack=\"0\" decay=\"0\" sustain=\"1\" release=\"3.0\">\n" +
+            "      <oscillator waveform=\"fm6op\" fmAlgorithm=\"32\" fmOp1Attack=\"0.001\"\n" +
+            "                  fmOp1Decay=\"0\" fmOp1Sustain=\"1\" fmOp1Release=\"0.02\" />\n" +
+            "    </group>"));
+
+        DecentSamplerSynthesizer synthesizer = RenderProbe.Synthesizer(instrument);
+
+        //Act
+        synthesizer.NoteOn(0, 45, 127);
+        var (held, _) = RenderProbe.RenderSeconds(synthesizer, 0.5);
+
+        synthesizer.NoteOff(0, 45);
+        var (tail, _) = RenderProbe.RenderSeconds(synthesizer, 0.5);
+
+        //Assert - a 3 s group release would still be four fifths of the way up here.
+        RenderProbe.Rms(held, Window, Window).Should().BeGreaterThan(0.05);
+        RenderProbe.Peak(tail, tail.Length - Window, Window).Should().Be(0.0);
+        synthesizer.ActiveVoiceCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void a_long_fm6op_operator_release_outlives_a_short_group_release()
+    {
+        //Arrange - the other side of the same rule: the operators own the tail either way.
+        using DecentSamplerFixtures fixtures = DecentSamplerFixtures.Create();
+        using DecentSamplerInstrument instrument = fixtures.LoadPreset(PresetXml.Wrap(
+            null,
+            "    <group attack=\"0\" decay=\"0\" sustain=\"1\" release=\"0.02\">\n" +
+            "      <oscillator waveform=\"fm6op\" fmAlgorithm=\"32\" fmOp1Attack=\"0.001\"\n" +
+            "                  fmOp1Decay=\"0\" fmOp1Sustain=\"1\" fmOp1Release=\"1.5\" />\n" +
+            "    </group>"));
+
+        DecentSamplerSynthesizer synthesizer = RenderProbe.Synthesizer(instrument);
+
+        //Act
+        synthesizer.NoteOn(0, 45, 127);
+        RenderProbe.RenderSeconds(synthesizer, 0.3);
+
+        synthesizer.NoteOff(0, 45);
+        var (tail, _) = RenderProbe.RenderSeconds(synthesizer, 0.5);
+
+        //Assert - half a second after the key came up the 1.5 s operator release is still sounding,
+        //where the group's own 0.02 s release would have cut it long ago.
+        RenderProbe.Rms(tail, tail.Length - Window, Window).Should().BeGreaterThan(1e-4);
+        synthesizer.ActiveVoiceCount.Should().Be(1);
+    }
+
+    [Fact]
     public void the_same_events_render_the_same_bytes()
     {
         //Arrange

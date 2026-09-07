@@ -37,8 +37,19 @@ public sealed class DecentSamplerSynthesizerSettings
     /// <summary>The random seed used when none is given.</summary>
     public const int DefaultRandomSeed = 12345;
 
-    /// <summary>The number of streaming ring buffers used when none is given.</summary>
-    public const int DefaultStreamingVoiceCount = 32;
+    /// <summary>
+    /// The <see cref="StreamingVoiceCount"/> value that means "as many as
+    /// <see cref="MaximumPolyphony"/>".
+    /// </summary>
+    public const int AutomaticStreamingVoiceCount = 0;
+
+    /// <summary>The number of streaming ring buffers used when none is given: automatic.</summary>
+    /// <remarks>
+    /// Measured against the reference player: a fixed pool smaller than the polyphony silently drops
+    /// the surplus notes of a streamed preset, which cost one corpus library 1.6 dB. The pool now
+    /// follows the polyphony unless a consumer pins it.
+    /// </remarks>
+    public const int DefaultStreamingVoiceCount = AutomaticStreamingVoiceCount;
 
     /// <summary>The size of each streaming ring buffer used when none is given, in frames.</summary>
     public const int DefaultStreamingRingFrames = 8192;
@@ -175,12 +186,23 @@ public sealed class DecentSamplerSynthesizerSettings
 
     /// <summary>
     /// How many per-voice streaming ring buffers to allocate, which is the number of streamed notes
-    /// that can sound at once. Default 32. 1 to 1024.
+    /// that can sound at once. <see cref="AutomaticStreamingVoiceCount"/> (zero, the default) means
+    /// one per voice of <see cref="MaximumPolyphony"/>. 0 to 1024.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The buffers are allocated when the synthesizer is built and only when the instrument actually
     /// streams something. A note that finds them all busy plays silence and the instrument says so, in
-    /// the same way as one that finds no free voice.
+    /// the same way as one that finds no free voice - which is why the automatic size is the right
+    /// default: a streamed preset then sounds exactly like the same preset held in memory, however many
+    /// notes are down.
+    /// </para>
+    /// <para>
+    /// Each buffer costs two channels times <see cref="StreamingRingFrames"/> times four bytes, so the
+    /// automatic pool at the default polyphony and ring size is 12 MB - against the hundreds of
+    /// megabytes of sample data it stands in for. Pin a smaller number on a memory-tight device and
+    /// accept that a very wide chord loses its surplus notes.
+    /// </para>
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">The value is out of range.</exception>
     public int StreamingVoiceCount
@@ -188,15 +210,23 @@ public sealed class DecentSamplerSynthesizerSettings
         get => _streamingVoiceCount;
         set
         {
-            if (!(1 <= value && value <= 1024))
+            if (!(0 <= value && value <= 1024))
             {
                 throw new ArgumentOutOfRangeException(
-                    nameof(value), value, "The streaming voice count must be between 1 and 1024.");
+                    nameof(value), value, "The streaming voice count must be between 0 and 1024.");
             }
 
             _streamingVoiceCount = value;
         }
     }
+
+    /// <summary>
+    /// The number of streaming ring buffers these settings actually ask for, with
+    /// <see cref="AutomaticStreamingVoiceCount"/> resolved against <see cref="MaximumPolyphony"/>.
+    /// </summary>
+    /// <returns>The buffer count, at least one.</returns>
+    public int ResolveStreamingVoiceCount() =>
+        _streamingVoiceCount > 0 ? _streamingVoiceCount : _maximumPolyphony;
 
     /// <summary>
     /// How many frames each streaming ring buffer holds, rounded up to a power of two. Default 8,192 -

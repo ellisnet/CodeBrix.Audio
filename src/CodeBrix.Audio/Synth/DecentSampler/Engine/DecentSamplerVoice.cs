@@ -60,6 +60,15 @@ internal sealed class DecentSamplerVoice
     private double _pitchOffsetSemitones;
     private int _releaseVelocity;
 
+    // Whether the source's own envelopes end the note, so the group envelope must not release.
+    private bool _sourceOwnsRelease;
+
+    // What the sample source was prepared with, so a SAMPLE_END binding can be spotted mid-note.
+    private bool _sampleEndFollowsLive;
+    private long? _preparedZoneEnd;
+    private long _preparedStartFrame;
+    private long _preparedLastFrame;
+
     public DecentSamplerVoice(
         DecentSamplerSynthesizer synthesizer, int sampleRate, int blockSize, int id)
     {
@@ -187,6 +196,7 @@ internal sealed class DecentSamplerVoice
 
         if (runtime.IsOscillator)
         {
+            _sampleEndFollowsLive = false;
             _rentedOscillator = runtime.RentOscillator();
             _source = _rentedOscillator;
         }
@@ -208,6 +218,10 @@ internal sealed class DecentSamplerVoice
             zone.AmpEnvEnabled);
 
         _source?.Start(_key, _velocity, CurrentPitchHz());
+
+        // Read AFTER the source has started: an oscillator adapter builds its generator on the first
+        // note, so it cannot answer this until then.
+        _sourceOwnsRelease = _source != null && _source.OwnsRelease;
 
         _previousAmplitude = 0f;
         _previousMixGainLeft = 0f;
@@ -232,6 +246,16 @@ internal sealed class DecentSamplerVoice
         }
 
         _source?.NoteOff();
+
+        // MEASURED (round 4, item 56): a fm6op voice's tail is the longest OPERATOR release, not the
+        // group envelope's, so a source that owns its release keeps the level it had at note-off and
+        // ends the voice itself. Voice stealing and silencedByTags still fade it out, because those
+        // go through SilenceNormal, SilenceFast and SilenceTimed rather than through the key.
+        if (_sourceOwnsRelease)
+        {
+            return;
+        }
+
         _envelope.Release();
     }
 
@@ -297,6 +321,7 @@ internal sealed class DecentSamplerVoice
 
         AdvanceGlide();
         RefreshPitchOffset();
+        RefreshSampleEnd();
 
         _source.SetPitch(CurrentPitchHz());
 
@@ -515,14 +540,23 @@ internal sealed class DecentSamplerVoice
     private void PrepareSampleSource(DecentSamplerZoneRuntime runtime, DecentSamplerZone zone)
     {
         // A LOOP_START or LOOP_END binding takes effect HERE, at the next note-on, and never on a
-        // voice already sounding. Same rule as SAMPLE_START and SAMPLE_END, which the two lines below
-        // read straight off the zone.
+        // voice already sounding - which is already more than the reference does with them (MEASURED,
+        // round 4, item 54: it ignores both entirely). SAMPLE_START is the same, and measured to be
+        // so; SAMPLE_END alone also follows a voice that is already sounding, in RefreshSampleEnd.
         runtime.RefreshLoopIfMoved();
 
         var lastFrame = Math.Max(0, runtime.SourceFrames - 1);
 
         var startFrame = Math.Clamp(zone.Start, 0, lastFrame);
         var endFrame = zone.End.HasValue ? Math.Clamp(zone.End.Value, startFrame, lastFrame) : lastFrame;
+
+        // Only an in-memory zone follows SAMPLE_END live: the guide restricts all four sample-point
+        // parameters to in-memory playback, and the instrument reports a streamed preset that moves
+        // one.
+        _sampleEndFollowsLive = !runtime.IsStreaming;
+        _preparedZoneEnd = zone.End;
+        _preparedStartFrame = startFrame;
+        _preparedLastFrame = lastFrame;
         var crossfade = Math.Max(0, zone.LoopCrossfade);
         var equalPower = zone.LoopCrossfadeMode == DecentSamplerLoopCrossfadeMode.EqualPower;
 
@@ -554,6 +588,31 @@ internal sealed class DecentSamplerVoice
             crossfade,
             equalPower,
             zone.RootNote);
+    }
+
+    // MEASURED (round 4, item 54): SAMPLE_END applies to a SOUNDING voice. A voice whose read
+    // position is already past the new end stops at once - the moved bound makes the next block's
+    // first frame fall outside the playable data, which ends the voice - and one still short of it
+    // plays on and stops there. Two nullable comparisons per block in the ordinary case.
+    private void RefreshSampleEnd()
+    {
+        if (!_sampleEndFollowsLive)
+        {
+            return;
+        }
+
+        var end = _runtime.Zone.End;
+
+        if (end == _preparedZoneEnd)
+        {
+            return;
+        }
+
+        _preparedZoneEnd = end;
+        _sampleSource.SetEndFrame(
+            end.HasValue
+                ? Math.Clamp(end.Value, _preparedStartFrame, _preparedLastFrame)
+                : _preparedLastFrame);
     }
 
     private void RefreshOutputs()

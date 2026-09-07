@@ -791,18 +791,39 @@ WHAT A STREAMED INSTRUMENT HOLDS OPEN
   does not exist. Disposal has to close every one; see GOTCHAS FOR MAINTAINERS on
   WaveFileReader not owning its stream.
 
-  SAMPLE_START, SAMPLE_END, LOOP_START AND LOOP_END take effect at the NEXT
-  NOTE-ON and never on a sounding voice, streamed or in memory. The start and end
-  are read off the zone when the voice starts; the loop is re-resolved there too,
-  by DecentSamplerZoneRuntime.RefreshLoopIfMoved, which is three nullable
-  comparisons when nothing has moved. Nothing about this was measured - the guide
-  says only that the four parameters need in-memory playback and says nothing
-  about a sounding voice - so the engine takes the cheaper reading rather than
-  re-resolving running voices from the render callback. Fence:
-  Engine/DecentSamplerSamplePointBindingTests.
+  SAMPLE_START, LOOP_START AND LOOP_END take effect at the NEXT NOTE-ON and never
+  on a sounding voice, streamed or in memory. The start is read off the zone when
+  the voice starts; the loop is re-resolved there too, by
+  DecentSamplerZoneRuntime.RefreshLoopIfMoved, which is three nullable
+  comparisons when nothing has moved. Round 4 item 54 measured all four:
+  SAMPLE_START is the next note-on there too, and LOOP_START and LOOP_END do
+  nothing at all there, so honouring them at the next note-on is already more
+  than the reference does.
+
+  SAMPLE_END IS THE EXCEPTION AND FOLLOWS A SOUNDING VOICE. The reference stops a
+  voice whose read position is already past the new end at once, so
+  DecentSamplerVoice.RefreshSampleEnd compares the zone's End with what the voice
+  prepared with once per block - two nullable comparisons in the ordinary case -
+  and hands the moved bound to SfzOscillator.SetEnd, whose next block then finds
+  the read position outside the playable data and ends the voice. In-memory zones
+  only: a streamed voice keeps the next-note rule for all four, which is what the
+  guide's in-memory restriction asks for and what the instrument reports once.
+  Fence: Engine/DecentSamplerSamplePointBindingTests.
+
+  HOW MANY STREAMED VOICES THE POOL HOLDS. DecentSamplerSynthesizerSettings
+  .StreamingVoiceCount is AUTOMATIC by default (the constant
+  AutomaticStreamingVoiceCount, zero) and then resolves to MaximumPolyphony, 192.
+  It used to be a fixed 32, which silently dropped the surplus notes of a wide
+  chord on a streamed preset - worth 1.6 dB on the Global Swarm comparison and
+  invalidating any fidelity measurement taken on a preset over the memory budget.
+  The buffers cost two channels times StreamingRingFrames times four bytes each,
+  12 MB at the defaults. Fence:
+  Streaming/DecentSamplerStreamingIdentityTests.forty_streamed_notes_at_once_
+  match_the_decoded_render, which renders a forty-note chord twice, in memory and
+  streamed, and asserts the two are identical.
 
 THE MEASUREMENT PROGRAMME
-  The format has no specification: the reference player defines the sound. THREE
+  The format has no specification: the reference player defines the sound. FOUR
   measurement rounds recorded it, and their results are the reason most of the
   engine's constants are what they are.
 
@@ -993,8 +1014,8 @@ GOTCHAS WORTH A MAINTAINER'S ATTENTION
 DIVERGENCES FROM THE REFERENCE PLAYER, AND WHAT WOULD CLOSE EACH
   Published in the consumer guide as well, because the plan's rule is that a miss
   is a listed divergence rather than a silent difference. Everything below has
-  been MEASURED; nothing is a guess. Three measurement rounds settled the format,
-  and the retune pass applied what they found.
+  been MEASURED; nothing is a guess. Four measurement rounds settled the format,
+  and the retune passes applied what they found.
 
   MEASURED AND APPLIED, with the number each was fenced at:
 
@@ -1090,6 +1111,45 @@ DIVERGENCES FROM THE REFERENCE PLAYER, AND WHAT WOULD CLOSE EACH
                       time and ends at zero. The twelve measured points of a
                       two-second attack are a theory in
                       DecentSamplerEnvelopeModulatorTests.
+    envelope scope    scope="global" is ONE instance that every note-on restarts
+                      from zero, so a voice already sounding drops out and
+                      re-attacks (a 9 dB step at the second note-on and a second
+                      attack peaking 0.4 s later); scope="voice" is a per-voice
+                      instance and leaves a sounding voice alone. One note alone
+                      is identical at either scope, which is why round 3 could
+                      not separate them.
+    sequence players  a midi_key trigger is keyed by the (channel, key) and NOT
+                      by seqPlayerIdentifier: two keys naming the same identifier
+                      ran two independent players. The same key again restarts
+                      the one player, cuts the sounding note and re-bases the
+                      grid (2.5 ms with no note-off between, 11.3 ms after a
+                      fresh key-down). An "on" fired again through a binding
+                      restarts that identifier's player, one stream not two.
+    UI state bindings  fire only on a STATE CHANGE. Re-selecting the state a
+                      button is already in does nothing, where a <cc> binding
+                      fires on every controller change and so restarts a sequence
+                      each time. A state whose bindings the load pass suppressed
+                      with triggerOnLoad="false" has not fired yet, so the first
+                      selection of it counts as the change.
+    SAMPLE_END        applies to a SOUNDING voice as well as to the next note-on:
+                      a voice whose read position is already past the new end
+                      stops at once (the reference fell silent at exactly the
+                      3.0 s the controller arrived). SAMPLE_START is the next
+                      note-on only, which is what this engine already did.
+    bit_crusher       a MID-TREAD quantiser with NO DITHER whose step is
+                      2*sqrt(2)/2^(bitDepth-1) - the third effect using that
+                      constant after the compressor threshold and the wave
+                      folder. The step was read off the output staircase at bit
+                      depths 3, 4 and 8 (0.70846, 0.35431, 0.022087 against
+                      0.70711, 0.35355, 0.022097) and the whole 12-cell level
+                      sweep follows from it, digital silence below STEP/2
+                      included.
+    streaming pool    StreamingVoiceCount now defaults to MaximumPolyphony
+                      instead of a fixed 32, because a streamed preset playing
+                      more than 32 notes silently lost the surplus - 1.6 dB on
+                      the Global Swarm comparison, and per-family errors up to
+                      3.4 dB. The default render is now BIT-IDENTICAL to the same
+                      preset held in memory.
 
   Also applied and unchanged since the earlier rounds: the note-name convention,
   the volume parser and its [0,16] clamp, the pan law, the envelope curve law and
@@ -1112,15 +1172,30 @@ DIVERGENCES FROM THE REFERENCE PLAYER, AND WHAT WOULD CLOSE EACH
                       the lowest crest factor a given spectrum can have.
     fm6op detune      the power law was fitted over MIDI 24 to 84 (+/-3 %);
                       outside that range it extrapolates.
-    Global Swarm      still about 1 dB hot on the whole-preset comparison. Round
-                      3 item 47 ruled out the tag arithmetic - tag volumes driven
-                      by UI bindings multiply exactly - and did not find it.
+    Global Swarm      +1.09 dB on the whole-preset comparison, measured with the
+                      streaming pool large enough. Recorded family by family the
+                      error is strings +4.16, misc +6.26, percs +1.20, synths
+                      +0.24, guitars -1.29 and winds -2.34 dB; the six family
+                      recordings' power sum reproduces the whole mix to 0.18 dB
+                      (reference) and 0.05 (ours). SYNTHS IS EXACT - every octave
+                      band inside 0.24 dB, per-bar shape 0.16/0.40, log-frequency
+                      correlation 0.999 - so the shared signal path is right and
+                      the error is in what five families' zones do. Ruled out by
+                      measurement: the tag arithmetic (removing the Strings Fast
+                      group moves our strings level by 0.00 dB), zone selection
+                      (no note/velocity pair in the MIDI matches two zones in any
+                      group) and the sample format. The other two comparison
+                      presets are inside 0.1 dB.
 
   DIVERGENCES OURS IS WIDER ON, deliberately, every one a place where the
   reference does LESS than its own documentation promises:
     - a <velocity> binding reaches AMP_VOLUME here and does nothing there, and it
       stays inside the group its groupIndex names where the reference applies it
-      to every group (round 3 item 46 confirmed both).
+      to every group (round 3 item 46 confirmed both). Round 4 item 53 confined
+      the two defects to <velocity>: a <cc> or <note> binding honours groupIndex,
+      position and level="tag" and reaches AMP_VOLUME in the reference exactly as
+      it does here, so the resolver must NOT treat the whole <midi> element as
+      instrument-wide.
     - a <midiCC> modulator with scope="voice" reads its controller here and reads
       zero there, so the DOCUMENTED DEFAULT is inert in the reference.
     - a modulator binding at level="instrument" moves GLOBAL_TUNING here; the
@@ -1133,8 +1208,19 @@ DIVERGENCES FROM THE REFERENCE PLAYER, AND WHAT WOULD CLOSE EACH
     - a sample whose first frame carries the signal sounds here; the reference
       ramps a voice in over its first frames and loses it.
     - seqLoopMode="no_loop" stops after one pass here; the reference fails to
-      stop a sequence whose declared length is 2. Both random loop modes there
+      stop a sequence whose declared length is EXACTLY 2 and only that (round 4
+      item 52 walked lengths 1, 2, 3, 4, 6 and 8). Both random loop modes there
       never draw one note of a four-note sequence.
+    - a sequence's declared length truncates it here at every length; the
+      reference truncates from length 2 upward but not at length 1, where a
+      sequence declaring length="1" with notes on beats 0 and 1 played both.
+    - a LOOP_START or LOOP_END binding is honoured here at the next note-on; the
+      reference accepts both and does NOTHING with them, on a sounding voice or
+      at the next note-on, through level="group" position, level="group"
+      groupIndex or level="instrument", with playbackMode="memory" and a
+      demonstrably running loop (round 4 item 54). SAMPLE_START and SAMPLE_END
+      moved in the same preset and the same launch, which is what proves the
+      binding path.
     - an <envelope> modulator's curve attributes work here; the reference accepts
       and ignores them. The DEFAULT shape is the reference's either way, so a
       preset that writes no curves sounds the same in both.
@@ -1142,15 +1228,16 @@ DIVERGENCES FROM THE REFERENCE PLAYER, AND WHAT WOULD CLOSE EACH
   entries above and this one are DELIBERATE non-adoptions: the measurement says
   in as many words not to copy them.
 
-  STILL UNMEASURED after three rounds: whether re-triggering a note sequence that
-  is already running restarts or ignores it; what a UI-button "on"/"off" pair does
-  to a sequence; the real boundary of the no_loop defect; fm6op's
-  modulator-to-modulator chains; the <envelope> modulator under two voices of one
-  group; whether other permanent <midi> bindings leak the way <velocity> does;
-  a bit_crusher input-level sweep; and WHETHER A SOUNDING VOICE FOLLOWS A
-  SAMPLE_START, SAMPLE_END, LOOP_START or LOOP_END binding (this engine honours
-  one at the next note-on only - see THE DECENT SAMPLER ENGINE - because the
-  guide says nothing about it and that is the cheaper of the two readings).
+  STILL UNMEASURED after four rounds: WHY five of Global Swarm's six families
+  differ while the synths are exact (the next probe is a single-note A/B on one
+  zone at a time, not a chord piece); whether the reference has a polyphony limit
+  or a voice-stealing rule of its own, which a ninety-voice chord piece may be
+  exercising; a global-scope <envelope> released by two voices at different
+  times, and three or more voices; whether the no_loop defect is about the length
+  VALUE 2 or the loop DURATION; a <velocity> binding written with `position`
+  instead of `groupIndex`; bit_crusher at bitDepth 1 and 2, and a non-periodic
+  input to rule out dither; and fm6op chains in the algorithms whose depth is not
+  four.
 
   Three more readings the code carries an AWAITING MEASUREMENT note against, in
   the file where each is decided: whether a retrigger's first interval runs from
@@ -1162,16 +1249,20 @@ DIVERGENCES FROM THE REFERENCE PLAYER, AND WHAT WOULD CLOSE EACH
   is what is done here, or by collapsing it to mono and re-panning
   (DecentSamplerVoice). The pan law itself was measured with mono samples only.
 
-  WHERE GLOBAL SWARM'S 1.12 dB GOES, if a fourth round happens. The residual is
-  NOT the tag arithmetic (round 3 item 47) and NOT the effects: with the reverb's
-  wet level driven to 0 it is 1.16 dB, and correcting the preset's own
-  damping="O.2" typo moves it by 0.01 dB. Of the preset's nine AMP_VOLUME-bound
-  tag controls only Strings and Synths are loud enough to carry it alone, and
-  putting the STRINGS family down 6.65 dB both closes the level exactly and cuts
-  the per-bar shape error from 0.80/1.55 dB to 0.45/0.77 - which no other single
-  control does. Level-matched octave bands say it is not a flat gain either: the
-  render is 3.3 dB QUIET at 80-160 Hz and 2.0 dB HOT at 320-640 Hz. What that
-  needs is a reference recording of the Strings groups alone, not more fitting.
+  WHERE GLOBAL SWARM'S 1.09 dB GOES, if a fifth round happens. Round 4 recorded
+  the reference six times, one instrument family at a time, plus a control launch
+  that reproduced the archived recording to 0.01 dB. It supersedes the round-3
+  fit: the direction (the strings) was right, the magnitude (6.65 dB on one
+  family) was not. Three families are hot and two are quiet - strings +4.16,
+  misc +6.26, percs +1.20, synths +0.24, guitars -1.29, winds -2.34 - and the
+  synth family is exact in every octave band, so the shared path is clean. The
+  tag arithmetic, zone selection and the sample format are all ruled out by
+  measurement. What is left needs a SINGLE-NOTE A/B on one zone at a time,
+  starting with Strings Slow's four sounding zones and Winds Slow's five; a chord
+  piece cannot separate them. Two library defects found along the way are not
+  engine problems: damping="O.2" with a capital letter O, and a Perc Fast zone
+  naming a sample file whose case does not match the file on disk (neither the
+  reference nor this loader says anything about the missing file).
 
 THE ADD-ON'S SIDE OF THE JOIN
   CodeBrix.Audio cannot reference CodeBrix.Audio.ModestSynth, so the add-on

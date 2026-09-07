@@ -144,9 +144,9 @@ public static class DecentSamplerResidualTable
                 "group is silent, the effect is bypassed, the rest of the preset plays, and Problems " +
                 "names the package and the call. One waveform is not in this list because the 1.29 " +
                 "guide does not document it: the 1.30 player's formant oscillator, which takes no " +
-                "attributes at all. A preset naming it loads, reports the waveform as unrecognised, " +
-                "and - with the add-on registered - sounds a sine rather than the reference's own " +
-                "formant tone.",
+                "attributes at all. A preset naming it loads and - with the add-on registered - " +
+                "sounds the reference's own fixed formant tone; any formant-* attribute is reported, " +
+                "because the reference honours none either.",
                 true),
             ("library catalogue and store distribution",
                 "DSLibraryInfo's name, version, cover art and preset menu are read and exposed on the " +

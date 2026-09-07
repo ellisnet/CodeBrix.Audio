@@ -71,6 +71,31 @@ internal sealed class DecentSamplerStreamingWorld : IDisposable
         return DecentSamplerRenderProbe.RenderBlocks(synthesizer, blocks);
     }
 
+    /// <summary>
+    /// Renders a whole chord from the start of the instrument, one note per key, with the streaming
+    /// pool left at its automatic size.
+    /// </summary>
+    /// <param name="instrument">The instrument to play.</param>
+    /// <param name="notes">The MIDI notes, all struck at frame zero.</param>
+    /// <param name="blocks">How many 64-frame blocks to render.</param>
+    /// <returns>The left and right channels.</returns>
+    public static (float[] Left, float[] Right) PlayChord(
+        DecentSamplerInstrument instrument, IReadOnlyList<int> notes, int blocks)
+    {
+        var synthesizer = DecentSamplerRenderProbe.Synthesizer(instrument, settings =>
+        {
+            settings.StreamingMode = DecentSamplerStreamingMode.Offline;
+            settings.StreamingRingFrames = 1024;
+        });
+
+        foreach (var note in notes)
+        {
+            synthesizer.NoteOn(0, note, 100);
+        }
+
+        return DecentSamplerRenderProbe.RenderBlocks(synthesizer, blocks);
+    }
+
     /// <summary>The first index at which two renders differ, or -1 when they are identical.</summary>
     /// <param name="left">One render.</param>
     /// <param name="right">The other.</param>

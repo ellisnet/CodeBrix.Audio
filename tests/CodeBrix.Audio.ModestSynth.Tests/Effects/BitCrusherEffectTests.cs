@@ -56,7 +56,9 @@ public class BitCrusherEffectTests
         EffectSignals.RenderMono(effect, source, out left, out right);
 
         //Assert
-        double step = 1.0 / Math.Pow(2.0, 3.0);
+        // MEASURED (round 4, item 55): STEP = 2*sqrt(2) / 2^(bitDepth-1), read off the reference's
+        // output staircase at bit depths 3, 4 and 8 to within 0.2 %.
+        double step = BitCrusherEffect.FullScale / Math.Pow(2.0, 3.0);
         for (int i = 0; i < left.Length; i++)
         {
             double levels = left[i] / step;
@@ -104,14 +106,47 @@ public class BitCrusherEffectTests
     }
 
     [Fact]
-    public void The_measured_level_change_at_four_bits_is_the_published_divergence()
+    public void The_step_is_two_root_two_over_the_levels_at_every_bit_depth()
     {
         //Arrange
-        // The reference player LOST 3.1 dB here. A rounding quantiser loses nothing, and the
-        // measurement was one setting at medium confidence with an unknown noise distribution, so
-        // the textbook quantiser stands and the divergence is stated.
-        BitCrusherEffect effect = new BitCrusherEffect { BitDepth = 4.0, Mix = 1.0 };
-        float[] source = EffectSignals.Noise(EffectSignals.SampleRate, 12345u, 0.25);
+        // MEASURED (round 4, item 55): the reference's internal step read 0.70846, 0.35431 and
+        // 0.022087 at bit depths 3, 4 and 8, against 2*sqrt(2)/2^(bitDepth-1) = 0.70711, 0.35355 and
+        // 0.022097. Zero is one of the levels in every case, so the quantiser is MID-TREAD.
+        double[] measured = [0.70846, 0.35431, 0.022087];
+        double[] depths = [3.0, 4.0, 8.0];
+
+        //Assert
+        for (int i = 0; i < depths.Length; i++)
+        {
+            double step = BitCrusherEffect.FullScale / Math.Pow(2.0, depths[i] - 1.0);
+            (step / measured[i]).Should().BeApproximately(1.0, 0.003);
+        }
+    }
+
+    [Theory]
+    [InlineData(4.0, 0.0447, -400.0)]
+    [InlineData(4.0, 0.1414, -400.0)]
+    [InlineData(4.0, 0.3548, 1.21)]
+    [InlineData(4.0, 0.7079, 0.44)]
+    [InlineData(8.0, 0.0447, 0.40)]
+    [InlineData(8.0, 0.1414, -0.12)]
+    [InlineData(8.0, 0.3548, 0.01)]
+    [InlineData(8.0, 0.7079, 0.00)]
+    [InlineData(12.0, 0.0447, -0.02)]
+    [InlineData(12.0, 0.1414, -0.01)]
+    [InlineData(12.0, 0.3548, -0.01)]
+    [InlineData(12.0, 0.7079, -0.01)]
+    public void The_level_sweep_reproduces_the_measured_table(
+        double bitDepth, double peak, double expectedChangeDb)
+    {
+        //Arrange
+        // MEASURED (round 4, item 55): the level sweep of a 440 Hz sine at peaks 0.0447, 0.1414,
+        // 0.3548 and 0.7079, against the dry signal at the SAME level. The apparent gain is not a
+        // constant - it is what the step does to a signal spanning three levels, then five, then
+        // many - and at bitDepth 4 a signal whose peak is below STEP/2 = 0.1768 becomes DIGITAL
+        // SILENCE, which -400 dB stands for here.
+        BitCrusherEffect effect = new BitCrusherEffect { BitDepth = bitDepth, Mix = 1.0 };
+        float[] source = EffectSignals.Sine(EffectSignals.SampleRate, 440.0, peak);
 
         //Act
         float[] left;
@@ -119,9 +154,15 @@ public class BitCrusherEffectTests
         EffectSignals.RenderMono(effect, source, out left, out right);
 
         //Assert
+        if (expectedChangeDb <= -400.0)
+        {
+            left.Should().AllSatisfy(sample => sample.Should().Be(0f));
+            return;
+        }
+
         double change = EffectSignals.RmsDb(left, 0, left.Length)
             - EffectSignals.RmsDb(source, 0, source.Length);
-        change.Should().BeApproximately(0.5, 0.5);
+        change.Should().BeApproximately(expectedChangeDb, 0.05);
     }
 
     [Fact]

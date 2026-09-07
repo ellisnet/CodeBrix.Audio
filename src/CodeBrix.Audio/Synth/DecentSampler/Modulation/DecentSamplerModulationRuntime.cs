@@ -165,10 +165,11 @@ internal sealed class DecentSamplerModulationRuntime
         StartGlobalSources();
     }
 
-    // A note has been struck. Global-scope envelopes are gated by the keyboard as a whole, so one
-    // starts on the first key down; global LFOs and random sources restart only when their trigger
+    // A note has been struck. MEASURED (round 4, item 51): a global-scope <envelope> is ONE instance
+    // and EVERY note-on restarts it from zero - a voice that is already sounding drops out and
+    // re-attacks with the new one. Global LFOs and random sources restart only when their trigger
     // says attack.
-    internal void NoteOn(int channel, int key, int velocity, int heldKeysBefore)
+    internal void NoteOn(int channel, int key, int velocity)
     {
         for (var index = 0; index < _sources.Length; index++)
         {
@@ -185,12 +186,7 @@ internal sealed class DecentSamplerModulationRuntime
             switch (source.Kind)
             {
                 case DecentSamplerModulatorKind.Envelope:
-                    if (heldKeysBefore == 0 || state.Stage == DecentSamplerModulationStage.Release ||
-                        state.Stage == DecentSamplerModulationStage.Finished || !state.IsRunning)
-                    {
-                        source.Start(ref state, context);
-                    }
-
+                    source.Start(ref state, context);
                     break;
 
                 case DecentSamplerModulatorKind.MidiVelocity:

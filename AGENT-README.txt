@@ -1815,13 +1815,28 @@ MEMORY, STREAMING AND LAZY LOADING
   a validity check wants. The first note that needs a file is SILENT and the
   instrument says so in Problems; every note after it sounds.
 
-  SAMPLE_START, SAMPLE_END, LOOP_START AND LOOP_END TAKE EFFECT ON THE NEXT
-  NOTE. A binding that moves one of them changes what the next note-on reads; a
-  voice already sounding keeps the bounds it started with, so dragging the knob
-  under a held chord is silent until the next note. That is the same rule
-  whether the sample is held in memory or streamed - the format's own guide says
-  these four need in-memory playback, and a streamed instrument additionally
-  says so once in Problems.
+  SAMPLE_START, LOOP_START AND LOOP_END TAKE EFFECT ON THE NEXT NOTE; SAMPLE_END
+  ALSO STOPS A SOUNDING VOICE. A binding that moves the start or either loop
+  point changes what the next note-on reads, and a voice already sounding keeps
+  the bounds it started with, so dragging that knob under a held chord is silent
+  until the next note. SAMPLE_END is the exception, measured on the reference: a
+  voice whose read position is already past the new end stops AT ONCE, and one
+  still short of it plays on and stops there. That is the same rule whether the
+  sample is held in memory or streamed, except that a streamed voice keeps the
+  next-note rule for all four - the format's own guide says these four need
+  in-memory playback, and a streamed instrument says so once in Problems.
+
+  HOW MANY STREAMED NOTES CAN SOUND AT ONCE. Each streamed voice needs a ring
+  buffer of its own, and the pool is built when the synthesizer is - so it is
+  sized from DecentSamplerSynthesizerSettings.StreamingVoiceCount, which is
+  automatic by default and then means one per voice of MaximumPolyphony. Left
+  alone, a streamed preset therefore sounds EXACTLY like the same preset held in
+  memory, however wide the chord. The price is two channels times
+  StreamingRingFrames times four bytes per buffer - 12 MB at the default
+  polyphony and ring size, against the hundreds of megabytes of sample data it
+  stands in for. Pin a smaller number on a memory-tight device and accept that
+  the surplus notes of a very wide chord play silence (the instrument says so in
+  Problems, once).
 
   STREAMING MODE - THE ONE SETTING AN OFFLINE RENDER MUST GET RIGHT.
   DecentSamplerSynthesizerSettings.StreamingMode decides who reads a streamed
@@ -1985,11 +2000,23 @@ NOTE SEQUENCES AND THE ARPEGGIATOR
   A <noteSequences> sequence is started by a binding with no `parameter` - an
   ACTION rather than a value. seqTriggerBehavior decides what starts it:
   midi_key (start on the key down, stop on the key up, the default), on, or off.
-  A player is tracked under seqPlayerIdentifier, or one per (channel, key) when
-  the binding names none, so a handler covering a range of key switches runs a
-  different sequence for every key. Speed is the sequence's own rate against the
-  synthesizer's TempoSource, read every block, so a RATE binding changes the
-  speed of a sequence that is already running.
+  A KEY-TRIGGERED player is tracked by its (channel, key), seqPlayerIdentifier or
+  not, so a handler covering a range of key switches runs a different sequence
+  for every key and two keys naming the same identifier run two independent
+  players. Every other form - an "on" or an "off" fired from a controller or a
+  user-interface control - is tracked under seqPlayerIdentifier, which is what
+  lets a second "on" restart the one player a first "on" started. Speed is the
+  sequence's own rate against the synthesizer's TempoSource, read every block, so
+  a RATE binding changes the speed of a sequence that is already running.
+
+  RE-TRIGGERING A SEQUENCE THAT IS ALREADY RUNNING restarts it: the same key
+  pressed again, or the same identifier fired "on" again, cuts the sounding note,
+  goes back to the first note and re-bases the grid on the new trigger. A <cc>
+  binding fires on every CHANGE of its controller, so each change restarts the
+  sequence; a user-interface button's state binding fires only when the STATE
+  ITSELF CHANGES, so re-selecting "On" in the middle of a sequence leaves it
+  running. That is the practical difference between the two ways of latching a
+  sequence on and off with no key held.
 
   THREE THINGS ABOUT A SEQUENCE'S TIMING THAT SURPRISE PEOPLE, all of them the
   reference player's own behaviour:
@@ -2096,6 +2123,15 @@ MODULATORS
   reference uses, gain = (1 - exp(-4x)) / (1 - exp(-4)) across the stage; unlike
   the reference, this engine also HONOURS attackCurve, decayCurve and
   releaseCurve when a preset writes them.
+
+  THE TWO SCOPES OF AN <envelope> ARE AUDIBLY DIFFERENT UNDER A CHORD, and the
+  difference is the reference's. scope="voice" gives every note its own envelope
+  instance, gated by its own note-on, and a note already sounding is undisturbed
+  when the next one starts. scope="global" keeps ONE instance for the modulator
+  and EVERY note-on restarts it from zero, so a note that is already sounding
+  drops out and re-attacks with the new one. One note alone sounds identical
+  either way, which is why the choice looks harmless until a second key goes
+  down.
 
   A modulator's own parameters are themselves bindable, so a knob can move a
   running LFO's rate or an envelope's attack.
@@ -2224,7 +2260,10 @@ WHERE THIS ENGINE AND THE REFERENCE PLAYER DIFFER
                   group's or the instrument's AMP_VOLUME. The reference applies
                   such a binding to EVERY group whatever its groupIndex says,
                   and does nothing at all on AMP_VOLUME. Both are reference
-                  defects and doing less was not worth reproducing.
+                  defects and doing less was not worth reproducing. They belong
+                  to <velocity> ALONE: a <cc> or <note> binding honours
+                  groupIndex, position and level="tag", and reaches AMP_VOLUME,
+                  in the reference exactly as it does here.
     midiCC scope  a voice-scope <midiCC> modulator reads its controller here;
                   the reference reads zero for one, so a preset written the
                   documented way does nothing there and works here.
@@ -2238,9 +2277,22 @@ WHERE THIS ENGINE AND THE REFERENCE PLAYER DIFFER
                   retrigger to 1.0095 s.
     no_loop       a note sequence set to no_loop stops after one pass here, at
                   every declared length. The reference fails to stop one whose
-                  declared length is 2 - measured on two independent sequences,
-                  while lengths 3 and 4 stopped - which is a defect and is
-                  deliberately not reproduced.
+                  declared length is EXACTLY 2, and only that: declared lengths
+                  1, 3, 4, 6 and 8 all stop after one pass there and 2 loops for
+                  ever, whatever the note count. It is a defect and deliberately
+                  not reproduced.
+    sequence length  the declared length of a note sequence truncates it here at
+                  every length: a note written at or past the length never
+                  plays. The reference truncates from length 2 upward but not at
+                  length 1, where a sequence declaring length="1" with notes on
+                  beats 0 and 1 played both and then stopped.
+    LOOP_START and LOOP_END  a binding that moves either one is honoured here at
+                  the next note-on. The reference accepts both and does NOTHING
+                  with them - not on a sounding voice, not at the next note-on,
+                  and through none of the three ways a binding can name its
+                  target, even with playbackMode="memory" as its own guide
+                  requires. SAMPLE_START and SAMPLE_END do work there, and they
+                  are the control that proves it.
     random sequences  draw from every note. Both of the reference's random loop
                   modes measurably never draw one note of a four-note sequence
                   (26 and 30 draws, odds of 0.05 % and 0.1 %), which is likewise
@@ -2263,14 +2315,19 @@ WHERE THIS ENGINE AND THE REFERENCE PLAYER DIFFER
     fm6op detune  follows the measured power law over MIDI 24 to 84; outside
                   that range it is an extrapolation.
     heavily layered presets  a preset built almost entirely of tag-gated layers -
-                  a dozen families of groups, each scaled by its own control -
-                  measured about 1 dB louder than the reference over eight bars,
-                  with a per-bar spread up to 1.6 dB. Every individual rule the
-                  preset uses was measured and matches on its own (the tag
-                  volumes multiply exactly, the effects account for 0.05 dB of
-                  it), so what is left is a level relationship between one
-                  family of layers and the rest. A master gain closes it if a
-                  render has to match the reference exactly.
+                  eighteen groups in six instrument families, each scaled by its
+                  own control - measures 1.09 dB louder than the reference over
+                  eight bars, with a per-bar spread up to 1.5 dB. Recording the
+                  reference one family at a time puts three families above it
+                  and two below: strings +4.2 dB, the odds and ends +6.3,
+                  percussion +1.2, synths +0.2, guitars -1.3 and winds -2.3. The
+                  synth family is EXACT - every octave band inside 0.24 dB - so
+                  the shared signal path is right and what is left is in what
+                  five families' zones do. Every individual rule the preset uses
+                  was measured and matches on its own (the tag volumes multiply
+                  exactly and the effects account for 0.05 dB), and the other two
+                  comparison presets are inside 0.1 dB. A master gain closes it
+                  if a render has to match the reference exactly.
 
   None of these is silent: each is either audible in a way the table describes
   or reported in Problems. Most of them are places where the reference does LESS

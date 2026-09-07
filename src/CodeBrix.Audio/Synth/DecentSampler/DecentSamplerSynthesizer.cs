@@ -147,7 +147,7 @@ public sealed class DecentSamplerSynthesizer : IMidiSynthesizer, IMpeSynthesizer
         _masterVolume = settings.MasterVolume;
         _inverseBlockSize = 1f / _blockSize;
         _streamingMode = settings.StreamingMode;
-        _streamingVoiceCount = settings.StreamingVoiceCount;
+        _streamingVoiceCount = settings.ResolveStreamingVoiceCount();
         _streamingRingFrames = settings.StreamingRingFrames;
 
         _problems.AddRange(instrument.Problems);
@@ -383,6 +383,17 @@ public sealed class DecentSamplerSynthesizer : IMidiSynthesizer, IMpeSynthesizer
     /// <summary>The maximum number of simultaneously sounding voices.</summary>
     public int MaximumPolyphony => _maximumPolyphony;
 
+    /// <summary>
+    /// How many streamed notes can sound at once: the settings' own
+    /// <see cref="DecentSamplerSynthesizerSettings.StreamingVoiceCount"/>, or
+    /// <see cref="MaximumPolyphony"/> when that was left automatic.
+    /// </summary>
+    /// <remarks>
+    /// Only meaningful for an instrument that streams; a synthesizer over an in-memory instrument
+    /// allocates no buffers at all. The pool is built at construction, so this number never changes.
+    /// </remarks>
+    public int StreamingVoiceCount => _streamingVoiceCount;
+
     /// <summary>The number of MIDI channels, always 16. Every channel plays the same instrument.</summary>
     public int ChannelCount => MidiChannelCount;
 
@@ -502,7 +513,7 @@ public sealed class DecentSamplerSynthesizer : IMidiSynthesizer, IMpeSynthesizer
 
         _noteStamp++;
         _mpe.NoteOn(channel, key);
-        _modulation?.NoteOn(channel, key, velocity, heldBefore);
+        _modulation?.NoteOn(channel, key, velocity);
 
         CollectAttackCandidates(state, key, velocity, heldBefore);
         ApplyRoundRobin();

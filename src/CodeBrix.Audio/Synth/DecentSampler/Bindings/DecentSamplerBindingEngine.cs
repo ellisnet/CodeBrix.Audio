@@ -661,11 +661,11 @@ internal sealed class DecentSamplerBindingEngine
         switch (source)
         {
             case DecentSamplerUiControl knob when knob.States.Count > 0:
-                FireState(knob.States, control.SelectedIndex, atLoad);
+                FireState(control, knob.States, atLoad);
                 break;
 
             case DecentSamplerUiButton button when button.States.Count > 0:
-                FireState(button.States, control.SelectedIndex, atLoad);
+                FireState(control, button.States, atLoad);
                 break;
 
             case DecentSamplerUiMenu menu when menu.Options.Count > 0:
@@ -683,9 +683,23 @@ internal sealed class DecentSamplerBindingEngine
         }
     }
 
-    private void FireState(IReadOnlyList<DecentSamplerUiState> states, int selected, bool atLoad)
+    // MEASURED (round 4, item 52): a state binding fires only when the STATE ITSELF CHANGES. Setting
+    // a button to the state it is already in is not a change and its bindings do not run again, so
+    // re-selecting "On" in the middle of a sequence leaves the sequence alone - unlike a <cc>
+    // binding, which fires on every controller change and restarts it.
+    private void FireState(
+        DecentSamplerControl control, IReadOnlyList<DecentSamplerUiState> states, bool atLoad)
     {
-        if (selected < 0 || selected >= states.Count)
+        var selected = control.SelectedIndex;
+
+        // A state whose bindings the load pass suppresses (triggerOnLoad="false") has not fired yet,
+        // so the first time a host selects it counts as the change.
+        if (atLoad && !AnyRunsAtLoad(states, selected))
+        {
+            return;
+        }
+
+        if (!control.StateSelectionChanged(selected) || selected < 0 || selected >= states.Count)
         {
             return;
         }
@@ -694,6 +708,24 @@ internal sealed class DecentSamplerBindingEngine
             states[selected].Bindings,
             new DecentSamplerBindingInput(selected, 0.0, Math.Max(1, states.Count - 1)),
             atLoad);
+    }
+
+    private static bool AnyRunsAtLoad(IReadOnlyList<DecentSamplerUiState> states, int selected)
+    {
+        if (selected < 0 || selected >= states.Count)
+        {
+            return false;
+        }
+
+        foreach (var binding in states[selected].Bindings)
+        {
+            if (binding.Enabled != false && binding.TriggerOnLoad != false)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void FireControlAxis(DecentSamplerControl control, bool horizontal, bool atLoad)

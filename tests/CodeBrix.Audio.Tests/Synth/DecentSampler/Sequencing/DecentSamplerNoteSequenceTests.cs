@@ -699,10 +699,10 @@ public class DecentSamplerNoteSequenceTests
     public void no_loop_stops_a_sequence_whose_declared_length_is_two()
     {
         //Arrange
-        // MEASURED (round 3, item 40) AND DELIBERATELY NOT COPIED: in the reference, no_loop fails to
-        // stop a sequence whose DECLARED LENGTH is 2 - two independent length-2 sequences looped for
-        // ever while lengths 3 and 4 stopped, whatever the note count. That is a defect; here no_loop
-        // always stops after one pass.
+        // MEASURED (round 3, item 40; boundary settled in round 4, item 52) AND DELIBERATELY NOT
+        // COPIED: in the reference, no_loop fails to stop a sequence whose DECLARED LENGTH IS EXACTLY
+        // 2 and only that - lengths 1, 3, 4, 6 and 8 all stop after one pass while 2 loops for ever,
+        // whatever the note count. That is a defect; here no_loop always stops after one pass.
         using var world = SequencingWorld.Build(
             Preset(binding: """seqLoopMode="no_loop" """, length: "2"));
 

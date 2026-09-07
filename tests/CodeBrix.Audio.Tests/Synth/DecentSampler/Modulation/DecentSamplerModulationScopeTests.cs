@@ -94,6 +94,112 @@ public class DecentSamplerModulationScopeTests
     }
 
     [Fact]
+    public void a_global_envelope_restarts_from_zero_on_every_note_on()
+    {
+        //Arrange
+        // MEASURED (round 4, item 51): scope="global" keeps ONE envelope instance and every note-on
+        // in the group restarts it from zero, so a voice that is already sounding drops out and
+        // re-attacks. The reference read a 9 dB step at the second note-on and a full second attack
+        // peaking 0.4 s later.
+        using var harness = ModulationHarness.Load(EnvelopeModulator("global"));
+        var synthesizer = harness.Synthesizer();
+
+        //Act
+        synthesizer.NoteOn(0, 60, 100);
+        var rising = ModulationHarness.Trace(
+            synthesizer, ModulationHarness.Blocks(0.4), () => harness.Instrument.Groups[0].Volume);
+
+        synthesizer.NoteOn(0, 64, 100);
+        var restarted = ModulationHarness.Trace(
+            synthesizer, ModulationHarness.Blocks(0.4), () => harness.Instrument.Groups[0].Volume);
+
+        //Assert
+        // 0.4 s into a 0.5 s attack the measured shape reads 0.98 of full; one block after the restart
+        // it is back at the bottom, and 0.4 s later it has climbed the same attack again.
+        rising[^1].Should().BeApproximately(0.98, 0.02);
+        restarted[0].Should().BeLessThan(0.05);
+        restarted[^1].Should().BeApproximately(0.98, 0.02);
+    }
+
+    [Fact]
+    public void a_global_envelope_interrupts_a_voice_that_is_already_sounding()
+    {
+        //Arrange
+        using var harness = ModulationHarness.Load(EnvelopeModulator("global"));
+        var synthesizer = harness.Synthesizer();
+
+        //Act
+        synthesizer.NoteOn(0, 60, 100);
+        var (before, _) = DecentSamplerRenderProbe.RenderBlocks(
+            synthesizer, ModulationHarness.Blocks(0.4));
+
+        synthesizer.NoteOn(0, 64, 100);
+        var (after, _) = DecentSamplerRenderProbe.RenderBlocks(synthesizer, 8);
+
+        //Assert - the sounding voice collapses with the restart instead of being joined by the new one.
+        // The window starts one block in, past the click-free gain ramp the collapse itself rides on.
+        var loud = DecentSamplerRenderProbe.Rms(before, before.Length - 256, 256);
+        var quiet = DecentSamplerRenderProbe.Rms(after, 64, 256);
+
+        synthesizer.ActiveVoiceCount.Should().Be(2);
+        quiet.Should().BeLessThan(loud * 0.15);
+    }
+
+    [Fact]
+    public void a_voice_envelope_leaves_a_sounding_voice_alone_when_a_second_note_starts()
+    {
+        //Arrange
+        // The same preset at scope="voice": every voice carries its own instance, so the first note
+        // holds its level and the second one simply adds to it.
+        using var harness = ModulationHarness.Load(EnvelopeModulator("voice"));
+        var synthesizer = harness.Synthesizer();
+
+        //Act
+        synthesizer.NoteOn(0, 60, 100);
+        var (before, _) = DecentSamplerRenderProbe.RenderBlocks(
+            synthesizer, ModulationHarness.Blocks(0.4));
+
+        synthesizer.NoteOn(0, 64, 100);
+        var (after, _) = DecentSamplerRenderProbe.RenderBlocks(synthesizer, 8);
+
+        //Assert
+        var held = DecentSamplerRenderProbe.Rms(before, before.Length - 256, 256);
+        var both = DecentSamplerRenderProbe.Rms(after, 64, 256);
+
+        synthesizer.ActiveVoiceCount.Should().Be(2);
+        both.Should().BeGreaterThan(held * 0.99);
+        harness.Instrument.Groups[0].Volume.Should().Be(1.0);
+    }
+
+    [Fact]
+    public void one_note_alone_sounds_the_same_at_either_envelope_scope()
+    {
+        //Arrange
+        // MEASURED (round 4, item 51): the solo trajectories agree to 0.2 dB, which is why round 3
+        // could not separate the two scopes at all.
+        using var globalFiles = ModulationHarness.Load(EnvelopeModulator("global"));
+        using var voiceFiles = ModulationHarness.Load(EnvelopeModulator("voice"));
+
+        var globalScope = globalFiles.Synthesizer();
+        var voiceScope = voiceFiles.Synthesizer();
+
+        //Act
+        globalScope.NoteOn(0, 60, 100);
+        var (globalLeft, _) = DecentSamplerRenderProbe.RenderBlocks(
+            globalScope, ModulationHarness.Blocks(1.0));
+
+        voiceScope.NoteOn(0, 60, 100);
+        var (voiceLeft, _) = DecentSamplerRenderProbe.RenderBlocks(
+            voiceScope, ModulationHarness.Blocks(1.0));
+
+        //Assert
+        for (var index = 0; index < globalLeft.Length; index++)
+        {
+            Math.Abs(globalLeft[index] - voiceLeft[index]).Should().BeLessThan(1e-6f);
+        }
+    }
+
+    [Fact]
     public void a_modulator_reaches_an_effect_parameter()
     {
         //Arrange
@@ -220,6 +326,12 @@ public class DecentSamplerModulationScopeTests
             DecentSamplerRenderProbe.Rms(modulatedLeft));
         plainLeft.Should().AllSatisfy(sample => Math.Abs(sample).Should().BeGreaterThan(0.2f));
     }
+
+    // The item-51 modulator: the measured attack, decay, sustain and release, setting the group's
+    // volume over the full 0-to-1 range.
+    private static string EnvelopeModulator(string scope) =>
+        "<envelope attack=\"0.5\" decay=\"0.5\" sustain=\"0.5\" release=\"1.0\" scope=\"" + scope +
+        "\" modAmount=\"1.0\" modBehavior=\"set\">" + VolumeBinding("set") + "</envelope>";
 
     private static string VolumeBinding(string behavior) =>
         "<binding type=\"amp\" level=\"group\" position=\"0\" parameter=\"GROUP_VOLUME\" " +

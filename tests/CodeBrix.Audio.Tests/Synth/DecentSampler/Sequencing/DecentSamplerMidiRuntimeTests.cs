@@ -233,6 +233,88 @@ public class DecentSamplerMidiRuntimeTests
             .Should().BeApproximately(SequencingWorld.BlipLevel, 0.01);
     }
 
+    [Theory]
+    [InlineData("groupIndex=\"1\"", 1)]
+    [InlineData("position=\"1\"", 1)]
+    [InlineData("groupIndex=\"2\"", 2)]
+    [InlineData("position=\"2\"", 2)]
+    public void a_cc_binding_stays_inside_the_group_it_addresses(string address, int addressed)
+    {
+        //Arrange
+        // MEASURED (round 4, item 53): a permanent <midi><cc> binding does NOT leak the way
+        // <velocity> does. It honours groupIndex, it honours position - the two are interchangeable
+        // and both 0-based - and it reaches AMP_VOLUME: in the reference exactly one of three
+        // identical groups moved to 0.5041 against a requested 0.5039 and the other two stayed within
+        // 0.01 dB of their baseline.
+        using var world = SequencingWorld.Build(ThreeGroups(
+            "<cc number=\"21\"><binding type=\"amp\" level=\"group\" " + address +
+            " parameter=\"AMP_VOLUME\" translation=\"linear\" translationOutputMin=\"0\" " +
+            "translationOutputMax=\"1\" /></cc>"));
+
+        //Act
+        world.Synthesizer.ProcessMidiMessage(0, 0xB0, 21, 64);
+
+        //Assert
+        for (var index = 0; index < 3; index++)
+        {
+            world.Instrument.Groups[index].Volume.Should().BeApproximately(
+                index == addressed ? 64.0 / 127.0 : 1.0, 0.0005);
+        }
+    }
+
+    [Fact]
+    public void a_note_binding_stays_inside_the_group_it_addresses_and_reaches_amp_volume()
+    {
+        //Arrange
+        // MEASURED (round 4, item 53): the reference's <note> binding set the addressed group to
+        // 0.2500 against a fixed value of 0.25 and left the two identical control groups alone.
+        using var world = SequencingWorld.Build(ThreeGroups(
+            """
+            <note note="41" swallowNotes="true">
+              <binding type="amp" level="group" groupIndex="1" parameter="AMP_VOLUME"
+                       translation="fixed_value" translationValue="0.25" />
+            </note>
+            """));
+
+        //Act
+        world.Synthesizer.NoteOn(0, 41, 100);
+
+        //Assert
+        world.Instrument.Groups[0].Volume.Should().Be(1.0);
+        world.Instrument.Groups[1].Volume.Should().Be(0.25);
+        world.Instrument.Groups[2].Volume.Should().Be(1.0);
+    }
+
+    [Fact]
+    public void a_cc_binding_at_tag_level_moves_only_the_tagged_group()
+    {
+        //Arrange
+        // MEASURED (round 4, item 53): level="tag" with an identifier moved only the group carrying
+        // that tag, by the same -5.95 dB the translated 0.5039 asks for.
+        using var world = SequencingWorld.Build(ThreeGroups(
+            """
+            <cc number="23">
+              <binding type="amp" level="tag" identifier="tgB" parameter="AMP_VOLUME"
+                       translation="linear" translationOutputMin="0" translationOutputMax="1" />
+            </cc>
+            """));
+
+        //Act
+        world.Synthesizer.ProcessMidiMessage(0, 0xB0, 23, 64);
+
+        world.Synthesizer.NoteOn(0, 60, 100);
+        var untagged = world.Render(4);
+
+        world.Synthesizer.NoteOffAll(true);
+        world.Synthesizer.NoteOn(0, 62, 100);
+        var tagged = world.Render(4);
+
+        //Assert
+        DecentSamplerRenderProbe.Rms(untagged).Should().BeApproximately(SequencingWorld.BlipLevel, 0.01);
+        DecentSamplerRenderProbe.Rms(tagged).Should().BeApproximately(
+            SequencingWorld.BlipLevel * 64.0 / 127.0, 0.01);
+    }
+
     [Fact]
     public void a_binding_can_switch_a_note_handler_off()
     {
@@ -331,4 +413,28 @@ public class DecentSamplerMidiRuntimeTests
           </midi>
         </DecentSampler>
         """;
+
+    // Three identical one-key groups, the third tagged, with one <midi> element written into it. The
+    // shape of item 53's preset: only one group is named in each binding and the other two are the
+    // controls.
+    private static string ThreeGroups(string midi) =>
+        $$"""
+        <DecentSampler>
+          <groups>
+            <group ampVelTrack="0" attack="0" decay="0" sustain="1" release="0.001">
+              <sample path="Samples/blip.wav" rootNote="60" loNote="60" hiNote="60" pitchKeyTrack="0" />
+            </group>
+            <group ampVelTrack="0" attack="0" decay="0" sustain="1" release="0.001">
+              <sample path="Samples/blip.wav" rootNote="61" loNote="61" hiNote="61" pitchKeyTrack="0" />
+            </group>
+            <group ampVelTrack="0" attack="0" decay="0" sustain="1" release="0.001" tags="tgB">
+              <sample path="Samples/blip.wav" rootNote="62" loNote="62" hiNote="62" pitchKeyTrack="0" />
+            </group>
+          </groups>
+          <midi>
+        {{midi}}
+          </midi>
+        </DecentSampler>
+        """;
+
 }

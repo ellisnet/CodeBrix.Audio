@@ -63,6 +63,15 @@ internal sealed class DecentSamplerSampleVoiceSource : IVoiceSource
             : (double)data.SampleRate / _outputSampleRate;
     }
 
+    // Moves the end bound while the voice sounds, for a SAMPLE_END binding. MEASURED (round 4, item
+    // 54): the reference applies SAMPLE_END to a voice that is already sounding, and one whose read
+    // position is past the new end falls silent immediately.
+    public void SetEndFrame(long endFrameInclusive)
+    {
+        _endFrameInclusive = endFrameInclusive;
+        _oscillator.SetEnd(endFrameInclusive);
+    }
+
     public void Start(int note, int velocity, double pitchHz)
     {
         _finished = _data == null;

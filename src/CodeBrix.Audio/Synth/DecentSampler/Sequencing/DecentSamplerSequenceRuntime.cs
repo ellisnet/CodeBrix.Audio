@@ -13,9 +13,10 @@ namespace CodeBrix.Audio.Synth.DecentSampler.Sequencing;
 //     midi_key   start when the key goes down, stop when it comes up (the default)
 //     on         start, and keep going until something turns it off
 //     off        stop the player named by seqPlayerIdentifier
-// The player is tracked under seqPlayerIdentifier when the binding names one; a key-triggered
-// binding that names none gets one player PER KEY, so a range like note="24-35" plays a different
-// sequence player for every key in it and a chord of key switches runs several at once.
+// MEASURED (round 4, item 52): a midi_key trigger is keyed BY THE KEY and seqPlayerIdentifier does
+// NOT pool the keys - two keys naming the same identifier ran two fully independent players, and
+// pressing the SAME key again restarted its one player from the first note. The identifier addresses
+// one player for the "on"/"off" form, where there is no key to key it by.
 internal sealed class DecentSamplerSequenceRuntime
 {
     private readonly DecentSamplerSequencingRuntime _owner;
@@ -85,7 +86,7 @@ internal sealed class DecentSamplerSequenceRuntime
         switch (behavior)
         {
             case DecentSamplerSeqTriggerBehavior.Off:
-                StopPlayer(KeyFor(binding, trigger));
+                StopPlayer(KeyFor(binding, trigger, behavior));
                 return;
 
             case DecentSamplerSeqTriggerBehavior.On:
@@ -114,7 +115,7 @@ internal sealed class DecentSamplerSequenceRuntime
                 }
                 else
                 {
-                    StopPlayer(KeyFor(binding, trigger));
+                    StopPlayer(KeyFor(binding, trigger, behavior));
                 }
 
                 return;
@@ -191,7 +192,8 @@ internal sealed class DecentSamplerSequenceRuntime
             return;
         }
 
-        var identifier = KeyFor(binding, trigger);
+        var identifier = KeyFor(
+            binding, trigger, binding.SeqTriggerBehavior ?? DecentSamplerSeqTriggerBehavior.MidiKey);
 
         if (!_players.TryGetValue(identifier, out var player))
         {
@@ -230,11 +232,23 @@ internal sealed class DecentSamplerSequenceRuntime
         _owner.ReleaseNotesOf(player);
     }
 
-    // The identifier a player is tracked under. seqPlayerIdentifier wins; a key-triggered binding
-    // with none gets one player per (channel, key), which is what makes a range of key switches play
-    // one sequence each.
-    private static string KeyFor(DecentSamplerBinding binding, in DecentSamplerSequenceTrigger trigger)
+    // The identifier a player is tracked under.
+    //
+    // MEASURED (round 4, item 52): a midi_key trigger is keyed by the (channel, key) it came from,
+    // seqPlayerIdentifier or not - two keys naming the same identifier run two independent players,
+    // and a range like note="24-35" plays one sequence per key. Every other form is keyed by
+    // seqPlayerIdentifier, which is what lets a second "on" restart the one player a first "on"
+    // started; a binding that names none gets one player of its own.
+    private static string KeyFor(
+        DecentSamplerBinding binding,
+        in DecentSamplerSequenceTrigger trigger,
+        DecentSamplerSeqTriggerBehavior behavior)
     {
+        if (trigger.IsFromNote && behavior == DecentSamplerSeqTriggerBehavior.MidiKey)
+        {
+            return KeyOf(trigger);
+        }
+
         if (!string.IsNullOrWhiteSpace(binding.SeqPlayerIdentifier))
         {
             return binding.SeqPlayerIdentifier.Trim();
@@ -242,13 +256,16 @@ internal sealed class DecentSamplerSequenceRuntime
 
         if (trigger.IsFromNote)
         {
-            return "#key:" + trigger.Channel.ToString(CultureInfo.InvariantCulture) + ":" +
-                   trigger.Key.ToString(CultureInfo.InvariantCulture);
+            return KeyOf(trigger);
         }
 
         return "#binding:" + binding.LineNumber.ToString(CultureInfo.InvariantCulture) + ":" +
                (binding.SeqIndex ?? binding.Position ?? 0).ToString(CultureInfo.InvariantCulture);
     }
+
+    private static string KeyOf(in DecentSamplerSequenceTrigger trigger) =>
+        "#key:" + trigger.Channel.ToString(CultureInfo.InvariantCulture) + ":" +
+        trigger.Key.ToString(CultureInfo.InvariantCulture);
 
     // The notes of one sequence in position order, with the length the sequence runs for. The
     // `length` attribute is required; a sequence that leaves it out, or writes one shorter than its

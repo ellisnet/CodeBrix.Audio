@@ -133,9 +133,13 @@ HOW CLOSE IT IS
   CRAWLS rather than holding, whatever the format's description says; detune
   follows a power law in frequency, 0.005341 * f0^0.630, over the six octaves it
   was measured across; and fmOpNFeedback acts only on the algorithm's own
-  feedback operator and is clamped at 1. What is still reasoned rather than
-  measured: the feedback DEPTH in cycles, the level scale's 0-99 curve and the
-  rate scaling, which the format has no attribute for at all.
+  feedback operator and is clamped at 1. Its modulator-to-modulator chains are
+  measured under load too: each link runs through the intermediate operator's OWN
+  OUTPUT, so an operator whose downstream neighbour is silent is inaudible, and a
+  voice's tail is the longest OPERATOR release rather than the group envelope's.
+  What is still reasoned rather than measured: the feedback DEPTH in cycles, the
+  level scale's 0-99 curve and the rate scaling, which the format has no
+  attribute for at all.
 
 
 INSTALLATION
@@ -262,7 +266,12 @@ hand, but what it does is worth knowing:
     makes an fm6op operator's velocity sensitivity work.
   * The GROUP'S ADSR gates the oscillator, because only pluck1 and fm6op stop by
     themselves. An fm6op using the -1 release sentinel never finishes on its own
-    (UsesOuterRelease), and the group's envelope is what ends it.
+    (UsesOuterRelease), and the group's envelope is what ends it. An fm6op whose
+    operators carry REAL releases is the other way round: MEASURED, its tail is
+    the longest OPERATOR release and never the group envelope's, so the adapter
+    reports OwnsRelease and the group envelope holds instead of releasing over
+    the top of it. Voice stealing and silencedByTags still fade such a voice out,
+    because those are not the key coming up.
   * LEVEL. Every oscillator is trimmed by ModestVoiceSource.ReferenceOscillatorGain
     (0.9419, about -0.52 dB), which is where the reference player puts an
     oscillator zone relative to a sample zone. It is one trim over all of them,
@@ -329,7 +338,8 @@ IModestVoiceOscillator : IModestOscillator  (same namespace)
     pluck1   finished once the string has decayed below -100 dB, whether the key
              is still down or not - a plucked string does not care about the key.
     fm6op    finished once the key is up and every carrier that can be heard has
-             finished its envelope. Usually never, because the format's default
+             finished its envelope - the longest of them, which is MEASURED to be
+             what ends the voice. Usually never, because the format's default
              release is the -1 sentinel: see UsesOuterRelease.
 
 ModestOscillatorFactory  (static)
@@ -1036,10 +1046,23 @@ fm6op  -  Fm6OpOscillator  (namespace CodeBrix.Audio.ModestSynth.Fm)
     four-stage rate scale at 5.5 rate units per halving, with rate 0 crawling;
     the detune power law 0.005341 * f0^0.630 over MIDI 24 to 84; and feedback
     acting only on the algorithm's own operator and clamping at 1.
+    MEASURED UNDER LOAD, and no longer inherited from the chart: THE MODULATOR-
+    TO-MODULATOR CHAINS ARE REAL, and each link is carried by the intermediate
+    operator's OWN OUTPUT scaled by its level. In algorithm 1 the path is
+    op6 -> op5 -> op4 -> op3, and an operator whose downstream neighbour is
+    silent contributes NOTHING: op5 at level 1.0 with op4 down was bit-identical
+    to the bare carrier, and op6 at 1.0 with op5 down was bit-identical to op4
+    alone. Raising the whole ladder moved the spectral centroid from 110 Hz to
+    7261 Hz and the line count from 1 to 89 while the level stayed inside 1.9 dB:
+    a chained modulator changes the timbre, not the loudness. The per-operator
+    ADSR also runs independently on all six operators at once - six different
+    sustains landed on 20*log10(sustain) exactly - and the voice's tail is the
+    longest OPERATOR release rather than the group envelope's.
     STILL REASONED RATHER THAN MEASURED, each a single named constant: the
-    feedback DEPTH in cycles, the 0-99 level scale's curve, the modulator-to-
-    modulator chains inherited from the published chart, the detune law outside
-    MIDI 24 to 84, and rate scaling (which the format does not have at all).
+    feedback DEPTH in cycles, the 0-99 level scale's curve, the detune law
+    outside MIDI 24 to 84, and rate scaling (which the format does not have at
+    all). The chains are measured for algorithm 1, whose depth is four; the
+    algorithms whose chains are deeper or shallower have not been walked.
 
 
 THE CREATIVE EFFECTS
@@ -1347,27 +1370,41 @@ bit_crusher  -  BitCrusherEffect
   The defaults are transparent: 24 bits is finer than a float can hold and a
   reduction of 1 holds nothing.
 
-  BIT DEPTH is a mid-tread quantiser over -1..1 - the signal is rounded to the
-  nearest of 2^bitDepth evenly spaced levels. SAMPLE-RATE REDUCTION is a
+  BIT DEPTH is a MID-TREAD quantiser with NO DITHER - the signal is rounded to
+  the nearest multiple of
+
+      STEP = 2*sqrt(2) / 2^(bitDepth-1)   =  2^(2.5 - bitDepth)
+
+  and zero is always one of the levels. SAMPLE-RATE REDUCTION is a
   sample-and-hold: a factor of four holds each sample for four. Both accept
   fractional values, because a knob bound to FX_BIT_DEPTH sweeps through them;
   the hold length then alternates rather than jumping.
 
-  MEASURED. sampleRateReduction="8" pulled the reference's spectral centroid
-  from 7.5 kHz to 2.1 kHz, a ratio of 0.28; this one moves white noise from
-  12.0 kHz to 2.5 kHz, a ratio of 0.21. That is the zero-order hold's own
-  roll-off and is what a sample-and-hold gives.
+  THE FULL SCALE IS 2*sqrt(2), NOT 1, which is the same constant the compressor
+  threshold and the wave folder use. It has one consequence worth knowing before
+  you reach for a low bit depth: A QUIET SIGNAL CAN BE CRUSHED TO DIGITAL
+  SILENCE. Anything whose PEAK is below STEP/2 = 2^(1.5-bitDepth) rounds to zero
+  everywhere - 0.1768 at bitDepth 4, 0.01105 at 8, 0.00069 at 12 - so a note at
+  -20 dBFS disappears at four bits while the same note ten decibels louder
+  crushes as expected. The class exposes the constant as
+  BitCrusherEffect.FullScale.
 
-  MEASURED AGAIN, and the earlier divergence is closed. The reference's
-  bitDepth is an ABSOLUTE plus-or-minus-one quantiser, level-transparent at 8
-  and 12 bits (0.01 dB) and +1.21 dB at 4 bits - which is a rounding quantiser,
-  not the truncating one the first round's single point suggested. Its
-  sampleRateReduction is entirely level-neutral (0.02 dB over factors of 2, 8
-  and 32) and moves the spectral centroid from 440 Hz to about 1030 Hz at 32.
-  This effect is that quantiser and that sample-and-hold.
+  MEASURED. The step was read directly off the reference's output staircase at
+  bit depths 3, 4 and 8 - 0.70846, 0.35431 and 0.022087 internal, against the
+  law's 0.70711, 0.35355 and 0.022097 - and the plateaus are exact and
+  repeatable, so there is no dither. The apparent "gain" of a crusher follows
+  from the step rather than being a parameter: +1.21 dB where the signal spans
+  three levels, +0.44 dB where it spans five, 0.00 dB once the step is small.
+  This effect reproduces the reference's whole 12-cell level sweep - four input
+  levels at bit depths 4, 8 and 12 - to 0.05 dB, digital silence included.
 
-  STILL UNMEASURED: an input-level sweep. The reference was measured at one
-  level only.
+  sampleRateReduction is level-neutral at every input level (0.02 dB over
+  factors of 2, 8 and 32) and purely spectral: it pulled the reference's
+  spectral centroid from 7.5 kHz to 2.1 kHz on noise at a factor of 8, and moves
+  a 440 Hz sine to about 1030 Hz at 32.
+
+  STILL UNMEASURED: bitDepth 1 and 2, where the step exceeds the signal range,
+  and a non-periodic input to rule out dither hiding under a periodic one.
 
 
 gate  -  GateEffect
@@ -1661,7 +1698,9 @@ QUICK REFERENCE
                            DelayTime s (0.005), ModRate Hz (0.5),
                            ModDepth (0.3); no Mix - Width is the mix
   bit_crusher              BitDepth 1..24 (24), SampleRateReduction 1..32 (1),
-                           Mix (1.0)
+                           Mix (1.0); a mid-tread step of
+                           2*sqrt(2)/2^(BitDepth-1), so a peak under half a step
+                           becomes digital silence
   gate                     Amount 0..1 (0.5), Mix (1.0), Seed, WindowSeconds
                            (0.05); seeded, so the dropouts repeat
 

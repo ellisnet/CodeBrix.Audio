@@ -13,9 +13,16 @@ namespace CodeBrix.Audio.ModestSynth.Effects;
 /// (default 1.0).
 /// </para>
 /// <para>
-/// BIT DEPTH is a mid-tread quantiser over -1..1: the signal is rounded to the nearest of
-/// <c>2^bitDepth</c> evenly spaced levels. Non-integer depths are honoured, because a knob bound to
+/// BIT DEPTH is a MID-TREAD quantiser with NO DITHER whose step is
+/// <c>2*sqrt(2) / 2^(bitDepth-1)</c>: the signal is rounded to the nearest multiple of the step, and
+/// zero is always one of the levels. Non-integer depths are honoured, because a knob bound to
 /// <c>FX_BIT_DEPTH</c> sweeps through them.
+/// </para>
+/// <para>
+/// THE FULL SCALE IS <c>2*sqrt(2)</c>, NOT 1 - the same constant the compressor threshold and the
+/// wave folder use. That is measured, not chosen, and it has one consequence worth knowing: a signal
+/// whose PEAK is below <c>STEP/2 = 2^(1.5-bitDepth)</c> is crushed to DIGITAL SILENCE. At
+/// <c>bitDepth="4"</c> that threshold is 0.1768, so a sine at -20 dBFS RMS vanishes completely.
 /// </para>
 /// <para>
 /// SAMPLE-RATE REDUCTION is a sample-and-hold: a reduction of four holds each sample for four
@@ -28,12 +35,9 @@ namespace CodeBrix.Audio.ModestSynth.Effects;
 /// sample-and-hold gives.
 /// </para>
 /// <para>
-/// WHAT IS NOT. The reference LOST 3.1 dB of level at <c>bitDepth="4"</c>, and a rounding quantiser
-/// does not: on the same material this one is within half a decibel of the input. Losing level that
-/// way needs a quantiser with a dead zone around silence - truncation towards zero - which is a
-/// different and more audible curve. The measurement was a single setting at medium confidence, and
-/// the noise source's own distribution was never established, so this implementation uses the
-/// textbook rounding quantiser and publishes the divergence instead of guessing at the cause.
+/// The apparent "gain" of a crusher is a consequence of the step rather than a parameter of its own:
+/// the reference read +1.21 dB where the signal spans three levels, +0.44 dB where it spans five, and
+/// 0.00 dB once the step is small against the signal. This quantiser reproduces all three.
 /// </para>
 /// </remarks>
 public sealed class BitCrusherEffect : ModestMixEffectBase
@@ -43,6 +47,16 @@ public sealed class BitCrusherEffect : ModestMixEffectBase
 
     /// <summary>The coarsest bit depth the format allows.</summary>
     public const double MinimumBitDepth = 1.0;
+
+    /// <summary>
+    /// The notional full scale the quantiser's step is measured against, which is not 1.
+    /// </summary>
+    /// <remarks>
+    /// MEASURED (round 4, item 55) as <c>2*sqrt(2)</c>, read off the output staircase at bit depths
+    /// 3, 4 and 8 - the same constant the compressor threshold and the wave folder use. The step is
+    /// <c>FullScale / 2^(bitDepth-1)</c>.
+    /// </remarks>
+    public const double FullScale = 2.8284271247461903;
 
     /// <summary>The largest sample-rate reduction factor the format allows.</summary>
     public const double MaximumSampleRateReduction = 32.0;
@@ -97,8 +111,9 @@ public sealed class BitCrusherEffect : ModestMixEffectBase
         double mix = Mix;
         double dryGain = 1.0 - mix;
 
-        double levels = Math.Pow(2.0, bitDepth - 1.0);
-        double step = 1.0 / levels;
+        // MEASURED (round 4, item 55): STEP = 2*sqrt(2) / 2^(bitDepth-1), mid-tread, no dither.
+        double step = FullScale / Math.Pow(2.0, bitDepth - 1.0);
+        double perStep = 1.0 / step;
         double increment = 1.0 / sampleRateReduction;
 
         for (int i = 0; i < frames; i++)
@@ -109,8 +124,8 @@ public sealed class BitCrusherEffect : ModestMixEffectBase
             if (holdPhase >= 1.0)
             {
                 holdPhase -= 1.0;
-                heldLeft = Math.Round(dryLeft * levels) * step;
-                heldRight = Math.Round(dryRight * levels) * step;
+                heldLeft = Math.Round(dryLeft * perStep) * step;
+                heldRight = Math.Round(dryRight * perStep) * step;
             }
 
             holdPhase += increment;

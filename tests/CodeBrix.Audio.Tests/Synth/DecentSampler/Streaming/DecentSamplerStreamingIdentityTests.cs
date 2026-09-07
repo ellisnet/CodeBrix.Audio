@@ -190,6 +190,52 @@ public class DecentSamplerStreamingIdentityTests
     }
 
     [Fact]
+    public void forty_streamed_notes_at_once_match_the_decoded_render()
+    {
+        //Arrange - forty simultaneous notes is more than the fixed pool of 32 the engine used to
+        //allocate, which is what cost a corpus preset 1.6 dB against the reference player.
+        using var world = DecentSamplerStreamingWorld.Create();
+        world.Fixtures.WriteSineWav("Samples/tone.wav", 220.0, frames: 40000);
+
+        var notes = new int[40];
+        for (var i = 0; i < notes.Length; i++)
+        {
+            notes[i] = 40 + i;
+        }
+
+        //Act
+        var memory = DecentSamplerStreamingWorld.PlayChord(world.Load(LoopedPreset, "memory"), notes, 300);
+        var streamed = DecentSamplerStreamingWorld.PlayChord(
+            world.Load(LoopedPreset, "disk_streaming"), notes, 300);
+
+        //Assert
+        DecentSamplerStreamingWorld.FirstDifference(memory.Left, streamed.Left).Should().Be(-1);
+        DecentSamplerStreamingWorld.FirstDifference(memory.Right, streamed.Right).Should().Be(-1);
+        DecentSamplerRenderProbe.Rms(streamed.Left, 10000, 5000).Should().BeGreaterThan(0.05);
+    }
+
+    [Fact]
+    public void the_streaming_pool_follows_the_polyphony_by_default()
+    {
+        //Arrange
+        using var world = DecentSamplerStreamingWorld.Create();
+        world.Fixtures.WriteSineWav("Samples/tone.wav", 220.0, frames: 4000);
+        var instrument = world.Load(SinePreset, "disk_streaming");
+
+        //Act
+        var automatic = DecentSamplerRenderProbe.Synthesizer(instrument);
+        var pinned = DecentSamplerRenderProbe.Synthesizer(
+            instrument, settings => settings.StreamingVoiceCount = 12);
+
+        //Assert
+        DecentSamplerSynthesizerSettings.DefaultStreamingVoiceCount.Should().Be(
+            DecentSamplerSynthesizerSettings.AutomaticStreamingVoiceCount);
+        automatic.StreamingVoiceCount.Should().Be(
+            DecentSamplerSynthesizerSettings.DefaultMaximumPolyphony);
+        pinned.StreamingVoiceCount.Should().Be(12);
+    }
+
+    [Fact]
     public void the_instrument_reports_what_it_streamed()
     {
         //Arrange

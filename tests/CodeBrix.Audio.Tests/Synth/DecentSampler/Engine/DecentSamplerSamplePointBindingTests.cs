@@ -11,19 +11,20 @@ namespace CodeBrix.Audio.Tests.Synth.DecentSampler.Engine;
 /// </summary>
 /// <remarks>
 /// <para>
-/// THE RULE: a change takes effect at the NEXT NOTE-ON, and a voice that is already sounding keeps the
-/// bounds it started with. Nothing about this was measured against the reference player - the developer
-/// guide says only that these four parameters need in-memory playback, and says nothing about a
-/// sounding voice - so this engine takes the cheaper of the two defensible readings.
+/// THE RULE, now measured (round 4, item 54). SAMPLE_START takes effect at the NEXT NOTE-ON and a
+/// sounding voice keeps the start it began with. SAMPLE_END takes effect at the next note-on AND on a
+/// SOUNDING voice: a voice whose read position is already past the new end stops at once.
 /// </para>
 /// <para>
-/// The reason it is the cheaper one: a voice reads its start and end once, at note-on, and its loop
-/// bounds come from a zone runtime that resolves them when the instrument is built. Following a change
-/// live would mean re-resolving every sounding voice's loop from the audio thread's own callback, on a
-/// parameter that presets move from a knob a player is dragging. The audible difference is a jump in
-/// the middle of a note, which is not something a library can rely on either way; the cost is a
-/// re-entrant edit of running voices. The streamed case behaves identically and additionally reports
-/// itself once in <see cref="DecentSamplerInstrument.Problems"/>.
+/// LOOP_START and LOOP_END do NOTHING AT ALL in the reference player - not live, not at the next
+/// note-on, and through none of the three ways a binding can name its target. Here they take effect at
+/// the next note-on, which is a published improvement rather than a match. Following them live would
+/// mean re-resolving a sounding voice's loop from the audio callback for a parameter presets drive
+/// from a knob, and it would match nothing.
+/// </para>
+/// <para>
+/// The streamed case keeps the note-on rule for every one of the four and reports itself once in
+/// <see cref="DecentSamplerInstrument.Problems"/>: the guide restricts all four to in-memory playback.
 /// </para>
 /// </remarks>
 public class DecentSamplerSamplePointBindingTests
@@ -43,6 +44,25 @@ public class DecentSamplerSamplePointBindingTests
               <labeled-knob x="0" y="0" width="90" height="100" parameterName="Start"
                             minValue="0" maxValue="16000" value="0" triggerOnLoad="false">
                 <binding type="general" level="group" position="0" parameter="SAMPLE_START" />
+              </labeled-knob>
+            </tab>
+          </ui>
+        </DecentSampler>
+        """;
+
+    private const string EndPreset = """
+        <DecentSampler>
+          <groups>
+            <group ampVelTrack="0" attack="0" decay="0" sustain="1" release="0.001">
+              <sample path="Samples/steps.wav" rootNote="60" loNote="0" hiNote="127"
+                      pitchKeyTrack="0" />
+            </group>
+          </groups>
+          <ui>
+            <tab name="main">
+              <labeled-knob x="0" y="0" width="90" height="100" parameterName="End"
+                            minValue="0" maxValue="16000" value="16000" triggerOnLoad="false">
+                <binding type="general" level="group" position="0" parameter="SAMPLE_END" />
               </labeled-knob>
             </tab>
           </ui>
@@ -89,6 +109,76 @@ public class DecentSamplerSamplePointBindingTests
         //Assert - straight into the fourth section.
         DecentSamplerRenderProbe.Rms(render).Should().BeApproximately(0.4, 0.005);
         instrument.Zones[0].Start.Should().Be(SectionFrames * 3);
+    }
+
+    [Fact]
+    public void a_sounding_voice_past_the_new_sample_end_stops_at_once()
+    {
+        //Arrange
+        // MEASURED (round 4, item 54): the reference sent SAMPLE_END 3.0 s into a held note, and the
+        // voice - whose read position was already past the new end - fell silent at exactly 3.0 s.
+        using var fixtures = DecentSamplerEngineFixtures.Create();
+        fixtures.WriteSectionedWav("Samples/steps.wav", SectionFrames, 0.1f, 0.2f, 0.3f, 0.4f);
+
+        using var instrument = DecentSamplerInstrument.Load(fixtures.WritePreset(EndPreset));
+        var synthesizer = DecentSamplerRenderProbe.Synthesizer(instrument);
+
+        //Act - 160 blocks is 10,240 frames, the third section of the file.
+        synthesizer.NoteOn(0, 60, 127);
+        var before = DecentSamplerRenderProbe.RenderBlocks(synthesizer, 160).Left;
+
+        instrument.Controls[0].SetValue(SectionFrames);
+        var after = DecentSamplerRenderProbe.RenderBlocks(synthesizer, 16).Left;
+
+        //Assert
+        DecentSamplerRenderProbe.Rms(before, before.Length - 1024, 1024)
+            .Should().BeApproximately(0.3, 0.005);
+        DecentSamplerRenderProbe.Peak(after).Should().Be(0.0);
+        synthesizer.ActiveVoiceCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void a_sounding_voice_short_of_the_new_sample_end_plays_on_to_it()
+    {
+        //Arrange
+        using var fixtures = DecentSamplerEngineFixtures.Create();
+        fixtures.WriteSectionedWav("Samples/steps.wav", SectionFrames, 0.1f, 0.2f, 0.3f, 0.4f);
+
+        using var instrument = DecentSamplerInstrument.Load(fixtures.WritePreset(EndPreset));
+        var synthesizer = DecentSamplerRenderProbe.Synthesizer(instrument);
+
+        //Act - 16 blocks is 1,024 frames, still inside the first section.
+        synthesizer.NoteOn(0, 60, 127);
+        DecentSamplerRenderProbe.RenderBlocks(synthesizer, 16);
+
+        instrument.Controls[0].SetValue(SectionFrames);
+        var after = DecentSamplerRenderProbe.RenderBlocks(synthesizer, 100).Left;
+
+        //Assert - it sounds on to the new end at frame 4,000 and then stops, well short of the file.
+        DecentSamplerRenderProbe.Rms(after, 0, 2816).Should().BeApproximately(0.1, 0.005);
+        DecentSamplerRenderProbe.Peak(after, 3200, 3200).Should().Be(0.0);
+        synthesizer.ActiveVoiceCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void the_next_note_stops_where_the_binding_moved_the_sample_end()
+    {
+        //Arrange
+        using var fixtures = DecentSamplerEngineFixtures.Create();
+        fixtures.WriteSectionedWav("Samples/steps.wav", SectionFrames, 0.1f, 0.2f, 0.3f, 0.4f);
+
+        using var instrument = DecentSamplerInstrument.Load(fixtures.WritePreset(EndPreset));
+        var synthesizer = DecentSamplerRenderProbe.Synthesizer(instrument);
+
+        //Act
+        instrument.Controls[0].SetValue(SectionFrames);
+        synthesizer.NoteOn(0, 60, 127);
+        var render = DecentSamplerRenderProbe.RenderBlocks(synthesizer, 100).Left;
+
+        //Assert
+        DecentSamplerRenderProbe.Rms(render, 0, 3840).Should().BeApproximately(0.1, 0.005);
+        DecentSamplerRenderProbe.Peak(render, 4160, 2240).Should().Be(0.0);
+        instrument.Zones[0].End.Should().Be(SectionFrames);
     }
 
     [Fact]

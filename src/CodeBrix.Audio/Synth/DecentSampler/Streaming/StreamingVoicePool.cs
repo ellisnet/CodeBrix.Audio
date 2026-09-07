@@ -9,8 +9,9 @@ namespace CodeBrix.Audio.Synth.DecentSampler.Streaming;
 // same failure mode as running out of voices.
 //
 // Every buffer carries a stereo ring whether or not the sample is stereo, because a pool cannot know
-// which zone will want it. The default 32 buffers of 8192 frames cost 2 MB - two thousandths of what
-// the samples they stand in for would.
+// which zone will want it. The pool follows MaximumPolyphony by default, so 192 buffers of 8192 frames
+// cost 12 MB - a fraction of what the samples they stand in for would, and the price of a streamed
+// preset sounding exactly like the same preset in memory however wide the chord is.
 internal sealed class StreamingVoicePool
 {
     private readonly StreamingVoiceBuffer[] _buffers;

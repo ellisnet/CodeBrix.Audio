@@ -146,6 +146,16 @@ public sealed class ModestVoiceSource : IVoiceSource
     /// </remarks>
     public bool IsFinished => finished || (oscillator != null && oscillator.IsFinished);
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// True for a <c>fm6op</c> voice whose operators carry real releases. MEASURED (round 4, item
+    /// 56): such a voice's tail is the longest OPERATOR release, never the group envelope's. An
+    /// <c>fm6op</c> on the format's <c>-1</c> release sentinel is the other way round - the group
+    /// envelope ends it - and every other waveform is ended by the group envelope too.
+    /// </remarks>
+    public bool OwnsRelease =>
+        oscillator is Fm.Fm6OpOscillator operators && !operators.UsesOuterRelease;
+
     /// <summary>The oscillator currently generating this voice, or null before the first note.</summary>
     /// <remarks>Diagnostics and tests. Do not hold on to it: the waveform can change at a note-on.</remarks>
     public IModestVoiceOscillator Oscillator => oscillator;
