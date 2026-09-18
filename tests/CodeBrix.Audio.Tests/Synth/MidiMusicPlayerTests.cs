@@ -233,7 +233,7 @@ public sealed class MidiMusicPlayerTests : IDisposable
 
         //Act
         var nullSoundFont = () => player.Load((SoundFont)null, BuildMotifSequence());
-        var nullSequence = () => player.Load(soundFont, null);
+        var nullSequence = () => player.Load(soundFont, (MidiSequence)null);
 
         //Assert
         nullSoundFont.Should().Throw<ArgumentNullException>();
@@ -432,6 +432,215 @@ public sealed class MidiMusicPlayerTests : IDisposable
         //Assert
         notes.Should().Equal(79, 81, 77, 65, 72);
         player.Sequence.Should().BeSameAs(sequence);
+    }
+
+    // ----- a stream that is still being written (device) -----
+
+    [Fact]
+    public void load_accepts_a_stream_and_reports_it_instead_of_a_sequence()
+    {
+        Assert.SkipUnless(PlaybackEnabled, PlaybackSkipReason);
+
+        //Arrange
+        using var scope = new AudibleTestScope();
+        using var player = new MidiMusicPlayer();
+        var stream = new MidiStream(StreamingTestProducer.TicksPerQuarterNote);
+        var producer = new StreamingTestProducer(stream);
+        producer.AppendNextBar();
+
+        //Act
+        player.Load(SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName), stream);
+
+        //Assert - one or the other is loaded, never both.
+        player.IsLoaded.Should().BeTrue();
+        player.Stream.Should().BeSameAs(stream);
+        player.Sequence.Should().BeNull();
+        player.Duration.Should().BeGreaterThan(TimeSpan.Zero);
+        player.PlaybackState.Should().Be(PlaybackState.Stopped);
+    }
+
+    [Fact]
+    public void a_stream_loaded_empty_plays_starved_then_plays_what_arrives()
+    {
+        Assert.SkipUnless(PlaybackEnabled, PlaybackSkipReason);
+
+        //Arrange - nothing written yet: the player is playing silence, not stopped.
+        using var scope = new AudibleTestScope();
+        using var player = new MidiMusicPlayer();
+        var stream = new MidiStream(StreamingTestProducer.TicksPerQuarterNote);
+        var producer = new StreamingTestProducer(stream);
+
+        player.Load(SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName), stream);
+        player.Volume = 0.7f;
+
+        //Act
+        player.Play();
+        Thread.Sleep(300);
+        var starvedAtFirst = player.IsStarved;
+        var stateWhileStarved = player.PlaybackState;
+        var positionWhileStarved = player.Position;
+
+        producer.AppendAllBars();
+        Thread.Sleep(700);
+
+        //Assert
+        starvedAtFirst.Should().BeTrue();
+        stateWhileStarved.Should().Be(PlaybackState.Playing);
+        positionWhileStarved.Should().Be(TimeSpan.Zero);
+
+        player.IsStarved.Should().BeFalse();
+        player.Position.Should().BeGreaterThan(TimeSpan.Zero);
+        player.PlaybackState.Should().Be(PlaybackState.Playing);
+    }
+
+    [Fact]
+    public void duration_grows_as_the_producer_appends()
+    {
+        Assert.SkipUnless(PlaybackEnabled, PlaybackSkipReason);
+
+        //Arrange
+        using var scope = new AudibleTestScope();
+        using var player = new MidiMusicPlayer();
+        var stream = new MidiStream(StreamingTestProducer.TicksPerQuarterNote);
+        var producer = new StreamingTestProducer(stream);
+        producer.AppendNextBar();
+
+        player.Load(SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName), stream);
+
+        //Act
+        var afterOneBar = player.Duration;
+        producer.AppendNextBar();
+        var afterTwoBars = player.Duration;
+
+        //Assert - a progress bar built on this has a moving end until the producer completes.
+        afterOneBar.Should().BeGreaterThan(TimeSpan.Zero);
+        afterTwoBars.Should().BeGreaterThan(afterOneBar);
+    }
+
+    [Fact]
+    public void stop_rewinds_a_stream_to_the_start()
+    {
+        Assert.SkipUnless(PlaybackEnabled, PlaybackSkipReason);
+
+        //Arrange - everything written, so there is a piece to hear twice.
+        using var scope = new AudibleTestScope();
+        using var player = new MidiMusicPlayer();
+        var stream = new MidiStream(StreamingTestProducer.TicksPerQuarterNote);
+        var producer = new StreamingTestProducer(stream);
+        producer.AppendAllBars();
+
+        player.Load(SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName), stream);
+        player.Volume = 0.7f;
+
+        //Act
+        player.Play();
+        Thread.Sleep(600);
+        var played = player.Position;
+        player.Stop();
+
+        //Assert - the stream keeps everything it was given, so it plays again from the top.
+        played.Should().BeGreaterThan(TimeSpan.Zero);
+        player.Position.Should().Be(TimeSpan.Zero);
+        player.PlaybackState.Should().Be(PlaybackState.Stopped);
+        player.Stream.Should().BeSameAs(stream);
+
+        player.Play();
+        Thread.Sleep(400);
+        player.Position.Should().BeGreaterThan(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public void playback_ended_is_raised_after_complete()
+    {
+        Assert.SkipUnless(PlaybackEnabled, PlaybackSkipReason);
+
+        //Arrange - a fifth of a second of music, and a producer that has stopped writing without
+        // saying so.
+        using var scope = new AudibleTestScope();
+        using var player = new MidiMusicPlayer();
+        using var ended = new ManualResetEventSlim(false);
+        player.PlaybackEnded += (_, _) => ended.Set();
+
+        var stream = new MidiStream(1000);
+        stream.AppendNote(0, 1, 72, 100, 400);
+
+        player.Load(SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName), stream);
+        player.Volume = 0.7f;
+
+        //Act
+        player.Play();
+        var endedWhileWriting = ended.Wait(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+
+        stream.Complete();
+        var endedAfterComplete = ended.Wait(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+
+        //Assert - Complete() is what ends a stream; without it the player waits, playing, for ever.
+        endedWhileWriting.Should().BeFalse();
+        endedAfterComplete.Should().BeTrue();
+        player.PlaybackState.Should().Be(PlaybackState.Stopped);
+    }
+
+    [Fact]
+    public void load_rejects_a_stream_already_playing_elsewhere()
+    {
+        Assert.SkipUnless(PlaybackEnabled, PlaybackSkipReason);
+
+        //Arrange - one player per stream at a time.
+        using var scope = new AudibleTestScope();
+        using var first = new MidiMusicPlayer();
+        using var second = new MidiMusicPlayer();
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+
+        var stream = new MidiStream(StreamingTestProducer.TicksPerQuarterNote);
+        new StreamingTestProducer(stream).AppendNextBar();
+
+        first.Load(soundFont, stream);
+
+        //Act
+        var act = () => second.Load(soundFont, stream);
+
+        //Assert
+        act.Should().Throw<InvalidOperationException>();
+        first.Stream.Should().BeSameAs(stream);
+        second.Stream.Should().BeNull();
+
+        // ... and letting go hands it on.
+        first.Dispose();
+        var again = () => second.Load(soundFont, stream);
+        again.Should().NotThrow();
+        second.Stream.Should().BeSameAs(stream);
+    }
+
+    [Fact]
+    public void is_looping_is_ignored_for_a_stream()
+    {
+        Assert.SkipUnless(PlaybackEnabled, PlaybackSkipReason);
+
+        //Arrange - a growing timeline has no end to loop at, so a completed stream must still end.
+        using var scope = new AudibleTestScope();
+        using var player = new MidiMusicPlayer();
+        using var ended = new ManualResetEventSlim(false);
+        player.PlaybackEnded += (_, _) => ended.Set();
+
+        var stream = new MidiStream(1000);
+        stream.AppendNote(0, 1, 72, 100, 400);
+        stream.Complete();
+
+        player.IsLooping = true;
+        player.Load(SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName), stream);
+        player.Volume = 0.7f;
+
+        //Act
+        var setAfterLoad = () => player.IsLooping = true;
+        player.Play();
+        var fired = ended.Wait(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+
+        //Assert - neither refused nor thrown: the property is the PLAYER's and keeps its value for
+        // the next sequence loaded, and the stream played once and ended.
+        setAfterLoad.Should().NotThrow();
+        player.IsLooping.Should().BeTrue();
+        fired.Should().BeTrue();
+        player.PlaybackState.Should().Be(PlaybackState.Stopped);
     }
 
     /// <summary>

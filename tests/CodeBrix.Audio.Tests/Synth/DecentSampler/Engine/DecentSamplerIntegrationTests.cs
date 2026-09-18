@@ -142,7 +142,7 @@ public class DecentSamplerIntegrationTests
 
         //Act
         var nullInstrument = () => player.Load((DecentSamplerInstrument)null, BuildSequence());
-        var nullSequence = () => player.Load(instrument, null);
+        var nullSequence = () => player.Load(instrument, (MidiSequence)null);
 
         //Assert
         nullInstrument.Should().Throw<ArgumentNullException>();

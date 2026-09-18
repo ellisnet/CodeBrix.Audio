@@ -33,7 +33,7 @@
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
     <IsPackable>true</IsPackable>
-    <PackageTags>audio;wav;mp3;ogg;vorbis;flac;midi;waveform;dsp;id3;playback;recording;engine;miniaudio;packets;soundfont;sfz;dspreset;sampler;multitrack;stems;mpe;synthesis;CodeBrix</PackageTags>
+    <PackageTags>audio;wav;mp3;ogg;vorbis;flac;midi;abc;abc-notation;waveform;dsp;id3;playback;recording;engine;miniaudio;packets;soundfont;sfz;dspreset;sampler;multitrack;stems;mpe;synthesis;midi-stream;CodeBrix</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>

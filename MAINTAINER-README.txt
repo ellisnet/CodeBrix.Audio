@@ -637,6 +637,171 @@ THE OTHER FIXTURE HELPERS
                                  values are deliberate: every gain, pan, mute and
                                  offset assertion is then arithmetic a reader can
                                  check by eye.
+    Abc/AbcTestAssets.cs         locates the three abc fixtures - see THE ABC
+                                 READER below for why there are only three.
+
+THE ABC READER
+--------------
+CodeBrix.Audio.Abc reads abc notation (the standard, version 2.1) and converts a
+tune to the editable MIDI model. It is authored code, not a port: nothing was
+read but the standard itself and abc2midi's own documentation for the two %%MIDI
+directives that are honoured. THIRD-PARTY-NOTICES.txt is therefore unchanged and
+no file here carries a //was previously: marker.
+
+TWO RULES A MAINTAINER SHOULD NOT UNDO.
+
+  A1. TIMING IS EXACT RATIONALS, NOT DOUBLES, AND NOT ACCUMULATED TICKS. Every
+      length and every position in Abc/ is an AbcDuration - a reduced fraction of
+      a whole note - and AbcDuration.ToTicks is the ONLY place a value becomes an
+      integer. It is called on the accumulated exact POSITION, never on a running
+      total of already-rounded ticks. That is what makes a bar of septuplets
+      round individually and still end exactly on the next beat, and it is the
+      single property the tick-exact tests are fencing. A double would lose it
+      after two triplets; adding rounded ticks would lose it after one.
+  A2. A SKIPPED KIND IS REPORTED ONCE. AbcParseContext.AddOnce keys on a kind
+      name, not on the message, so a tune with four hundred decorations produces
+      one line. Reporting per occurrence would fill the 200-line cap with noise
+      and push the real problems off the end. New skipped constructs get a new
+      kind key, not a new Add call.
+
+THE ABC FIXTURES. tests/Assets/abc/ holds THREE files, and deliberately only
+three: single-tune.abc, two-tune-book.abc and two-voice.abc. They exist because
+AbcReader.Read(string) and AbcReader.Read(Stream) cannot be exercised against an
+inline string, and because the FILE-level rules - where a tune starts, where a
+blank line ends one, what free text before the first X: does - are about a file.
+Every rule-by-rule case is an inline string in the test that asserts it, where it
+can be read beside the tick it expects. ABC-FIXTURES.txt says what each file is
+for. They were written here; no third-party transcription is committed.
+
+WHERE THE CONVERSION'S PROBLEMS GO. AbcToMidi.Convert APPENDS to the tune's own
+AbcTune.Problems, because some departures are only visible once a resolution has
+been chosen - a tuplet that does not divide into whole ticks at 480, a tie
+between two pitches, more voices than there are channels. AbcTune.AddProblem
+ignores a line it already holds, so converting one tune repeatedly cannot grow
+the list. If that ever needs to change, change it in AddProblem rather than
+giving Convert a second output.
+
+THE GROWING MIDI STREAM
+-----------------------
+MidiStream is the counterpart of MidiSequence for music that is not finished
+yet, and MidiStreamSequencer is the counterpart of MidiSequencer over it. Both
+live in Synth/ and both carry the "NOT part of the MeltySynth port" marker.
+
+THE SEAM. MidiSynthDataProvider used to hold a MidiSequencer directly and read
+eleven things off it. Those eleven are now Synth/Internal/IMidiPlaybackCore.cs,
+implemented EXPLICITLY by MidiSequencer (in Synth/MidiSequencerPlaybackCore.cs,
+beside the ported file the way MidiSequenceTempoMap.cs sits beside MidiSequence)
+and by MidiStreamSequencer. The provider keeps its one MidiSequencer, builds a
+MidiStreamSequencer the first time a stream is started, and holds whichever is
+active in one field; everything after Start reads that field. Neither public
+surface changed, and the pre-existing provider and player tests are the fence
+that says so. The point of the seam is not tidiness: MidiSourceRenderer holds a
+MidiSequencer exactly the same way, so a stream track in the multi-track player
+is a field's type, not a second rendering path.
+
+Two things the provider does differently for a stream. Its Length is the
+stream's horizon, which GROWS, so the engine's Duration and its seek clamp
+follow the producer. And its end gate asks the core whether it has ENDED rather
+than whether it has reached the last message: a starved stream has not ended, so
+ReadBytes fills the buffer with silence and returns its length. Returning zero
+there would be the end of the music for good - SoundPlayerBase treats a
+zero-length read as its one end-of-stream signal.
+
+THE EQUIVALENCE FENCE. MidiStreamSequencerTests.a_stream_completed_before_
+playback_renders_exactly_as_its_sequence is the strongest assertion in the
+package: a stream completed before anyone played it renders, sample for sample
+and bit for bit, what MidiSequencer renders from stream.ToSequence(). Not to a
+tolerance. It holds because the stream's tick-to-time walk performs the same
+double arithmetic, through the same MidiSequence.GetTimeSpanFromSeconds, in the
+same order, as MidiSequence.MergeTracks - which means three things a reader
+would not guess:
+  - The walk steps through the recording's CONDUCTOR END TICK. MergeTracks walks
+    each track's end-of-track message, and the exported conductor track ends at
+    its last event - which can be a time or key signature, not a message - so
+    that tick splits a delta the stream's walk would otherwise not have split.
+    Truncation makes a split delta differ from an unsplit one by a TimeSpan tick,
+    and one TimeSpan tick is enough to move an event into the next block.
+  - A TIME SIGNATURE entry does NOT step the walk. ReadTrack does not keep them,
+    so they are not in the merged lists at all. Its beats-per-bar is peeked, not
+    committed.
+  - Entries sort by (tick, recording track, arrival order). That is exactly
+    MergeTracks' tie-break - lowest track index wins a tick, and a track's own
+    events keep their order - so several channels writing at one tick reach the
+    synthesizer in the same order down both paths, and allocate the same voices.
+    The fence's content is built to collide: two ticks carry messages on three
+    channels including channel 10, and a tempo change shares a tick with notes on
+    two others, all appended in an order that is not track order. Sorting by
+    (tick, arrival) instead makes the fence fail within half a second of audio.
+If the fence ever fails, the walk has drifted from MergeTracks. Fix the walk;
+never loosen the assertion to a tolerance.
+
+THE STARVATION STATE MACHINE. Two states and one rule, in ProcessEvents:
+  1. FIRE FIRST, in every state: everything whose time is at or before the head.
+     The event AT the horizon is every bar's last note-off, and a rule that
+     advanced the head before delivering it held that note-off back until the
+     next bar arrived. That was the first form of this rule, and it was wrong.
+  2. STARVED -> RUNNING when the stream is completed, or the horizon is AHEAD of
+     the head - not merely level with it - by at least a pre-roll. A sequencer
+     starts STARVED, so one threshold governs the first start and every
+     resumption. The "ahead of the head" half is what makes STARVED a state the
+     head can rest in: without it, a head sitting exactly on the horizon with a
+     zero pre-roll passes the test every block, moves, is clamped straight back
+     and starves again. That flip-flop lived inside the clamp and could not be
+     read from outside, which is why IsStarved used to be forced to answer from
+     the flag alone - and so answered "starved" between Play and the first block
+     rendered, whatever was written. CanResumeUnderGate is the condition in one
+     place; ProcessEvents applies it and IsStarved evaluates it live (under the
+     stream's lock, off the version-checked horizon cache), so the property is
+     right before a block has ever been rendered.
+  3. RUNNING advances the head by one block, CLAMPED at the horizon while the
+     stream is not completed; reaching the horizon makes it STARVED again. A
+     completed stream is never clamped and never starved.
+The pre-roll is therefore a resume threshold with hysteresis, not a gate that
+slides with the head: once running, playback continues past the point where less
+than a pre-roll is left, and stops only at a true underrun. It is compared in
+TIME, exactly - no tick conversion. The horizon's time is cached on the
+sequencer and re-derived FROM THE SEQUENCER'S OWN FRONTIER, never from tick zero
+on the audio thread, when MidiStream's append version has changed; a frontier
+walk and a fresh walk give the same answer because the steps a fresh walk would
+take to reach the frontier are the steps the playback walk already took.
+
+STORAGE. One List<Entry> of readonly structs kept sorted by (tick, track,
+order), binary-search insert from the end - in-order appends are O(1) amortized
+and a duration's note-off lands a few entries back - initial capacity 4096,
+doubling. The growth copy happens on the PRODUCER's thread under the stream's
+one lock; the audio thread never grows it and allocates nothing. If a
+measurement ever shows the audio thread waiting on a growth copy, the follow-up
+is chunked storage; it was not built speculatively. A late event is clamped to
+the playing sequencer's frontier TICK and also to its frontier INDEX: with the
+track tie-break, a clamped straggler could otherwise sort in front of an entry
+the walk had already consumed, where it would never play.
+
+THREE DEFECTS FIXED ALONGSIDE IT. Each was found while building the stream, each
+is older than it, and each has a fence:
+  - MidiFile.Export sorted the CALLER's track lists in place (MergeSort.Sort on
+    the list it was handed), so writing a file reordered the collection the
+    caller still held. It sorts a copy now; the bytes written are unchanged.
+    Fence: MidiFileTests.export_does_not_reorder_the_collection_it_was_given.
+  - A deep copy of a track left cloned note-ons pointing at note-offs that were
+    not in the copy: NoteOnEvent.Clone builds itself a fresh OffEvent, so cloning
+    a note-on and its note-off separately links neither to the other.
+    MidiEventCollection.Clone() relinks them - and MidiStream's snapshot uses it,
+    so editing a saved performance's note length moves the note-off the snapshot
+    actually holds. Fences:
+    MidiEventCollectionTests.clone_relinks_note_on_events_to_their_cloned_off_
+    events and MidiStreamTests.the_snapshot_links_each_note_on_to_its_own_off_
+    event.
+  - MidiSequencer.Speed's setter passed its message to the one-argument
+    ArgumentOutOfRangeException constructor, which takes the PARAMETER NAME. It
+    uses the (nameof(value), value, message) form now. Fence:
+    MidiSequencerTests.speed_rejects_a_negative_value_naming_the_parameter.
+
+ADDING THE OVERLOADS IS SOURCE-BREAKING FOR ONE CALL SHAPE. MidiMusicPlayer now
+has Load(SoundFont, MidiSequence) and Load(SoundFont, MidiStream), and the same
+pair for the other four, so a call that passes an untyped literal null as the
+second argument no longer compiles (CS0121). The remedy is a cast -
+Load(soundFont, (MidiSequence)null) - and three tests in this repository that
+assert Load rejects nulls needed exactly that.
 
 SHARP EDGES IN THE MULTI-TRACK PLAYER
 -------------------------------------

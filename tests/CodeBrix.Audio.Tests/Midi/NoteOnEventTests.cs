@@ -188,4 +188,45 @@ public class NoteOnEventTests
             Assert.Equal("Cannot set NoteLength when OffEvent is null", ex.Message);
         }
     }
+
+    [Fact]
+    public void a_note_on_without_a_note_off_clones_to_one_without_a_note_off()
+    {
+        //Arrange - reading a note-on straight off the wire leaves it with no note-off, which is the
+        // one shape whose length cannot be read.
+        using var stream = new MemoryStream(new byte[] { 60, 100 });
+        using var reader = new BinaryReader(stream);
+        var noteOn = new NoteOnEvent(reader);
+        noteOn.AbsoluteTime = 42;
+        noteOn.OffEvent.Should().BeNull();
+
+        //Act
+        var clone = noteOn.Clone() as NoteOnEvent;
+
+        //Assert
+        clone.Should().NotBeNull();
+        clone.Should().NotBeSameAs(noteOn);
+        clone.OffEvent.Should().BeNull();
+        clone.AbsoluteTime.Should().Be(42);
+        clone.NoteNumber.Should().Be(60);
+        clone.Velocity.Should().Be(100);
+        clone.CommandCode.Should().Be(noteOn.CommandCode);
+        clone.Channel.Should().Be(noteOn.Channel);
+    }
+
+    [Fact]
+    public void a_note_on_with_a_note_off_still_clones_to_one_of_its_own()
+    {
+        //Arrange
+        var noteOn = new NoteOnEvent(10, 2, 60, 100, 25);
+
+        //Act
+        var clone = noteOn.Clone() as NoteOnEvent;
+
+        //Assert
+        clone.OffEvent.Should().NotBeNull();
+        clone.OffEvent.Should().NotBeSameAs(noteOn.OffEvent);
+        clone.NoteLength.Should().Be(25);
+        clone.AbsoluteTime.Should().Be(10);
+    }
 }

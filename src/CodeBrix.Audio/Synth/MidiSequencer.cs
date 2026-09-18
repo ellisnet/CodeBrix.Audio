@@ -11,7 +11,9 @@ namespace CodeBrix.Audio.Synth; //was previously: MeltySynth
 /// If you want to control playback and render the waveform in separate threads,
 /// you must make sure that the methods are not called at the same time.
 /// </remarks>
-public sealed class MidiSequencer : IAudioRenderer
+//was previously: the class was not partial; the CodeBrix-only playback-core seam lives in
+//MidiSequencerPlaybackCore.cs so this file stays as close to upstream as it can.
+public sealed partial class MidiSequencer : IAudioRenderer
 {
     //was previously: the field, constructor, hook delegate and Synthesizer property were typed as the
     //concrete MeltySynth Synthesizer; they take the IMidiSynthesizer contract now so one sequencer
@@ -274,6 +276,7 @@ public sealed class MidiSequencer : IAudioRenderer
     /// The default value is 1.
     /// The tempo will be multiplied by this value.
     /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
     public float Speed
     {
         get => speed;
@@ -286,7 +289,10 @@ public sealed class MidiSequencer : IAudioRenderer
             }
             else
             {
-                throw new ArgumentOutOfRangeException("The playback speed must be a non-negative value.");
+                //was previously: the message was passed to the single-argument constructor, which
+                //takes the PARAMETER NAME - so the exception named the sentence rather than "value".
+                throw new ArgumentOutOfRangeException(nameof(value), value,
+                    "The playback speed must be a non-negative value.");
             }
         }
     }

@@ -278,7 +278,7 @@ public class ModestSynthesizerTests
         //Act
         Action noSynthesizer = () => player.Load((IMidiSynthesizer)null, sequence);
         Action noFactory = () => player.Load((Func<int, IMidiSynthesizer>)null, sequence);
-        Action noSequence = () => player.Load(Build(ModestSynthPresets.SubSine()), null);
+        Action noSequence = () => player.Load(Build(ModestSynthPresets.SubSine()), (MidiSequence)null);
 
         //Assert
         // The device is never opened: every one of these is rejected before the player starts anything.

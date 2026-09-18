@@ -555,14 +555,19 @@ public class MidiFile
 
                 long absoluteTime = events.StartAbsoluteTime;
 
-                // use a stable sort to preserve ordering of MIDI events whose 
+                // use a stable sort to preserve ordering of MIDI events whose
                 // absolute times are the same
-                MergeSort.Sort(eventList, new MidiEventComparer());
-                if (eventList.Count > 0)
+                //was previously: the caller's own list was sorted IN PLACE, so exporting a
+                //collection reordered the collection that was passed in - a write that quietly
+                //edited its argument. The bytes written are the same either way; a copy is sorted
+                //now, and what the caller still holds is left exactly as it was.
+                var ordered = new List<MidiEvent>(eventList);
+                MergeSort.Sort(ordered, new MidiEventComparer());
+                if (ordered.Count > 0)
                 {
-                    System.Diagnostics.Debug.Assert(MidiEvent.IsEndTrack(eventList[eventList.Count - 1]), "Exporting a track with a missing end track");
+                    System.Diagnostics.Debug.Assert(MidiEvent.IsEndTrack(ordered[ordered.Count - 1]), "Exporting a track with a missing end track");
                 }
-                foreach (var midiEvent in eventList)
+                foreach (var midiEvent in ordered)
                 {
                     midiEvent.Export(ref absoluteTime, writer);
                 }

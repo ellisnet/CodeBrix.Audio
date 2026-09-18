@@ -1,0 +1,41 @@
+==============================================================================
+tests/Assets/abc - abc notation test fixtures
+==============================================================================
+
+These files are NOT third-party transcriptions. Every one was written for this
+test suite: they are scales and held chords chosen so that the expected tick of
+every note can be worked out by hand and written into the test.
+
+Most of the abc cases are inline strings in the tests themselves, which is where
+a fixture belongs when the test is about one rule. These three exist because the
+PATH and STREAM entry points - AbcReader.Read(string) and AbcReader.Read(Stream)
+- can only be exercised against a real file, and because the file-level rules
+(where a tune starts, where it ends, what a blank line does) are about a FILE
+rather than about a fragment.
+
+WHAT EACH FIXTURE IS FOR
+------------------------------------------------------------------------------
+  single-tune.abc      One tune, one voice, every header field the reader uses:
+                       X, T, C, M, L, Q and K. A C major scale up and down in
+                       quarter notes, so each of the sixteen notes falls on a
+                       multiple of the tick resolution. The everyday case, and
+                       the input for the path and stream entry points.
+
+  two-tune-book.abc    Two tunes in one file, separated by a blank line - what
+                       the standard calls a tunebook. The second carries a
+                       repeated T: field and a C: field, so the "first title is
+                       the title" rule and the composer both have something to
+                       read. The two tunes are in different keys and different
+                       meters, which is what catches a reader leaking state from
+                       one tune into the next.
+
+  two-voice.abc        Two named voices, each with a %%MIDI program directive,
+                       written one complete voice at a time (the second of the
+                       two layouts the standard shows). It is the fixture for
+                       the voice-to-channel rule, for voice names becoming track
+                       names, and for the program directives.
+
+A note on the leading "%abc-2.1" line: the standard asks for it, and it is a
+comment as far as this reader is concerned, so it also quietly tests that a
+comment before the first X: field does not become free text that swallows the
+tune.

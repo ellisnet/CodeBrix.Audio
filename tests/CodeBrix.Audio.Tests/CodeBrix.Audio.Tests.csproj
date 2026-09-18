@@ -60,6 +60,19 @@
   </ItemGroup>
 
   <!--
+    Abc notation fixtures for the CodeBrix.Audio.Abc tests. They were written for this suite - no
+    third-party transcription is bundled - and exist because the path and stream entry points need a
+    real file; the rule-by-rule cases are inline strings in the tests. tests/Assets/abc/
+    ABC-FIXTURES.txt says what each one is for.
+  -->
+  <ItemGroup>
+    <Content Include="..\Assets\abc\*.abc">
+      <Link>Assets\abc\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!--
     The Decent Sampler name list the feature cross-check reads. It is derived from the developer
     guide and lives beside the tests that use it rather than in tests/Assets, because it is a list
     of names rather than generated audio.

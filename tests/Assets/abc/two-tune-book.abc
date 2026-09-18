@@ -1,0 +1,17 @@
+%abc-2.1
+% Two tunes in one file, separated by a blank line: an abc tunebook.
+X:1
+T:First Tune
+M:2/4
+L:1/8
+K:G
+GABc|d2d2|]
+
+X:2
+T:Second Tune
+T:Also Known As
+C:Anon.
+M:6/8
+L:1/8
+K:Dm
+DEF GAB|c3 d3|]

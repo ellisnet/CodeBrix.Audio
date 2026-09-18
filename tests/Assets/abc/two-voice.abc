@@ -1,0 +1,16 @@
+%abc-2.1
+% Two named voices, each with its own instrument, written one voice at a time.
+X:1
+T:Two Voices
+M:4/4
+L:1/4
+Q:1/4=90
+K:C
+V:1 name="Upper"
+%%MIDI program 40
+V:2 name="Lower"
+%%MIDI program 42
+V:1
+c2c2|c4|]
+V:2
+C2C2|C4|]

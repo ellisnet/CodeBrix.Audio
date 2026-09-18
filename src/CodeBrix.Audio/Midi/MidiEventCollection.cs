@@ -222,6 +222,65 @@ public class MidiEventCollection : IEnumerable<IList<MidiEvent>>
     }
 
     /// <summary>
+    /// Creates a deep copy of this collection: the same tracks, in the same order, holding copies
+    /// of every event.
+    /// </summary>
+    /// <returns>The copy, carrying this collection's file type, resolution and start time.</returns>
+    /// <remarks>
+    /// <para>
+    /// Each cloned note-on is RELINKED to the clone of its own note-off when that note-off is on
+    /// the same track. Cloning the two events separately does not do this - a cloned note-on builds
+    /// itself a fresh note-off that nothing else in the copy points at - so setting a note's length
+    /// in the copy would move a note-off the copy does not actually contain.
+    /// </para>
+    /// <para>
+    /// A note-on whose note-off is MISSING is copied as it stands - the copy carries no note-off
+    /// either, and there is nothing to relink. Such an event only arises from a file that breaks
+    /// the rules, and tolerant reading closes the note at the end of its track rather than leaving
+    /// one behind, so a collection read the ordinary way never holds one.
+    /// </para>
+    /// </remarks>
+    public MidiEventCollection Clone()
+    {
+        var clone = new MidiEventCollection(midiFileType, DeltaTicksPerQuarterNote)
+        {
+            StartAbsoluteTime = StartAbsoluteTime
+        };
+
+        foreach (var track in trackEvents)
+        {
+            var copies = new List<MidiEvent>(track.Count);
+            var offEvents = new Dictionary<MidiEvent, NoteEvent>();
+
+            foreach (var midiEvent in track)
+            {
+                var copy = midiEvent.Clone();
+                copies.Add(copy);
+
+                if (midiEvent is NoteEvent noteEvent && copy is NoteEvent noteCopy &&
+                    MidiEvent.IsNoteOff(midiEvent))
+                {
+                    offEvents[noteEvent] = noteCopy;
+                }
+            }
+
+            for (var index = 0; index < track.Count; index++)
+            {
+                if (track[index] is NoteOnEvent noteOn && noteOn.OffEvent != null &&
+                    copies[index] is NoteOnEvent noteOnCopy &&
+                    offEvents.TryGetValue(noteOn.OffEvent, out var offCopy))
+                {
+                    noteOnCopy.OffEvent = offCopy;
+                }
+            }
+
+            clone.AddTrack(copies);
+        }
+
+        return clone;
+    }
+
+    /// <summary>
     /// Sorts, removes empty tracks and adds end track markers
     /// </summary>
     public void PrepareForExport()

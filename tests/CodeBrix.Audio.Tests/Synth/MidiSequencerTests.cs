@@ -69,6 +69,21 @@ public class MidiSequencerTests
         Peak(left).Should().BeLessThan(1e-4f);
     }
 
+    [Fact]
+    public void speed_rejects_a_negative_value_naming_the_parameter()
+    {
+        //Arrange
+        var sequencer = new MidiSequencer(new SoundFontSynthesizer(MultiTrackTestSong.SoundFont, SampleRate));
+
+        //Act
+        Action act = () => sequencer.Speed = -1F;
+
+        //Assert - the message used to be passed where the PARAMETER NAME goes, so the exception
+        // named the whole sentence and a caller reading ParamName learned nothing.
+        act.Should().Throw<ArgumentOutOfRangeException>()
+            .Which.ParamName.Should().Be("value");
+    }
+
     private static float Peak(float[] samples)
     {
         var peak = 0f;

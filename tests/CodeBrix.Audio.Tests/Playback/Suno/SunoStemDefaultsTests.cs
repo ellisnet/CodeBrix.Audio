@@ -1,3 +1,4 @@
+using System.Linq;
 using CodeBrix.Audio.Playback.Suno;
 using SilverAssertions;
 using Xunit;
@@ -9,6 +10,38 @@ public class SunoStemDefaultsTests
     [Fact]
     public void the_vocabulary_holds_all_twelve_names_suno_advertises() =>
         SunoStemDefaults.KnownStemNames.Should().HaveCount(12);
+
+    [Fact]
+    public void every_stem_keeps_the_program_channel_and_percussion_flag_it_was_given()
+    {
+        // The table is written with GeneralMidiProgram members rather than bare numbers, so this
+        // pins the NUMBERS they stand for - all twelve of them, in order, not just the eight the
+        // measured-defaults theory below covers.
+        //Arrange
+        var expected = new[]
+        {
+            ("Vocals", 54, 1, false),
+            ("Backing Vocals", 53, 1, false),
+            ("Drums", 118, 10, true),
+            ("Percussion", 9, 10, true),
+            ("Bass", 32, 1, false),
+            ("Guitar", 24, 1, false),
+            ("Keyboard", 0, 1, false),
+            ("Piano", 0, 1, false),
+            ("Synth", 80, 1, false),
+            ("Strings", 48, 1, false),
+            ("Brass", 61, 1, false),
+            ("FX", 96, 1, false),
+        };
+
+        //Act
+        var actual = SunoStemDefaults.All
+            .Select(stem => (stem.Name, stem.GmProgram, stem.Channel, stem.IsPercussion))
+            .ToArray();
+
+        //Assert
+        actual.Should().Equal(expected);
+    }
 
     [Theory]
     [InlineData("Vocals", 54, 1, false)]

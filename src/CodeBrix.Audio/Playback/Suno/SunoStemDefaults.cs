@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using CodeBrix.Audio.Midi;
 
 namespace CodeBrix.Audio.Playback.Suno;
 
@@ -21,6 +22,13 @@ namespace CodeBrix.Audio.Playback.Suno;
 /// Names are matched case-insensitively and with surrounding whitespace ignored, because the name
 /// comes off a file name.
 /// </para>
+/// <para>
+/// The two percussion stems sit on channel 10, where a program number chooses a DRUM KIT rather
+/// than the melodic sound of the same number. Their numbers are still written below as
+/// <see cref="GeneralMidiProgram"/> members, because that is what the number IS on the wire; the
+/// name beside it is the melodic sound that number would select on any other channel, and is not
+/// what is heard.
+/// </para>
 /// </remarks>
 public static class SunoStemDefaults
 {
@@ -28,18 +36,18 @@ public static class SunoStemDefaults
     // produces the same model whether it was read from a zip or from a folder.
     private static readonly SunoStemDefault[] Known =
     [
-        new SunoStemDefault("Vocals", 54, 1, false),          // Synth Voice, measured
-        new SunoStemDefault("Backing Vocals", 53, 1, false),  // Voice Oohs, measured
-        new SunoStemDefault("Drums", 118, 10, true),          // kit number on channel 10, measured
-        new SunoStemDefault("Percussion", 9, 10, true),       // kit number on channel 10, measured
-        new SunoStemDefault("Bass", 32, 1, false),            // Acoustic Bass, measured
-        new SunoStemDefault("Guitar", 24, 1, false),          // Nylon Guitar, measured
-        new SunoStemDefault("Keyboard", 0, 1, false),         // Acoustic Grand Piano, inferred
-        new SunoStemDefault("Piano", 0, 1, false),            // Acoustic Grand Piano, inferred
-        new SunoStemDefault("Synth", 80, 1, false),           // Lead 1 (square), measured
-        new SunoStemDefault("Strings", 48, 1, false),         // String Ensemble 1, inferred
-        new SunoStemDefault("Brass", 61, 1, false),           // Brass Section, inferred
-        new SunoStemDefault("FX", 96, 1, false),              // FX 1 (rain), measured
+        new SunoStemDefault("Vocals", (int)GeneralMidiProgram.SynthVoice, 1, false),               // measured
+        new SunoStemDefault("Backing Vocals", (int)GeneralMidiProgram.VoiceOohs, 1, false),        // measured
+        new SunoStemDefault("Drums", (int)GeneralMidiProgram.SynthDrum, 10, true),                 // kit number on channel 10, measured
+        new SunoStemDefault("Percussion", (int)GeneralMidiProgram.Glockenspiel, 10, true),         // kit number on channel 10, measured
+        new SunoStemDefault("Bass", (int)GeneralMidiProgram.AcousticBass, 1, false),               // measured
+        new SunoStemDefault("Guitar", (int)GeneralMidiProgram.AcousticGuitarNylon, 1, false),      // measured
+        new SunoStemDefault("Keyboard", (int)GeneralMidiProgram.AcousticGrandPiano, 1, false),     // inferred
+        new SunoStemDefault("Piano", (int)GeneralMidiProgram.AcousticGrandPiano, 1, false),        // inferred
+        new SunoStemDefault("Synth", (int)GeneralMidiProgram.Lead1Square, 1, false),               // measured
+        new SunoStemDefault("Strings", (int)GeneralMidiProgram.StringEnsemble1, 1, false),         // inferred
+        new SunoStemDefault("Brass", (int)GeneralMidiProgram.BrassSection, 1, false),              // inferred
+        new SunoStemDefault("FX", (int)GeneralMidiProgram.Fx1Rain, 1, false),                      // measured
     ];
 
     private static readonly Dictionary<string, int> IndexByName = BuildIndex();
@@ -87,7 +95,9 @@ public static class SunoStemDefaults
     /// <param name="stemName">The stem name, as it appeared on the file name.</param>
     /// <returns>The defaults to apply to that stem.</returns>
     public static SunoStemDefault GetOrFallback(string stemName) =>
-        TryGet(stemName, out var known) ? known : new SunoStemDefault(stemName ?? string.Empty, 0, 1, false);
+        TryGet(stemName, out var known)
+            ? known
+            : new SunoStemDefault(stemName ?? string.Empty, (int)GeneralMidiProgram.AcousticGrandPiano, 1, false);
 
     /// <summary>
     /// Where a stem name sorts among the known names, or a value past the end of the vocabulary for

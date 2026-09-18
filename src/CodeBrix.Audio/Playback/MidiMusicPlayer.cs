@@ -37,6 +37,13 @@ namespace CodeBrix.Audio.Playback;
 /// voices finish sounding, on the <see cref="SynchronizationContext"/> captured at load if there is
 /// one.
 /// </para>
+/// <para>
+/// A <see cref="MidiStream"/> loads wherever a <see cref="MidiSequence"/> does, for music that is
+/// still being written: the player plays from the head while the tail is still arriving, waits in
+/// silence when it catches up with the producer rather than ending, and ends when the producer
+/// completes the stream. <see cref="Stream"/>, <see cref="IsStarved"/> and <see cref="Duration"/>
+/// are what that adds; every other control means what it always did.
+/// </para>
 /// <para>Dispose when finished.</para>
 /// </remarks>
 public sealed class MidiMusicPlayer : IDisposable
@@ -50,6 +57,7 @@ public sealed class MidiMusicPlayer : IDisposable
     private SoundPlayer _player;
     private SynchronizationContext _syncContext;
     private MidiSequence _sequence;
+    private MidiStream _stream;
     private MidiSequencer.MessageHook _messageFilter;
     private MidiMessageObserver _messageObserver;
     private float _volume = 1.0f;
@@ -68,6 +76,11 @@ public sealed class MidiMusicPlayer : IDisposable
     /// while <see cref="IsLooping"/> is set. Raised on the <see cref="SynchronizationContext"/>
     /// captured when the sequence was loaded, if there is one; otherwise on a background thread.
     /// </summary>
+    /// <remarks>
+    /// A loaded <see cref="MidiStream"/> reaches its end when its producer has called
+    /// <see cref="MidiStream.Complete"/> AND everything written has played - a producer that simply
+    /// stops without completing leaves the player playing, and starved, for ever.
+    /// </remarks>
     public event EventHandler PlaybackEnded;
 
     /// <summary>Whether a SoundFont and sequence are loaded and ready to play.</summary>
@@ -83,9 +96,25 @@ public sealed class MidiMusicPlayer : IDisposable
     }
 
     /// <summary>The total length of the loaded sequence. <see cref="TimeSpan.Zero"/> if nothing is loaded.</summary>
+    /// <remarks>
+    /// For a loaded <see cref="MidiStream"/> this is how far its producer has got so far, so it
+    /// GROWS as the music is written and is final only once the stream has been completed. A
+    /// progress bar built on it therefore has a moving end until then.
+    /// </remarks>
     public TimeSpan Duration
     {
-        get { lock (_lock) { return _sequence == null ? TimeSpan.Zero : _sequence.Length; } }
+        get
+        {
+            lock (_lock)
+            {
+                if (_sequence != null)
+                {
+                    return _sequence.Length;
+                }
+
+                return _stream == null ? TimeSpan.Zero : _stream.HorizonTime;
+            }
+        }
     }
 
     /// <summary>The current playback state (Stopped / Playing / Paused).</summary>
@@ -144,6 +173,12 @@ public sealed class MidiMusicPlayer : IDisposable
     /// <see cref="MidiSequenceLoopType"/>); a sequence with no loop point repeats from the start.
     /// Persists across loads.
     /// </summary>
+    /// <remarks>
+    /// IGNORED while a <see cref="MidiStream"/> is loaded: a growing timeline has no end to loop
+    /// at. Setting it neither throws nor is refused - it is a property of the PLAYER, so it keeps
+    /// the value it was given and applies to the next sequence loaded. To loop a finished stream,
+    /// play its <see cref="MidiStream.ToSequence"/>.
+    /// </remarks>
     public bool IsLooping
     {
         get { lock (_lock) { return _isLooping; } }
@@ -362,6 +397,34 @@ public sealed class MidiMusicPlayer : IDisposable
     public MidiSequence Sequence
     {
         get { lock (_lock) { return _sequence; } }
+    }
+
+    /// <summary>
+    /// The stream currently loaded, or <see langword="null"/> if a sequence is loaded or nothing
+    /// is.
+    /// </summary>
+    /// <remarks>
+    /// One or the other: <see cref="Sequence"/> is <see langword="null"/> while a stream is loaded.
+    /// </remarks>
+    public MidiStream Stream
+    {
+        get { lock (_lock) { return _stream; } }
+    }
+
+    /// <summary>
+    /// Whether playback has caught up with the producer of a loaded <see cref="MidiStream"/>: the
+    /// stream is not complete and there is not enough written ahead to play on.
+    /// </summary>
+    /// <remarks>
+    /// A starved player is still PLAYING - it plays silence, plus the ring-out of whatever was
+    /// sounding - and carries on from where it held as soon as enough arrives.
+    /// <see cref="Position"/> holds meanwhile. It is answered from what is written ahead of the
+    /// head, so it is right the moment a stream is loaded and not only once playback has begun.
+    /// Always <see langword="false"/> when a sequence is loaded or nothing is.
+    /// </remarks>
+    public bool IsStarved
+    {
+        get { lock (_lock) { return _provider != null && _provider.IsStarved; } }
     }
 
     /// <summary>
@@ -641,7 +704,7 @@ public sealed class MidiMusicPlayer : IDisposable
             throw new ArgumentNullException(nameof(soundFont));
         }
 
-        LoadCore(rate => new SoundFontSynthesizer(soundFont, rate), sequence);
+        LoadCore(SynthesizerFor(soundFont), sequence);
     }
 
     /// <summary>
@@ -659,7 +722,7 @@ public sealed class MidiMusicPlayer : IDisposable
             throw new ArgumentNullException(nameof(instrument));
         }
 
-        LoadCore(rate => new SfzSynthesizer(instrument, rate), sequence);
+        LoadCore(SynthesizerFor(instrument), sequence);
     }
 
     /// <summary>
@@ -681,14 +744,7 @@ public sealed class MidiMusicPlayer : IDisposable
             throw new ArgumentNullException(nameof(instrument));
         }
 
-        LoadCore(
-            rate => new DecentSamplerSynthesizer(instrument, rate)
-            {
-                TempoSource = _tempoSource,
-                MpeMemberBendRange = _mpeMemberBendRange,
-                MpeMode = _mpeMode,
-            },
-            sequence);
+        LoadCore(SynthesizerFor(instrument), sequence);
     }
 
     /// <summary>
@@ -721,7 +777,7 @@ public sealed class MidiMusicPlayer : IDisposable
             throw new ArgumentNullException(nameof(synthesizer));
         }
 
-        LoadCore(_ => synthesizer, sequence);
+        LoadCore(SynthesizerFor(synthesizer), sequence);
     }
 
     /// <summary>
@@ -748,6 +804,132 @@ public sealed class MidiMusicPlayer : IDisposable
         LoadCore(synthesizerFactory, sequence);
     }
 
+    /// <summary>
+    /// Loads a shared SoundFont and a MIDI stream that is still being written - the stream form of
+    /// <see cref="Load(SoundFont, MidiSequence)"/>.
+    /// </summary>
+    /// <param name="soundFont">The SoundFont to render with.</param>
+    /// <param name="stream">The stream to play. It may be empty, and may still be growing.</param>
+    /// <remarks>
+    /// See <see cref="Stream"/>, <see cref="IsStarved"/> and <see cref="Duration"/> for what a
+    /// growing timeline changes: the player waits in silence rather than ending when it catches up
+    /// with the producer, and its duration grows until the producer completes the stream.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    /// <exception cref="InvalidOperationException">The stream is already being played elsewhere.</exception>
+    public void Load(SoundFont soundFont, MidiStream stream)
+    {
+        if (soundFont == null)
+        {
+            throw new ArgumentNullException(nameof(soundFont));
+        }
+
+        LoadCore(SynthesizerFor(soundFont), stream);
+    }
+
+    /// <summary>
+    /// Loads a shared SFZ instrument and a MIDI stream that is still being written - the stream
+    /// form of <see cref="Load(SfzInstrument, MidiSequence)"/>.
+    /// </summary>
+    /// <param name="instrument">The SFZ instrument to render with.</param>
+    /// <param name="stream">The stream to play. It may be empty, and may still be growing.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    /// <exception cref="InvalidOperationException">The stream is already being played elsewhere.</exception>
+    public void Load(SfzInstrument instrument, MidiStream stream)
+    {
+        if (instrument == null)
+        {
+            throw new ArgumentNullException(nameof(instrument));
+        }
+
+        LoadCore(SynthesizerFor(instrument), stream);
+    }
+
+    /// <summary>
+    /// Loads a shared Decent Sampler instrument and a MIDI stream that is still being written - the
+    /// stream form of <see cref="Load(DecentSamplerInstrument, MidiSequence)"/>.
+    /// </summary>
+    /// <remarks>
+    /// The synthesizer reads this player's <see cref="TempoSource"/>, so a note delay or a
+    /// retrigger interval written in beats follows the tempo the stream is at.
+    /// </remarks>
+    /// <param name="instrument">The Decent Sampler instrument to render with.</param>
+    /// <param name="stream">The stream to play. It may be empty, and may still be growing.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    /// <exception cref="InvalidOperationException">The stream is already being played elsewhere.</exception>
+    public void Load(DecentSamplerInstrument instrument, MidiStream stream)
+    {
+        if (instrument == null)
+        {
+            throw new ArgumentNullException(nameof(instrument));
+        }
+
+        LoadCore(SynthesizerFor(instrument), stream);
+    }
+
+    /// <summary>
+    /// Loads a synthesizer of your own and a MIDI stream that is still being written - the stream
+    /// form of <see cref="Load(IMidiSynthesizer, MidiSequence)"/>.
+    /// </summary>
+    /// <param name="synthesizer">
+    /// The synthesizer to play. The player takes it as it is; the same sample-rate and ownership
+    /// rules apply as for the sequence form.
+    /// </param>
+    /// <param name="stream">The stream to play. It may be empty, and may still be growing.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    /// <exception cref="InvalidOperationException">The stream is already being played elsewhere.</exception>
+    public void Load(IMidiSynthesizer synthesizer, MidiStream stream)
+    {
+        if (synthesizer == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizer));
+        }
+
+        LoadCore(SynthesizerFor(synthesizer), stream);
+    }
+
+    /// <summary>
+    /// Loads a MIDI stream that is still being written and a factory that builds the synthesizer to
+    /// play it with - the stream form of
+    /// <see cref="Load(Func{int, IMidiSynthesizer}, MidiSequence)"/>.
+    /// </summary>
+    /// <param name="synthesizerFactory">
+    /// Builds the synthesizer. Its argument is the device's sample rate in Hz, and the synthesizer
+    /// it returns must render at that rate. Called once per load, on the calling thread.
+    /// </param>
+    /// <param name="stream">The stream to play. It may be empty, and may still be growing.</param>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    /// <exception cref="InvalidOperationException">The stream is already being played elsewhere.</exception>
+    public void Load(Func<int, IMidiSynthesizer> synthesizerFactory, MidiStream stream)
+    {
+        if (synthesizerFactory == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizerFactory));
+        }
+
+        LoadCore(synthesizerFactory, stream);
+    }
+
+    // The four format-specific overloads build their synthesizer in one place each, so a sequence
+    // and a stream of the same format are played by exactly the same instrument - including the
+    // settings a Decent Sampler instrument is handed at construction.
+    private Func<int, IMidiSynthesizer> SynthesizerFor(SoundFont soundFont) =>
+        rate => new SoundFontSynthesizer(soundFont, rate);
+
+    private Func<int, IMidiSynthesizer> SynthesizerFor(SfzInstrument instrument) =>
+        rate => new SfzSynthesizer(instrument, rate);
+
+    private Func<int, IMidiSynthesizer> SynthesizerFor(DecentSamplerInstrument instrument) =>
+        rate => new DecentSamplerSynthesizer(instrument, rate)
+        {
+            TempoSource = _tempoSource,
+            MpeMemberBendRange = _mpeMemberBendRange,
+            MpeMode = _mpeMode,
+        };
+
+    private static Func<int, IMidiSynthesizer> SynthesizerFor(IMidiSynthesizer synthesizer) =>
+        _ => synthesizer;
+
     private void LoadCore(Func<int, IMidiSynthesizer> createSynthesizer, MidiSequence sequence)
     {
         if (sequence == null)
@@ -755,6 +937,22 @@ public sealed class MidiMusicPlayer : IDisposable
             throw new ArgumentNullException(nameof(sequence));
         }
 
+        LoadCore(createSynthesizer, sequence, null);
+    }
+
+    private void LoadCore(Func<int, IMidiSynthesizer> createSynthesizer, MidiStream stream)
+    {
+        if (stream == null)
+        {
+            throw new ArgumentNullException(nameof(stream));
+        }
+
+        LoadCore(createSynthesizer, null, stream);
+    }
+
+    // Exactly one of the two is loaded; everything else about a load is the same either way.
+    private void LoadCore(Func<int, IMidiSynthesizer> createSynthesizer, MidiSequence sequence, MidiStream stream)
+    {
         lock (_lock)
         {
             ThrowIfDisposed();
@@ -787,7 +985,16 @@ public sealed class MidiMusicPlayer : IDisposable
                 provider.MessageObserver = _messageObserver;
                 provider.Tempo = _tempoSource;
 
-                provider.Start(sequence, _isLooping);
+                if (stream == null)
+                {
+                    provider.Start(sequence, _isLooping);
+                }
+                else
+                {
+                    // Throws if another player already holds the stream - before the engine player
+                    // is built, so a refused load leaves nothing behind.
+                    provider.Start(stream);
+                }
 
                 player = new SoundPlayer(device.Engine, device.Format, provider)
                 {
@@ -818,6 +1025,7 @@ public sealed class MidiMusicPlayer : IDisposable
             _provider = provider;
             _player = player;
             _sequence = sequence;
+            _stream = stream;
 
             // The MPE settings belong to the PLAYER, not to any one instrument, so they are applied
             // to whatever was just loaded - the same rule Speed and the message hooks follow. A
@@ -878,11 +1086,17 @@ public sealed class MidiMusicPlayer : IDisposable
             _player.Stop();
             _tempoSource.IsPlaying = false;
 
-            // Rewind by restarting the sequence: a stopped MIDI player should be at bar one with no
-            // note, controller or pitch-bend state left over from where it was interrupted.
+            // Rewind by restarting what is loaded: a stopped MIDI player should be at bar one with
+            // no note, controller or pitch-bend state left over from where it was interrupted. A
+            // stream keeps everything that has been written, so it plays again from the top -
+            // while it is still being produced, or after it has been completed.
             if (_sequence != null)
             {
                 _provider.Start(_sequence, _isLooping);
+            }
+            else if (_stream != null)
+            {
+                _provider.Start(_stream);
             }
         }
     }
@@ -969,6 +1183,10 @@ public sealed class MidiMusicPlayer : IDisposable
         _synthesizer = null;
         _mpe = null;
         _sequence = null;
+
+        // Disposing the provider stopped the stream sequencer, which released the stream: another
+        // player may take it now.
+        _stream = null;
         _tempoSource.IsPlaying = false;
     }
 

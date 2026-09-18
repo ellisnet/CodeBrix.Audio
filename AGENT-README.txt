@@ -106,7 +106,11 @@ KEY NAMESPACES / USINGS
                                    //   alignment estimator
   using CodeBrix.Audio.Playback.Suno;  // loads a Suno stems download into a song
                                        //   the multi-track player plays
-  using CodeBrix.Audio.Midi;       // MIDI file read/write + event hierarchy
+  using CodeBrix.Audio.Midi;       // MIDI file read/write + event hierarchy,
+                                   //   and the General MIDI sound-set names
+  using CodeBrix.Audio.Abc;        // reads abc notation (.abc) and converts a
+                                   //   tune to the MIDI model — see "READING ABC
+                                   //   NOTATION"
   using CodeBrix.Audio.Dsp;        // FFT, biquad filters, analysis primitives
   using CodeBrix.Audio.Synth;      // SoundFont (.sf2) rendering + MIDI music
                                    //   playback — see "TWO SOUNDFONT PATHS"
@@ -278,18 +282,26 @@ OTHER MIDI model instead, which parses all of them:
 Parsing the same file twice — once as MidiSequence to play, once as MidiFile to
 inspect — is the intended pattern. MIDI files are kilobytes; this costs nothing.
 
-TWO TYPES NAMED FOR MIDI FILES. Same rule, same reason:
+TWO TYPES NAMED FOR MIDI FILES, AND A THIRD FOR MUSIC THAT IS NOT WRITTEN YET.
+Same rule, same reason:
 
   CodeBrix.Audio.Midi.MidiFile      The editable file model. Read it, edit the
                                     event collection, write it back out.
-  CodeBrix.Audio.Synth.MidiSequence The immutable decoded sequence. You play it.
-                                    Flattened absolute-time messages; no tracks,
-                                    no meta events, no editing, no writing.
+  CodeBrix.Audio.Synth.MidiSequence The immutable decoded sequence. You play it,
+                                    and it is finished before you do. Flattened
+                                    absolute-time messages; no tracks, no meta
+                                    events, no editing, no writing.
+  CodeBrix.Audio.Synth.MidiStream   The growing timeline. You play it WHILE it is
+                                    still being written, and it keeps an editable
+                                    recording of everything appended — see
+                                    "PLAYING MIDI THAT IS STILL BEING WRITTEN".
 
 Convert with MidiSequence.FromEvents(MidiEventCollection) — build or edit in the
 Midi model, then play it. There is deliberately no reverse conversion: the
 sequence has already discarded track structure and non-playable meta events, so
-converting back would silently lose them.
+converting back would silently lose them. A stream goes both ways round:
+stream.ToMidiEventCollection() for the Midi model, stream.ToSequence() for the
+finished sequence.
 
 
 FIVE TYPE NAMES COLLIDE ACROSS THE TWO BUNDLED ASSEMBLIES. This package ships
@@ -332,6 +344,139 @@ For ordinary playback you never need the Engine namespaces at all: AudioFilePlay
 PacketAudioPlayer, SoundEffectClip, WaveOutEvent and SharedAudioOutput all speak
 CodeBrix.Audio types. Import an Engine namespace only for something the Engine
 alone offers (recording, effects, editing/mixing), and alias the collision.
+
+
+
+PLAYING MIDI THAT IS STILL BEING WRITTEN
+========================================
+A MidiSequence is finished before you play it. A MidiStream is not: it is a MIDI
+timeline you can play WHILE it is still being written, so a producer can append a
+bar at a time while the music is already sounding.
+
+  stream        the growing timeline (CodeBrix.Audio.Synth.MidiStream)
+  producer      whatever appends to it — any thread, any pace
+  head          where playback has got to, in ticks and in time
+  horizon       the latest tick appended so far; how far ahead the head may go
+  starved       the head has caught up with the horizon and the stream is not
+                complete: playback HOLDS its position and plays silence (plus the
+                ring-out of whatever was sounding) until more arrives
+  pre-roll      how much has to be written ahead of the head before playback
+                starts, and before it starts again after a starvation
+  late event    an event appended at a tick the head has already passed: it is
+                delivered at the next block and counted, never dropped
+  complete      the producer's "no more": Append refuses from then on, and
+                playback drains to the last event and ends the way a file does
+  recording     the editable MidiEventCollection the stream builds as it goes, so
+                what was heard can be saved as a .mid
+
+A COMPLETE EXAMPLE
+
+    using CodeBrix.Audio.Midi;
+    using CodeBrix.Audio.Playback;
+    using CodeBrix.Audio.Synth;
+
+    var stream = new MidiStream(ticksPerQuarterNote: 480);
+    stream.Preroll = TimeSpan.FromSeconds(1);   // wait for a second of music, then go
+
+    using var player = new MidiMusicPlayer();
+    player.Load(new SoundFont("piano.sf2"), stream);
+    player.Play();                 // playing, and starved: silence until the first bar lands
+
+    // The producer. Any thread; this one writes a bar at a time as it works it out.
+    await Task.Run(() =>
+    {
+        stream.AppendTempo(0, 96);
+        stream.Append(new TimeSignatureEvent(0, 3, 2, 24, 8));
+
+        var tick = 0L;
+        foreach (var bar in NextBars())                  // your own code
+        {
+            foreach (var note in bar.Notes)
+            {
+                // channel 1..16 — this is the CodeBrix.Audio.Midi model, not the
+                // synthesizer's 0-based one
+                stream.AppendNote(tick + note.Offset, 1, note.Number, 100, note.LengthTicks);
+            }
+
+            stream.Append(new ControlChangeEvent(tick, 1, MidiController.Expression, bar.Swell));
+            tick += 4 * 480;
+        }
+
+        stream.Complete();         // or the player waits, playing silence, for ever
+    });
+
+    // Everything that was heard is still here, at its own tick:
+    MidiFile.Export("performance.mid", stream.ToMidiEventCollection());
+
+    // ... and the finished piece is an ordinary sequence, for looping or an offline render:
+    var sequence = stream.ToSequence();
+
+STARVATION AND THE PRE-ROLL. Every block, the player first delivers everything
+the head has reached — including the event AT the horizon, which is every bar's
+last note-off — and then moves the head on, never past the horizon. When the head
+reaches the horizon the stream is STARVED: the position holds, the synthesizer
+keeps rendering (so release tails, and a note whose note-off has not been written
+yet, keep sounding), and the state stays Playing. It is playing: it is playing
+silence. Preroll is the RESUME threshold: playback starts, and starts again after
+an underrun, once that much is written ahead of the head. It is not a gap the
+head has to keep — once running, playback carries on even when less than a
+pre-roll is left, and stops only at a true underrun. Watch player.IsStarved — it
+answers from what is written ahead of the head, so it is right the moment a
+stream is loaded and not only once playback has begun — and watch
+stream.LateEventCount: a producer that keeps arriving late is telling you its
+pre-roll is too small.
+
+COMPLETE() OR IT WAITS FOR EVER. A producer that simply stops writing leaves the
+player playing, and starved, with no end in sight — PlaybackEnded never fires.
+That is deliberate: a stream cannot tell "nothing more yet" from "nothing more".
+Call stream.Complete() when the music is finished (player.Stop() is the other way
+out). PlaybackEnded is then raised exactly as it is for a sequence: after the
+last event has played and the last voice has finished.
+
+CHANNELS ARE 1-BASED ON A STREAM. Append takes the CodeBrix.Audio.Midi event
+model, whose channels run 1..16, and that is the only convention on MidiStream's
+surface. The 0-based form still belongs to the synthesizer, so SendMidiMessage,
+the two message hooks and ProcessMidiMessage are unchanged: 0..15 there.
+
+ONE PLAYER PER STREAM AT A TIME. Loading a stream that another player is already
+playing throws InvalidOperationException. Dispose (or load something else into)
+the first player and the stream is free again. player.Stop() does NOT hand it
+over — it rewinds it: a stream keeps everything written so far, so the piece can
+be heard again from the top, mid-production or after.
+
+ISLOOPING IS IGNORED FOR A STREAM. A growing timeline has no end to loop at.
+Setting it neither throws nor is refused — it is a property of the PLAYER and
+keeps its value for the next sequence you load. To loop a finished piece, play
+stream.ToSequence() the ordinary way.
+
+DURATION GROWS. player.Duration is the horizon so far, so it moves as the
+producer writes and settles only once the stream has been completed. A progress
+bar built on it has a moving end until then. player.Position holds while starved.
+Seeking past the horizon clamps to it.
+
+DON'T APPEND FROM A HOOK. MidiMessageProcessed and MidiMessageFilter run on the
+audio thread, and for a stream they run under the stream's own lock as well.
+Appending from one is re-entrant rather than deadlocked, but it is still the
+audio thread doing composition work. Hand the message to your own thread, as the
+hooks' own rules already say.
+
+LATE EVENTS ARE DELIVERED, NEVER DROPPED. An event appended at a tick the head
+has already passed is played at the head on the very next block and counted in
+LateEventCount — a late note-off is precisely the event that must not be lost.
+The RECORDING keeps its original tick, so what you save is the composition as it
+was meant, not as it was heard.
+
+WHAT THE RECORDING LOOKS LIKE. ToMidiEventCollection() is a type 1 collection at
+the stream's own resolution: track 0 is the conductor track (tempo, time
+signature, key signature, text, markers, sysex) and then one track per channel
+that has received a channel message, in the order the channels were first used. A
+stream with no conductor events has no conductor track — empty tracks are removed
+when the snapshot is prepared for export. It is a snapshot taken under the
+stream's lock, safe at any time from any thread, including while the piece is
+still being written and played.
+
+NOT MIDI INPUT. This plays a timeline that your own code writes. It is not a MIDI
+device input: this package reads no hardware port, and a stream adds none.
 
 
 
@@ -523,6 +668,41 @@ MIDI:
   - MidiEventCollection   : per-track event collection used for read and write.
   - MidiReadMode          : Tolerant (the default everywhere) or Strict. The one
                             option both MIDI readers share.
+  - GeneralMidiProgram    : the 128 General MIDI Level 1 sounds as an enum, valued
+                            0..127 the way a program change carries them, so
+                            (int)GeneralMidiProgram.Violin IS the patch number.
+  - GeneralMidiPercussion : the GM Level 1 drum kit, valued 35..81 - the note
+                            numbers that select a drum on the percussion channel.
+  - GeneralMidiProgramFamily : the sixteen families of eight the patch map is
+                            grouped into (Piano ... SoundEffects).
+  - GeneralMidi           : the names, exactly as the MIDI Association publishes
+                            them - DisplayName(program/percussion/family) - plus
+                            FamilyOf(program) and PercussionChannel (10, in this
+                            library's 1-based channel numbering; a status byte on
+                            the wire carries the same channel as 9).
+
+ABC:
+  - AbcReader             : reads abc notation - Parse(text), Read(path),
+                            Read(stream) - into an AbcTuneBook. TOLERANT: content
+                            problems are listed, never thrown. See below.
+  - AbcTuneBook           : the tunes one file or one piece of text held, plus
+                            file-level Problems.
+  - AbcTune               : one tune as the text wrote it - ReferenceNumber,
+                            Titles, Composer, Meter, UnitNoteLength, Tempo, Key,
+                            Voices, Problems. Repeats are NOT unrolled here.
+  - AbcVoice / AbcBar     : a voice's bars, and what each bar holds: AbcNote,
+                            AbcRest, AbcChord, AbcGraceGroup, AbcTupletGroup,
+                            AbcInlineField, AbcProgramChange - with AbcBarLine
+                            and the ending numbers around them.
+  - AbcDuration           : an exact fraction of a whole note. Every length and
+                            every position in the model is one of these, never a
+                            double.
+  - AbcToMidi             : Convert(tune) / Convert(tune, options) ->
+                            MidiEventCollection (type 1, PrepareForExport already
+                            applied). Repeats ARE unrolled here.
+  - AbcToMidiOptions      : TicksPerQuarterNote (480), DefaultBeatsPerMinute
+                            (120), Velocity (100), GraceNoteLength (1/64),
+                            VoiceChannels, HonourMidiDirectives (true).
 
 READING A MIDI FILE THAT BREAKS THE RULES
   Plenty of real MIDI files depart from the specification, and a machine-written
@@ -565,6 +745,113 @@ READING A MIDI FILE THAT BREAKS THE RULES
   file to absolute time (loading a sequence CONSUMES the tempo events, so this is
   the only place the map survives).
 
+READING ABC NOTATION
+  Abc notation is music written as plain text: a header of information fields,
+  then music code where a letter is a note - "CDEF|GABc|" is a C major scale.
+  Sessions, tune collections and folk databases carry hundreds of thousands of
+  tunes in it, and one file holds one tune or many.
+
+  Three calls take a .abc file to sound:
+
+    using CodeBrix.Audio.Abc;
+    using CodeBrix.Audio.Synth;
+    using CodeBrix.Audio.Playback;
+
+    var book = AbcReader.Read("session-tunes.abc");   // does not throw on content
+    var midi = AbcToMidi.Convert(book.Tunes[0]);      // MidiEventCollection
+    var music = new MidiMusicPlayer();
+    music.Load(soundFont, MidiSequence.FromEvents(midi));
+    music.Play();
+
+  AbcToMidi.Convert returns the ordinary editable model, with PrepareForExport
+  already applied, so the same collection saves as a standard MIDI file:
+
+    MidiFile.Export("session-tunes.mid", midi);
+
+  WHAT IS READ:
+    HEADER  X: reference number, T: title (repeatable - the first is the title),
+            C: composer, M: meter (n/m, C, C|, none, and a complex numerator such
+            as (2+3+2)/8, whose parts are summed), L: unit note length - and when
+            there is none, the standard's default from the meter: below 0.75 a
+            sixteenth note, at 0.75 or above an eighth, and an eighth for C, C|
+            and free meter. Q: tempo in every 2.1 form - "1/4=120", "3/8=50", up
+            to four beats that are summed ("1/4 3/8 1/4 3/8=40"), the deprecated
+            bare number (unit note lengths per minute), a text label with or
+            without a value. K: key - a letter with an optional accidental, a
+            mode in full or abbreviated to three letters (major/maj, minor/min/m,
+            mixolydian/mix, dorian/dor, phrygian/phr, lydian/lyd, locrian/loc,
+            ionian/ion, aeolian/aeo), K:none, and accidentals written after the
+            key, with or without "exp". V: voices, by id and name=.
+    INLINE  [K:..] [M:..] [L:..] [Q:..] [V:..] inside a line, and the same fields
+            on a line of their own inside the body, change the state from that
+            point on.
+    BODY    notes C D E F G A B c d e f g a b, accidentals ^ ^^ = _ __, octave
+            marks ' and , in any number and any order; lengths n, /n, n/m and the
+            / and // shorthands; broken rhythm > < >> << >>> <<<; rests z, the
+            invisible x, and the multi-measure Z; chords [CEG] with a length
+            inside, outside or both; ties -, which merge two notes into one;
+            slurs ( ), which change no tick; grace notes {..} and {/..}; tuplets
+            (p, (p:q and (p:q:r, with the standard's table for an omitted q;
+            bar lines | || |] [| [|] .| |: :| :: and the extra dots that repeat
+            a section more than twice; first and second (and further) endings in
+            both spellings, [1 and |1, including lists and ranges such as [1,3
+            and [1-3; comments %; line continuation \.
+    %%MIDI  two of abc2midi's directives, because they are the only common way an
+            abc file names an instrument: "%%MIDI program n" and
+            "%%MIDI program c n" become a program change at the point they stand,
+            and "%%MIDI channel n" puts the voice on that channel. The program
+            number is 0 to 127, as abc2midi counts programs - program 0 is the
+            acoustic grand piano - which is exactly what GeneralMidiProgram
+            names, so (int)GeneralMidiProgram.Violin is the 40 in
+            "%%MIDI program 40". The channel is 1 to 16, as abc2midi counts
+            channels. "[I:MIDI program n]" is the same directive inline.
+
+  WHAT IS SKIPPED, AND LISTED ONCE: decorations (!..!, +..+ and the shorthands
+  ~ . H L M O P S T u v), chord symbols "Am", annotations "^text", lyrics w: and
+  W:, parts P:, clefs and transposition, the voice overlay operator &, every
+  other information field, and every stylesheet directive other than the two
+  %%MIDI ones. Each KIND is named once, never once per occurrence, so a real tune
+  full of ornaments produces two lines rather than four hundred.
+
+  VOICES AND CHANNELS: voices take channels in the order they first appear - 1,
+  2, 3 ... - SKIPPING CHANNEL 10, which General MIDI reserves for percussion. A
+  %%MIDI channel directive overrides that, and AbcToMidiOptions.VoiceChannels
+  overrides both; the single voice of a tune with no V: field has an empty id, so
+  options.VoiceChannels[""] = 10 is how a one-voice tune is put on the drums.
+  More than fifteen voices wrap round, and that is said once.
+
+  GRACE NOTES TAKE THEIR TIME FROM THE NOTE THEY PRECEDE, which is the convention
+  every abc-to-MIDI converter follows: each grace lasts
+  AbcToMidiOptions.GraceNoteLength (1/64 of a whole note by default), the note
+  after them starts that much later and is shortened by the same amount, and the
+  graces are squeezed if they would take more than half of it. Graces before a
+  rest, or at the very end with nothing after them, have nothing to take time
+  from: they sound at their own length and what follows keeps its place.
+
+  ACCIDENTALS follow the standard's DEFAULT rule, %%propagate-accidentals pitch:
+  an accidental holds for the same note letter in EVERY octave until the end of
+  the bar, and a written natural = cancels both it and the key signature. The
+  directive itself is skipped, and listed once.
+
+  TIMING IS TICK-EXACT. Every length and every position is carried as an exact
+  fraction of a whole note and converted to ticks once, at the moment an event is
+  created, from the accumulated exact position - never by adding up rounded
+  ticks. A triplet therefore cannot push the rest of the tune off the beat.
+  Where a tuplet does not divide into whole ticks at the chosen resolution, that
+  is said once and the notes are rounded to the nearest tick.
+
+  REPEATS ARE UNROLLED in Convert, because MIDI has no repeat marks: |: ... :|
+  appears twice in the events, numbered endings select which bars belong to which
+  pass, and a :| with no |: before it repeats from the start of the tune, as the
+  standard recommends.
+
+  THE PROBLEMS HABIT is the MIDI reader's, unchanged: one human-readable line per
+  departure, in the order found; empty means the tune held nothing that could not
+  be honoured; capped; NEVER thrown. File-level problems are on
+  AbcTuneBook.Problems and a tune's own on AbcTune.Problems, and Convert adds to
+  the tune's list the things only the conversion can know. A null argument or a
+  missing file DOES throw - those are the caller's mistake, not the content's.
+
 SoundFont rendering and MIDI music (CodeBrix.Audio.Synth) — read "TWO SOUNDFONT
 PATHS" above first:
   - SoundFont             : a parsed .sf2. Public object model: SoundFontInfo,
@@ -583,6 +870,19 @@ PATHS" above first:
                             MidiSequence.FromEvents(MidiEventCollection) converts
                             from the editable CodeBrix.Audio.Midi model.
   - MidiSequencer         : drives a synthesizer from a sequence; Play/Stop/Seek.
+  - MidiStream            : a MIDI timeline that can be PLAYED WHILE IT IS STILL
+                            BEING WRITTEN. Append(MidiEvent) / Append(events) /
+                            AppendNote / AppendTempo from any thread, Complete()
+                            when the music is finished; Preroll, HorizonTicks,
+                            HorizonTime, IsCompleted, EventCount, LateEventCount,
+                            Problems; ToMidiEventCollection() for the editable
+                            recording and ToSequence() for the finished piece.
+                            Channels are 1-based, as everywhere in the Midi model.
+                            See "PLAYING MIDI THAT IS STILL BEING WRITTEN".
+  - MidiStreamSequencer   : drives a synthesizer from a MidiStream; Play/Stop/
+                            Seek, Position, PositionTicks, Length (the horizon,
+                            which grows), IsStarved, EndOfStream, Speed,
+                            BeatsPerBar. MidiMusicPlayer uses it for you.
   - SoundFontRenderer     : offline rendering - Render(...) to a float buffer, or
                             RenderToWavFile(...) / RenderToWavStream(...). No
                             audio device involved, and faster than real time.
@@ -597,6 +897,15 @@ PATHS" above first:
                               .Sequence           the loaded MidiSequence (the
                                                   only way to reach it after the
                                                   Load(path, path) overload).
+                              .Stream             the loaded MidiStream, for
+                                                  music still being written -
+                                                  null when a sequence is loaded,
+                                                  and Sequence is null when a
+                                                  stream is. Duration then GROWS
+                                                  with the producer.
+                              .IsStarved          whether a loaded stream has
+                                                  caught up with its producer and
+                                                  is playing silence.
                               SendMidiMessage()   send alongside the sequence,
                                                   from any thread, safely.
                               SetChannelVolume()  CC7 - how a layered
@@ -615,6 +924,8 @@ PATHS" above first:
                                                      surface, applied to
                                                      whichever instrument format
                                                      is loaded.
+                            Every Load overload that takes a MidiSequence has a
+                            twin that takes a MidiStream.
                             See "THE TWO MIDI MESSAGE HOOKS" above before using
                             either hook - they are not interchangeable.
 
@@ -2786,6 +3097,26 @@ PERFORMANCE TIPS
 
 COMMON PITFALLS TO AVOID
 ========================
+  - Abc voices SKIP CHANNEL 10. Voices take channels in the order they first
+    appear - 1, 2, 3 ... - and channel 10 is left out, because General MIDI
+    reserves it for percussion and a melody landing there plays as drums. If you
+    WANT a voice on the drums, say so: options.VoiceChannels["Drums"] = 10, or
+    options.VoiceChannels[""] = 10 for the single voice of a tune with no V:
+    field. Do not count on the third voice being on channel 3 once a %%MIDI
+    channel directive is in play.
+  - Abc grace notes MOVE THE NOTE THEY PRECEDE. They are not extra notes squeezed
+    in before the beat: the note after them starts later by the graces' total
+    length and is shortened by the same amount, so the bar still adds up. Code
+    that expects the note after "{g}" to land on the beat will be off by
+    AbcToMidiOptions.GraceNoteLength. Set that option to shorten or lengthen the
+    effect; there is no way to make a grace note cost nothing, because something
+    has to sound.
+  - An abc tune's Problems list keeps growing: AbcToMidi.Convert ADDS to the
+    tune's list what only the conversion can know - a tuplet that does not divide
+    into whole ticks, a tie between two different pitches, more voices than
+    channels. Read AbcTune.Problems AFTER converting, not between the read and
+    the convert. (The same line is never added twice, so converting one tune
+    repeatedly is safe.)
   - Renders are repeatable per machine, not across operating systems: every
     synthesizer is deterministic (seeded randomness, fixed-point resampling), so
     the same instrument and the same events produce the same bytes on the same
@@ -2888,6 +3219,28 @@ COMMON PITFALLS TO AVOID
     a Stream, and a Stream audio source is copied into memory when the track is
     built. Several hundred megabytes of WAV, twice. Use the default cache folder
     unless the host genuinely cannot write to disk.
+  - A MidiStream that is never COMPLETED never ends. The player stays Playing and
+    starved, Position holds, and PlaybackEnded never fires - the stream cannot
+    tell "nothing more yet" from "nothing more". Call stream.Complete() when the
+    music is finished; player.Stop() is the only other way out.
+  - A stream's Duration and the provider's Length GROW. Anything that caches a
+    duration once - a progress bar's maximum, a scheduler's end time - reads a
+    number that was true when it asked and is now too small. Re-read it, or wait
+    for IsCompleted.
+  - Channels on a MidiStream are 1-based (the Midi event model); channels on
+    SendMidiMessage, the two hooks and ProcessMidiMessage are 0-based (the
+    synthesizer). Appending a note "on channel 0" throws; sending a message "on
+    channel 16" throws. This is the same split the package has always had, and a
+    stream keeps to the Midi side of it.
+  - Do not append to a stream from inside a message hook. The hook is already on
+    the audio thread and already under the stream's lock. It will not deadlock,
+    but composing from a render callback is not a thing to do on purpose.
+  - One player per stream at a time. A second Load of the same stream throws
+    InvalidOperationException; player.Stop() rewinds the stream rather than
+    handing it over, and disposing the player is what releases it.
+  - IsLooping does nothing to a stream. It neither throws nor turns itself off -
+    it is a player property and applies to the next sequence loaded. Loop
+    stream.ToSequence() instead.
   - Decent Sampler: REGISTER THE ADD-ON BEFORE YOU LOAD. A preset whose group
     holds an <oscillator>, or whose chain names phaser, pitch_shift, wave_folder,
     wave_shaper, stereo_simulator, bit_crusher or gate, needs the
@@ -3078,6 +3431,8 @@ file that exercises it.
   MIDI
     Midi/MidiFileTests.cs, MidiFileTests.cs     read/write round trips.
     Midi/MidiEventCollectionTest.cs             tracks, PrepareForExport.
+    Midi/MidiEventCollectionTests.cs            Clone(), and the note-on to
+                                                note-off links it keeps.
     Midi/NoteOnEventTests.cs, Midi/NoteEventTests.cs,
     Midi/ControlChangeEventTests.cs, Midi/PitchWheelChangeEventTests.cs,
     Midi/SysexEventTests.cs, Midi/TimeSignatureEventTests.cs,
@@ -3118,10 +3473,22 @@ file that exercises it.
 
   SOUNDFONT, SFZ, DECENT SAMPLER AND MIDI MUSIC
     Synth/MidiMusicPlayerTests.cs      the transport, Speed, the channel
-                                       helpers, and BOTH message hooks.
+                                       helpers, BOTH message hooks, and a stream
+                                       played while it is still being written.
     Synth/MidiSequenceTests.cs, Synth/MidiSequenceBridgeTests.cs
                                        MidiSequence, and FromEvents(...) as the
                                        bridge from the editable MIDI model.
+    Synth/MidiStreamTests.cs           what a growing timeline takes, in what
+                                       order it keeps it, what it refuses, and
+                                       the recording it builds as it goes.
+    Synth/MidiStreamSequencerTests.cs  playing one: starvation and the pre-roll,
+                                       late events, seeking, the transport - and
+                                       the assertion that a stream completed
+                                       before playback renders exactly what its
+                                       sequence renders, sample for sample.
+    StreamingTestProducer.cs           the producer those tests drive: the motif
+                                       a bar at a time, on demand, with no timer
+                                       and no real time anywhere.
     Synth/SoundFontRendererTests.cs    offline Render / RenderToWavFile.
     Synth/SoundFontCacheTests.cs       sharing one .sf2.
     Synth/Sfz/SfzInstrumentTests.cs, Synth/Sfz/SfzInstrumentCacheTests.cs,
@@ -3213,6 +3580,11 @@ QUICK REFERENCE CARD
                                           MidiFile.Export(path, collection)
   play a .mid through a .sf2, .sfz or a   new MidiMusicPlayer()
     Decent Sampler preset
+  play music that is still being written  var stream = new MidiStream(480);
+                                          music.Load(soundFont, stream)
+  say the music is finished               stream.Complete()
+  save what was played as a .mid          MidiFile.Export(path,
+                                              stream.ToMidiEventCollection())
   load a Decent Sampler instrument        DecentSamplerInstrument.Load(path)
   list the presets in a .dslibrary        DecentSamplerContainer.Open(path)
                                               .FindPresets()
@@ -3228,6 +3600,22 @@ QUICK REFERENCE CARD
                                               .RenderWithAuxiliary(...)
   play an MPE clip                        player.MpeMode = MpeMode.Auto
   see what a format feature costs         DecentSamplerResidualTable.Describe()
+  read an .abc file                       AbcReader.Read(path)
+  read abc from a string                  AbcReader.Parse(text)
+  play an abc tune                        AbcToMidi.Convert(book.Tunes[0])
+                                          MidiSequence.FromEvents(collection)
+  save an abc tune as a .mid              MidiFile.Export(path,
+                                              AbcToMidi.Convert(tune))
+  put an abc voice on a chosen channel    options.VoiceChannels["T1"] = 4
+  ignore an abc tune's instrument choices options.HonourMidiDirectives = false
+  see what an abc tune did not carry      tune.Problems / book.Problems
+  name a General MIDI program             GeneralMidi.DisplayName(
+                                              GeneralMidiProgram.Violin)
+  set a track's instrument by name        new PatchChangeEvent(tick, channel,
+                                              (int)GeneralMidiProgram.Flute)
+  name a drum on the percussion channel   GeneralMidi.DisplayName(
+                                              GeneralMidiPercussion.Cowbell)
+  put a part on the drum channel          channel = GeneralMidi.PercussionChannel
   read a .mid that breaks the rules       new MidiFile(path)   // tolerant
                                           file.Problems
   validate a .mid instead of playing it   new MidiFile(path, MidiReadMode.Strict)
@@ -3295,6 +3683,24 @@ QUICK REFERENCE CARD
     music.Load(DecentSamplerInstrument instrument, MidiSequence sequence)
     music.Load(IMidiSynthesizer synthesizer, MidiSequence sequence)
     music.Load(Func<int, IMidiSynthesizer> factory, MidiSequence sequence)
+    music.Load(SoundFont soundFont, MidiStream stream)   // and the same four
+    music.Load(SfzInstrument instrument, MidiStream stream)          //   twins
+    music.Load(DecentSamplerInstrument instrument, MidiStream stream)
+    music.Load(IMidiSynthesizer synthesizer, MidiStream stream)
+    music.Load(Func<int, IMidiSynthesizer> factory, MidiStream stream)
+    music.Stream / music.IsStarved                      // MidiMusicPlayer
+    AbcReader.Parse(string text)                    // also Read(string path)
+    AbcReader.Read(Stream stream)                   //   and Read(Stream)
+    AbcToMidi.Convert(AbcTune tune)
+    AbcToMidi.Convert(AbcTune tune, AbcToMidiOptions options)
+    new MidiStream(int ticksPerQuarterNote = 480)
+    stream.Preroll = TimeSpan.FromSeconds(1)
+    stream.AppendNote(long tick, int channel, int note, int velocity, long length)
+    stream.AppendTempo(long tick, double beatsPerMinute)
+    stream.Append(MidiEvent midiEvent)      // also (IEnumerable<MidiEvent>)
+    stream.Complete()
+    stream.HorizonTicks / .HorizonTime / .LateEventCount / .Problems
+    stream.ToMidiEventCollection() / stream.ToSequence()
     music.DropAuxiliaryOutputs = true                   // MidiMusicPlayer
     music.MpeMode = MpeMode.Auto / music.MpeMemberBendRange = 48
     music.GetReleaseVelocity(int channel, int key)

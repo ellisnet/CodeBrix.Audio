@@ -2,12 +2,14 @@ using System;
 using CodeBrix.Audio.Engine.Enums;
 using CodeBrix.Audio.Engine.Interfaces;
 using CodeBrix.Audio.Engine.Metadata.Models;
+using CodeBrix.Audio.Synth.Internal;
 
 namespace CodeBrix.Audio.Synth;
 
 /// <summary>
-/// Feeds a <see cref="MidiSequencer"/> into the audio engine as a stereo float source, and owns the
-/// thread-safety contract the synthesizer itself does not provide.
+/// Feeds a <see cref="MidiSequencer"/> or a <see cref="MidiStreamSequencer"/> into the audio engine
+/// as a stereo float source, and owns the thread-safety contract the synthesizer itself does not
+/// provide.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,6 +28,14 @@ namespace CodeBrix.Audio.Synth;
 /// zero-length read is the engine's one end-of-stream signal - it is what moves the engine player to
 /// Stopped and ultimately raises <c>MidiMusicPlayer.PlaybackEnded</c>.
 /// </para>
+/// <para>
+/// A <see cref="MidiStream"/> is played through the same path, by holding whichever sequencer is
+/// active as an <see cref="IMidiPlaybackCore"/>. Everything downstream of <c>Start</c> reads the
+/// core, so there is one rendering path rather than two. The difference a growing timeline makes is
+/// at the end gate: a stream that is STARVED has not ended, so it returns SILENCE of the length
+/// asked for and the engine plays on - it is only a COMPLETED stream, drained and rung out, that
+/// returns zero.
+/// </para>
 /// </remarks>
 internal sealed class MidiSynthDataProvider : ISoundDataProvider
 {
@@ -40,6 +50,9 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
     private readonly float[] _right;
     private readonly int _maxTailFrames;
 
+    private MidiStreamSequencer _streamSequencer;
+    private IMidiPlaybackCore _core;
+    private MidiStream _stream;
     private MidiSequence _sequence;
     private TempoSource _tempoSource;
     private MidiSequencer.MessageHook _messageFilter;
@@ -59,6 +72,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
         }
 
         _sequencer = new MidiSequencer(synthesizer);
+        _core = _sequencer;
         SampleRate = synthesizer.SampleRate;
         _maxTailFrames = (int)(MaxTailSeconds * synthesizer.SampleRate);
 
@@ -79,7 +93,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
         {
             lock (_lock)
             {
-                return (int)(_sequencer.Position.TotalSeconds * SampleRate);
+                return (int)(_core.Position.TotalSeconds * SampleRate);
             }
         }
     }
@@ -91,7 +105,9 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
         {
             lock (_lock)
             {
-                return _sequence == null ? 0 : (int)(_sequence.Length.TotalSeconds * SampleRate);
+                // For a stream this is the horizon, which grows as its producer appends - so the
+                // engine's Duration follows the producer, and a seek clamps to what exists.
+                return (int)(_core.Length.TotalSeconds * SampleRate);
             }
         }
     }
@@ -120,10 +136,25 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
         get { lock (_lock) { return _sequence; } }
     }
 
-    /// <summary>The current playback position within the sequence.</summary>
+    /// <summary>The stream currently loaded, or <see langword="null"/>.</summary>
+    internal MidiStream Stream
+    {
+        get { lock (_lock) { return _stream; } }
+    }
+
+    /// <summary>
+    /// Whether a loaded stream has caught up with its producer. Always <see langword="false"/> for a
+    /// sequence, which is all there before it starts.
+    /// </summary>
+    internal bool IsStarved
+    {
+        get { lock (_lock) { return _stream != null && _streamSequencer.IsStarved; } }
+    }
+
+    /// <summary>The current playback position within the sequence or stream.</summary>
     internal TimeSpan CurrentTime
     {
-        get { lock (_lock) { return _sequencer.Position; } }
+        get { lock (_lock) { return _core.Position; } }
     }
 
     /// <summary>
@@ -139,8 +170,21 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
     /// <summary>The playback speed multiplier the sequencer is running at.</summary>
     internal float Speed
     {
-        get { lock (_lock) { return _sequencer.Speed; } }
-        set { lock (_lock) { _sequencer.Speed = value; } }
+        get { lock (_lock) { return _core.Speed; } }
+
+        set
+        {
+            lock (_lock)
+            {
+                // Both sequencers are kept at the player's speed, whichever is active: the speed is
+                // a property of the player and survives a switch from one to the other.
+                _sequencer.Speed = value;
+                if (_streamSequencer != null)
+                {
+                    _streamSequencer.Speed = value;
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -180,7 +224,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
                 return;
             }
 
-            _sequencer.Synthesizer.ProcessMidiMessage(channel, command, data1, data2);
+            _core.Synthesizer.ProcessMidiMessage(channel, command, data1, data2);
         }
     }
 
@@ -190,9 +234,15 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
     // Callers hold _lock.
     private void RefreshHook()
     {
-        _sequencer.OnSendMessage = _messageFilter == null && _messageObserver == null
+        var hook = _messageFilter == null && _messageObserver == null
             ? null
-            : OnSequencerMessage;
+            : (MidiSequencer.MessageHook)OnSequencerMessage;
+
+        _sequencer.OnSendMessage = hook;
+        if (_streamSequencer != null)
+        {
+            _streamSequencer.OnSendMessage = hook;
+        }
     }
 
     // Runs on the audio thread, inside ReadBytes, with _lock already held by this thread.
@@ -222,13 +272,70 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
     {
         lock (_lock)
         {
+            ReleaseStream();
+
             _sequence = sequence;
             _looping = loop;
             _endRaised = false;
             _tailFramesRendered = 0;
+            _core = _sequencer;
             _sequencer.Play(sequence, loop);
             PublishTempo(_tempoSource != null && _tempoSource.IsPlaying);
         }
+    }
+
+    /// <summary>
+    /// Starts the given stream from its beginning, which is also how a playing stream is rewound.
+    /// </summary>
+    /// <param name="stream">The stream to play.</param>
+    /// <remarks>
+    /// The stream sequencer is built the first time one is asked for, and carries the speed and the
+    /// message hook the provider is already running with. A stream never loops (a growing timeline
+    /// has no end to loop at), so looping is turned off for as long as one is loaded.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="stream"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">Another sequencer is playing the stream.</exception>
+    internal void Start(MidiStream stream)
+    {
+        if (stream == null)
+        {
+            throw new ArgumentNullException(nameof(stream));
+        }
+
+        lock (_lock)
+        {
+            if (_streamSequencer == null)
+            {
+                _streamSequencer = new MidiStreamSequencer(_sequencer.Synthesizer);
+                _streamSequencer.Speed = _sequencer.Speed;
+                _streamSequencer.OnSendMessage = _sequencer.OnSendMessage;
+            }
+
+            // A sequence and a stream share one synthesizer, so the sequence path has to let go of
+            // it before the stream path takes over.
+            _sequencer.Stop();
+            _sequence = null;
+
+            _stream = stream;
+            _looping = false;
+            _endRaised = false;
+            _tailFramesRendered = 0;
+            _core = _streamSequencer;
+            _streamSequencer.Play(stream);
+            PublishTempo(_tempoSource != null && _tempoSource.IsPlaying);
+        }
+    }
+
+    // Lets go of a loaded stream, so nobody is left holding a claim on it. Callers hold _lock.
+    private void ReleaseStream()
+    {
+        if (_stream == null)
+        {
+            return;
+        }
+
+        _stream = null;
+        _streamSequencer?.Stop();
     }
 
     /// <summary>
@@ -244,23 +351,27 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
             return;
         }
 
-        var map = _sequence?.TempoMap;
-        if (map == null)
+        if (_sequence == null && _stream == null)
         {
             tempo.IsPlaying = isPlaying;
             return;
         }
 
-        var time = _sequencer.Position;
-        tempo.Update(map.BeatsPerMinuteAt(time), map.BeatPositionAt(time), isPlaying);
+        tempo.Update(_core.CurrentBeatsPerMinute, _core.CurrentBeatPosition, isPlaying);
+
+        // A sequence never carries a time signature and reports the default of four; a stream
+        // reports what its last one declared. This is the field MidiSequence could never fill.
+        tempo.BeatsPerBar = _core.BeatsPerBar;
     }
 
-    /// <summary>Stops playback and silences all voices.</summary>
+    /// <summary>Stops playback and silences all voices, releasing a loaded stream.</summary>
     internal void StopSequence()
     {
         lock (_lock)
         {
+            ReleaseStream();
             _sequencer.Stop();
+            _core = _sequencer;
             _endRaised = false;
             _tailFramesRendered = 0;
         }
@@ -268,11 +379,12 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
 
     /// <summary>Changes whether the loaded sequence loops, restarting it so the sequencer agrees.</summary>
     /// <param name="loop">The new looping state.</param>
+    /// <remarks>Ignored while a stream is loaded: a growing timeline has no end to loop at.</remarks>
     internal void SetLooping(bool loop)
     {
         lock (_lock)
         {
-            if (_looping == loop || _sequence == null)
+            if (_looping == loop || _sequence == null || _stream != null)
             {
                 return;
             }
@@ -298,7 +410,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
                 return 0;
             }
 
-            if (_sequence == null)
+            if (_sequence == null && _stream == null)
             {
                 buffer.Clear();
                 return buffer.Length;
@@ -311,8 +423,10 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
             // than a latch, so seeking back before the end resumes rendering. The voice check lets
             // the final release tails ring out before the cut; the frame cap bounds that ring-out
             // for a voice whose note-off never comes.
-            if (!_looping && _sequencer.EndOfSequence &&
-                (_sequencer.Synthesizer.ActiveVoiceCount == 0 || _tailFramesRendered >= _maxTailFrames))
+            // For a stream, "ended" means completed AND drained: a starved stream has not ended,
+            // so the loop below fills the buffer with silence and the engine plays on.
+            if (!_looping && _core.IsEnded &&
+                (_core.Synthesizer.ActiveVoiceCount == 0 || _tailFramesRendered >= _maxTailFrames))
             {
                 if (!_endRaised)
                 {
@@ -333,7 +447,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
 
                 var left = _left.AsSpan(0, take);
                 var right = _right.AsSpan(0, take);
-                _sequencer.Render(left, right);
+                _core.Render(left, right);
 
                 for (var i = 0; i < take; i++)
                 {
@@ -344,7 +458,7 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
                 written += take;
             }
 
-            if (!_looping && _sequencer.EndOfSequence)
+            if (!_looping && _core.IsEnded)
             {
                 _tailFramesRendered += frames;
             }
@@ -361,13 +475,13 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
     {
         lock (_lock)
         {
-            if (_disposed || _sequence == null)
+            if (_disposed || (_sequence == null && _stream == null))
             {
                 return;
             }
 
             var seconds = offset <= 0 ? 0d : (double)offset / SampleRate;
-            _sequencer.Seek(TimeSpan.FromSeconds(seconds));
+            _core.Seek(TimeSpan.FromSeconds(seconds));
             _endRaised = false;
             _tailFramesRendered = 0;
             PublishTempo(_tempoSource != null && _tempoSource.IsPlaying);
@@ -385,7 +499,9 @@ internal sealed class MidiSynthDataProvider : ISoundDataProvider
             }
 
             _disposed = true;
+            ReleaseStream();
             _sequencer.Stop();
+            _core = _sequencer;
             _sequence = null;
         }
     }

@@ -39,7 +39,21 @@ public class NoteOnEvent : NoteEvent
     /// <summary>
     /// Creates a deep clone of this MIDI event.
     /// </summary>
-    public override MidiEvent Clone() => new NoteOnEvent(AbsoluteTime, Channel, NoteNumber, Velocity, NoteLength);
+    /// <remarks>
+    /// A note-on carrying no note-off clones to one that carries no note-off either, rather than
+    /// failing. That shape only arises from a file that breaks the rules - tolerant reading closes
+    /// a dangling note at the end of its track - but a caller that built the event itself, or that
+    /// read the file strictly enough to still hold one, can copy it.
+    /// </remarks>
+    //was previously: the clone was always built by the (absoluteTime, channel, noteNumber,
+    //velocity, duration) constructor, which reads NoteLength - and NoteLength THROWS when there is
+    //no note-off to measure against. Cloning a dangling note-on was therefore an
+    //InvalidOperationException rather than a copy, and one such event made a whole collection
+    //uncopyable. The clone of a note-on that HAS a note-off is built exactly as it always was.
+    public override MidiEvent Clone() =>
+        OffEvent == null
+            ? (MidiEvent)MemberwiseClone()
+            : new NoteOnEvent(AbsoluteTime, Channel, NoteNumber, Velocity, NoteLength);
 
     /// <summary>
     /// The associated Note off event
