@@ -110,7 +110,9 @@ KEY NAMESPACES / USINGS
                                    //   and the General MIDI sound-set names
   using CodeBrix.Audio.Abc;        // reads abc notation (.abc) and converts a
                                    //   tune to the MIDI model — see "READING ABC
-                                   //   NOTATION"
+                                   //   NOTATION"; on its own it is a complete
+                                   //   abc-to-MIDI file converter — see
+                                   //   "CONVERTING ABC TO A MIDI FILE"
   using CodeBrix.Audio.Dsp;        // FFT, biquad filters, analysis primitives
   using CodeBrix.Audio.Synth;      // SoundFont (.sf2) rendering + MIDI music
                                    //   playback — see "TWO SOUNDFONT PATHS"
@@ -851,6 +853,109 @@ READING ABC NOTATION
   AbcTuneBook.Problems and a tune's own on AbcTune.Problems, and Convert adds to
   the tune's list the things only the conversion can know. A null argument or a
   missing file DOES throw - those are the caller's mistake, not the content's.
+
+CONVERTING ABC TO A MIDI FILE (NO AUDIO NEEDED)
+  This package is a complete abc-to-MIDI converter on its own, and that use has
+  NOTHING to do with playing sound: no audio device is opened, no instrument, no
+  SoundFont and no sample library is loaded, and nothing native is touched. It
+  is three calls from CodeBrix.Audio.Abc and CodeBrix.Audio.Midi, it runs the
+  same in a console tool, a server or a build step, and it suits batch work - a
+  whole tunebook in one pass. Read "READING ABC NOTATION" above for what the
+  reader understands, what it skips, and how voices, repeats, grace notes and
+  the %%MIDI directives are treated; everything said there applies here.
+
+    AbcReader.Read(path)        the file -> an AbcTuneBook (one tune or many)
+    AbcToMidi.Convert(tune)     one tune -> a MidiEventCollection
+    MidiFile.Export(path, midi) the collection -> a standard MIDI file
+
+  A WHOLE TUNEBOOK, ONE .mid PER TUNE:
+
+    using System;
+    using System.IO;
+    using CodeBrix.Audio.Abc;
+    using CodeBrix.Audio.Midi;
+
+    AbcTuneBook book = AbcReader.Read("session-tunes.abc");   // never throws on content
+    Directory.CreateDirectory("midi");
+
+    foreach (AbcTune tune in book.Tunes)
+    {
+        MidiEventCollection midi = AbcToMidi.Convert(tune);
+        MidiFile.Export(Path.Combine("midi", $"tune-{tune.ReferenceNumber}.mid"), midi);
+
+        // Read a tune's Problems AFTER converting it: Convert ADDS to the list.
+        foreach (string problem in tune.Problems)
+        {
+            Console.WriteLine($"X:{tune.ReferenceNumber} {tune.Title}: {problem}");
+        }
+    }
+
+    foreach (string problem in book.Problems)                 // file-level departures
+    {
+        Console.WriteLine($"(file) {problem}");
+    }
+
+  Text that is already in memory goes through AbcReader.Parse(text) instead of
+  Read(path); the rest is identical. Name the files however suits you: a tune's
+  ReferenceNumber is its X: field, and Title is its first T: field, which may be
+  empty and may hold characters a file name cannot.
+
+  WHAT IS WRITTEN: a type 1 standard MIDI file with PrepareForExport already
+  applied. The tune's title is its track name and its composer a text event.
+  Repeats are UNROLLED, because MIDI has no repeat marks, so the file
+  plays the tune the length it is performed at. Each voice has its own channel -
+  1, 2, 3 ... in the order the voices first appear, skipping channel 10, which
+  General MIDI keeps for percussion - and tempo, meter and key changes stand
+  where the notation put them. Timing is exact: lengths and positions are
+  fractions of a whole note, rounded to ticks once.
+
+  THE OPTIONS THAT SHAPE THE FILE, through Convert(tune, options):
+
+    var options = new AbcToMidiOptions
+    {
+        TicksPerQuarterNote   = 960,   // the file's resolution; 480 by default
+        DefaultBeatsPerMinute = 96,    // ONLY for a tune with no Q: field; 120 by default
+        Velocity              = 90,    // how hard every note is struck; 100 by default
+    };
+    options.VoiceChannels["T1"] = 4;   // the voice whose id is T1 goes on channel 4
+    options.VoiceChannels[""]   = 10;  // a tune with no V: fields has ONE voice, whose id is empty
+
+    MidiEventCollection midi = AbcToMidi.Convert(tune, options);
+
+    TicksPerQuarterNote     the resolution of the file written. Raise it when the
+                            tunes carry fast tuplets and the file is going to a
+                            notation program; every common tool reads 480.
+    DefaultBeatsPerMinute   a tune's own Q: field always wins; this is what a
+                            tune WITHOUT one is given.
+    Velocity                abc has no dynamics the reader honours, so every note
+                            takes this.
+    GraceNoteLength         the length of one grace note, an exact fraction of a
+                            whole note (1/64 by default).
+    VoiceChannels           voice id -> channel 1 to 16. It wins over a
+                            %%MIDI channel directive, which wins over the
+                            automatic assignment.
+    HonourMidiDirectives    true by default: "%%MIDI program n" becomes a program
+                            change and "%%MIDI channel n" moves the voice. Set it
+                            false to get the notes WITHOUT the instrument choices
+                            the transcriber made: the voices then take their
+                            automatic channels and no program change is written.
+
+  THE COLLECTION IS THE ORDINARY EDITABLE MODEL, so anything else this package
+  does with MIDI is open to it BEFORE it is written: add a program change to
+  choose an instrument per channel, transpose, merge several tunes into one
+  file. If you change it, call PrepareForExport() again before Export.
+
+  WHAT NEVER REACHES THE FILE is what the reader skips, because MIDI has no place
+  for most of it and the rest is not honoured: chord symbols "Am" (no
+  accompaniment is invented), lyrics, decorations, annotations, parts and clefs.
+  Each KIND is named once in the tune's Problems, so a converter can tell its
+  user exactly what was left behind. NOTHING about a tune's CONTENT throws - not
+  in Read, not in Convert. A missing file, a null tune and a path that cannot be
+  written DO throw: those are the caller's mistakes, not the tune's.
+
+  TO HEAR THE SAME COLLECTION instead of saving it, hand it to
+  MidiSequence.FromEvents(midi) and any player here - see "READING ABC NOTATION".
+  One Convert serves both: save it AND play it.
 
 SoundFont rendering and MIDI music (CodeBrix.Audio.Synth) — read "TWO SOUNDFONT
 PATHS" above first:
@@ -3606,6 +3711,9 @@ QUICK REFERENCE CARD
                                           MidiSequence.FromEvents(collection)
   save an abc tune as a .mid              MidiFile.Export(path,
                                               AbcToMidi.Convert(tune))
+  convert a whole .abc tunebook to .mid   foreach tune in AbcReader.Read(path).Tunes:
+    files - no audio device involved          MidiFile.Export(p, AbcToMidi.Convert(tune))
+                                          see "CONVERTING ABC TO A MIDI FILE"
   put an abc voice on a chosen channel    options.VoiceChannels["T1"] = 4
   ignore an abc tune's instrument choices options.HonourMidiDirectives = false
   see what an abc tune did not carry      tune.Problems / book.Problems
