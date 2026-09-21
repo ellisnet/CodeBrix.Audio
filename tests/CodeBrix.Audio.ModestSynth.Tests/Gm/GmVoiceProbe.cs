@@ -44,6 +44,13 @@ internal static class GmVoiceProbe
         {
             GmLayerSpec layer = spec.Layers[i];
             layer.Patch = GmTones.Create(layer.Tone, layer.Shape, layer.Ring);
+
+            // A layer that has already been given a singer of its own keeps it, so a test can set
+            // one field of it and render the difference.
+            if (layer.Choir == null)
+            {
+                layer.Choir = GmChoirSpec.For(layer.Tone, layer.Shape, layer.Ring);
+            }
         }
 
         return spec;

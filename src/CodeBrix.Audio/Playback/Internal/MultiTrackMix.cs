@@ -124,6 +124,28 @@ internal sealed class MultiTrackMix : IDisposable
     /// <summary>The number of tracks actually being rendered.</summary>
     internal int VoiceCount => voices.Length;
 
+    /// <summary>
+    /// Every synthesizer this mix is driving, one per track that has a MIDI source. Built when the
+    /// mix was, so an offline render can say what kind of render it is before pulling a frame.
+    /// </summary>
+    internal IReadOnlyList<IMidiSynthesizer> MidiSynthesizers
+    {
+        get
+        {
+            var found = new List<IMidiSynthesizer>(voices.Length);
+            foreach (var voice in voices)
+            {
+                var synthesizer = voice.MidiSynthesizer;
+                if (synthesizer != null)
+                {
+                    found.Add(synthesizer);
+                }
+            }
+
+            return found;
+        }
+    }
+
     /// <summary>Moves the whole song to a position, taking every track with it.</summary>
     /// <param name="frame">The frame to move to; negative values are clamped to zero.</param>
     internal void Seek(long frame)

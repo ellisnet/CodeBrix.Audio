@@ -49,6 +49,17 @@ namespace CodeBrix.Audio.Synth;
 /// diagnostic can say plainly that something was played and nothing was listening.
 /// </para>
 /// <para>
+/// A REPLACED CHILD RINGS OUT. Routing something new onto a slot that is already occupied - a part
+/// re-voiced in the middle of a piece, a follow-up prompt whose music uses other instruments on the
+/// same channels - RETIRES the old child rather than cutting it off: it is released, it receives no
+/// further messages, and it KEEPS BEING MIXED at the gain it had until its voices have finished and
+/// its own effects have nothing left to say, or until <see cref="RingOutLimit"/> is up. Set
+/// <see cref="RingOutReplacedChildren"/> to <see langword="false"/> for the older behaviour, where a
+/// replaced child leaves the mix at once. <see cref="ClearChannel(int)"/> and
+/// <see cref="ClearLayer(int)"/> stay immediate whatever the switch says - a cleared channel is
+/// meant to go silent - and their two-argument overloads ask for a ring-out explicitly.
+/// </para>
+/// <para>
 /// EVERY CHILD MUST SHARE THE ROUTER'S SAMPLE RATE, and no synthesizer instance may be routed to
 /// more than one slot: each child is rendered exactly once per block at exactly one gain, and an
 /// instance in two slots has no single answer to either. Children may differ in
@@ -69,16 +80,32 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
     /// <summary>The block size used when none is given.</summary>
     public const int DefaultBlockSize = 64;
 
+    /// <summary>
+    /// How long a retired child may go on being rendered before it is let go anyway: ten seconds,
+    /// which is longer than the longest release and reverb tail a synthesizer here produces.
+    /// </summary>
+    public static readonly TimeSpan DefaultRingOutLimit = TimeSpan.FromSeconds(10.0);
+
+    // Below this in both channels, a child is saying nothing anybody could hear - about -100 dBFS.
+    private const float SilenceLevel = 1.0e-5F;
+
+    // And it has to say nothing for this long before it is let go, so that a decaying tail passing
+    // through zero is not mistaken for the end of it.
+    private const int SilenceMilliseconds = 50;
+
     private readonly int sampleRate;
     private readonly int blockSize;
     private readonly Route[] routes = new Route[ChannelCount];
     private readonly Route[] layers = new Route[ChannelCount];
+    private readonly List<RetiredChild> retired = new List<RetiredChild>();
 
     private float[] scratchLeft = [];
     private float[] scratchRight = [];
 
     private float masterVolume = 1.0F;
     private long unroutedMessageCount;
+    private bool ringOutReplacedChildren = true;
+    private TimeSpan ringOutLimit = DefaultRingOutLimit;
 
     /// <summary>Creates an empty router at a sample rate, with the default block size.</summary>
     /// <param name="sampleRate">The sample rate every child must render at, in Hz.</param>
@@ -121,6 +148,10 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
     public int BlockSize => blockSize;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Retired children are counted too, for as long as they are still being mixed: they are part
+    /// of what the router is sounding, and a caller waiting for silence is waiting for them as well.
+    /// </remarks>
     public int ActiveVoiceCount
     {
         get
@@ -135,9 +166,75 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
                 }
             }
 
+            foreach (var child in retired)
+            {
+                total += child.Synthesizer.ActiveVoiceCount;
+            }
+
             return total;
         }
     }
+
+    /// <summary>
+    /// Whether a child that is replaced in an occupied slot is let RING OUT rather than cut off.
+    /// <see langword="true"/> by default.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// While this is set, routing something new onto a slot that already holds a built child
+    /// RETIRES that child: it is released - the notes let go of the key, so releases and effect
+    /// tails carry on - it is sent no further messages, and it keeps being mixed at the gain it had
+    /// until it has nothing left to say or <see cref="RingOutLimit"/> is up.
+    /// <see cref="RetiredChildCount"/> says how many are still sounding.
+    /// </para>
+    /// <para>
+    /// Clear it and a replacement behaves as it always did: the old child leaves the mix at the
+    /// moment the new one takes the slot, and whatever it was sounding stops dead. It governs
+    /// REPLACEMENT only - <see cref="ClearChannel(int, bool)"/> and
+    /// <see cref="ClearLayer(int, bool)"/> are asked for a ring-out in so many words, and get it
+    /// either way.
+    /// </para>
+    /// </remarks>
+    public bool RingOutReplacedChildren
+    {
+        get => ringOutReplacedChildren;
+        set => ringOutReplacedChildren = value;
+    }
+
+    /// <summary>
+    /// How long a retired child may go on being rendered before it is let go whatever it is still
+    /// sounding. <see cref="DefaultRingOutLimit"/> to begin with.
+    /// </summary>
+    /// <remarks>
+    /// A retired child normally goes when its voices have finished AND its output has been silent
+    /// for a moment - which is what keeps a reverb tail alive after the last voice has ended. This
+    /// is the backstop under that rule, so a child whose effects never quite decay to nothing
+    /// cannot cost CPU for ever. <see cref="TimeSpan.Zero"/> lets a retired child go at the first
+    /// block rendered after it was retired. It is read per block, so lowering it releases children
+    /// that are already retired.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The value is negative.</exception>
+    public TimeSpan RingOutLimit
+    {
+        get => ringOutLimit;
+
+        set
+        {
+            if (value < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value), value, "The ring-out limit must be a non-negative value.");
+            }
+
+            ringOutLimit = value;
+        }
+    }
+
+    /// <summary>
+    /// How many retired children are still being mixed - children that have left the routing table
+    /// and have not yet finished sounding. Zero when nothing is ringing out.
+    /// </summary>
+    public int RetiredChildCount => retired.Count;
 
     /// <summary>
     /// The gain applied to the whole mix, after every child's own gain. One by default, because
@@ -160,6 +257,11 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
     /// with a channel's layer after its main child. A lazily routed channel that has never been
     /// used is not in here.
     /// </summary>
+    /// <remarks>
+    /// It is the ROUTING TABLE, so a retired child is not in it: it has left the table, it can no
+    /// longer be played, and the only thing left to ask about it is whether it has finished, which
+    /// <see cref="RetiredChildCount"/> answers.
+    /// </remarks>
     public IReadOnlyList<IMidiSynthesizer> Synthesizers
     {
         get
@@ -200,10 +302,29 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="synthesizer"/> is null.</exception>
     /// <exception cref="ArgumentException">
-    /// The synthesizer renders at a different sample rate, or is already routed elsewhere.
+    /// The synthesizer renders at a different sample rate, or is already routed to another slot.
     /// </exception>
-    public void SetChannel(int channel, IMidiSynthesizer synthesizer, float gain) =>
-        routes[Index(channel)] = BuildRoute(synthesizer, gain);
+    /// <remarks>
+    /// Routing over a slot that already holds a built child retires that child - see
+    /// <see cref="RingOutReplacedChildren"/>. Handing back the instance the slot ALREADY holds is
+    /// not a replacement at all: it simply sets that child's gain, and nothing is retired.
+    /// </remarks>
+    public void SetChannel(int channel, IMidiSynthesizer synthesizer, float gain)
+    {
+        var index = Index(channel);
+
+        if (TrySetGainOfSameChild(routes[index], synthesizer, gain))
+        {
+            return;
+        }
+
+        // Built before anything is retired, so a call that turns out to be invalid leaves the
+        // router exactly as it was.
+        var route = BuildRoute(synthesizer, gain);
+
+        RetireReplaced(routes[index]);
+        routes[index] = route;
+    }
 
     /// <summary>Routes a channel to a synthesizer that is built on first use.</summary>
     /// <param name="channel">The MIDI channel, 1 to 16.</param>
@@ -213,8 +334,18 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
     /// <param name="gain">The gain this child is mixed at.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="synthesizerFactory"/> is null.</exception>
-    public void SetChannel(int channel, Func<IMidiSynthesizer> synthesizerFactory, float gain = 1.0F) =>
-        routes[Index(channel)] = BuildRoute(synthesizerFactory, gain);
+    /// <remarks>
+    /// Routing over a slot that already holds a built child retires that child - see
+    /// <see cref="RingOutReplacedChildren"/>.
+    /// </remarks>
+    public void SetChannel(int channel, Func<IMidiSynthesizer> synthesizerFactory, float gain = 1.0F)
+    {
+        var index = Index(channel);
+        var route = BuildRoute(synthesizerFactory, gain);
+
+        RetireReplaced(routes[index]);
+        routes[index] = route;
+    }
 
     /// <summary>Adds a second synthesizer that plays a channel alongside its main child.</summary>
     /// <param name="channel">The MIDI channel, 1 to 16.</param>
@@ -223,10 +354,27 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="synthesizer"/> is null.</exception>
     /// <exception cref="ArgumentException">
-    /// The synthesizer renders at a different sample rate, or is already routed elsewhere.
+    /// The synthesizer renders at a different sample rate, or is already routed to another slot.
     /// </exception>
-    public void SetLayer(int channel, IMidiSynthesizer synthesizer, float gain = 1.0F) =>
-        layers[Index(channel)] = BuildRoute(synthesizer, gain);
+    /// <remarks>
+    /// Layering over a slot that already holds a built layer retires that layer - see
+    /// <see cref="RingOutReplacedChildren"/>. Handing back the instance the slot ALREADY holds
+    /// simply sets that layer's gain.
+    /// </remarks>
+    public void SetLayer(int channel, IMidiSynthesizer synthesizer, float gain = 1.0F)
+    {
+        var index = Index(channel);
+
+        if (TrySetGainOfSameChild(layers[index], synthesizer, gain))
+        {
+            return;
+        }
+
+        var route = BuildRoute(synthesizer, gain);
+
+        RetireReplaced(layers[index]);
+        layers[index] = route;
+    }
 
     /// <summary>Adds a second synthesizer, built on first use, that plays a channel alongside its main child.</summary>
     /// <param name="channel">The MIDI channel, 1 to 16.</param>
@@ -236,15 +384,55 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
     /// <param name="gain">The gain this layer is mixed at.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="synthesizerFactory"/> is null.</exception>
-    public void SetLayer(int channel, Func<IMidiSynthesizer> synthesizerFactory, float gain = 1.0F) =>
-        layers[Index(channel)] = BuildRoute(synthesizerFactory, gain);
+    /// <remarks>
+    /// Layering over a slot that already holds a built layer retires that layer - see
+    /// <see cref="RingOutReplacedChildren"/>.
+    /// </remarks>
+    public void SetLayer(int channel, Func<IMidiSynthesizer> synthesizerFactory, float gain = 1.0F)
+    {
+        var index = Index(channel);
+        var route = BuildRoute(synthesizerFactory, gain);
+
+        RetireReplaced(layers[index]);
+        layers[index] = route;
+    }
 
     /// <summary>Removes a channel's main child and its layer, so the channel goes silent.</summary>
     /// <param name="channel">The MIDI channel, 1 to 16.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
-    public void ClearChannel(int channel)
+    /// <remarks>
+    /// IMMEDIATE, whatever <see cref="RingOutReplacedChildren"/> says: the children leave the mix
+    /// at once and whatever they were sounding stops. Use <see cref="ClearChannel(int, bool)"/> to
+    /// let them ring out instead.
+    /// </remarks>
+    public void ClearChannel(int channel) => ClearChannel(channel, ringOut: false);
+
+    /// <summary>
+    /// Removes a channel's main child and its layer, letting them ring out first if asked.
+    /// </summary>
+    /// <param name="channel">The MIDI channel, 1 to 16.</param>
+    /// <param name="ringOut">
+    /// <see langword="true"/> to RETIRE the children rather than cut them - they are released and
+    /// go on being mixed at the gain they had until they have nothing left to say or
+    /// <see cref="RingOutLimit"/> is up. <see langword="false"/> for the immediate removal
+    /// <see cref="ClearChannel(int)"/> performs.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
+    /// <remarks>
+    /// <paramref name="ringOut"/> is obeyed on its own account: a ring-out asked for here happens
+    /// even when <see cref="RingOutReplacedChildren"/> is clear, and a clear asked for here is
+    /// immediate even when it is set.
+    /// </remarks>
+    public void ClearChannel(int channel, bool ringOut)
     {
         var index = Index(channel);
+
+        if (ringOut)
+        {
+            Retire(routes[index]);
+            Retire(layers[index]);
+        }
+
         routes[index] = null;
         layers[index] = null;
     }
@@ -252,7 +440,54 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
     /// <summary>Removes a channel's layer, leaving its main child in place.</summary>
     /// <param name="channel">The MIDI channel, 1 to 16.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
-    public void ClearLayer(int channel) => layers[Index(channel)] = null;
+    /// <remarks>
+    /// IMMEDIATE, whatever <see cref="RingOutReplacedChildren"/> says. Use
+    /// <see cref="ClearLayer(int, bool)"/> to let the layer ring out instead.
+    /// </remarks>
+    public void ClearLayer(int channel) => ClearLayer(channel, ringOut: false);
+
+    /// <summary>Removes a channel's layer, letting it ring out first if asked.</summary>
+    /// <param name="channel">The MIDI channel, 1 to 16.</param>
+    /// <param name="ringOut">
+    /// <see langword="true"/> to RETIRE the layer rather than cut it; <see langword="false"/> for
+    /// the immediate removal <see cref="ClearLayer(int)"/> performs.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
+    /// <remarks>
+    /// <paramref name="ringOut"/> is obeyed on its own account, whatever
+    /// <see cref="RingOutReplacedChildren"/> says.
+    /// </remarks>
+    public void ClearLayer(int channel, bool ringOut)
+    {
+        var index = Index(channel);
+
+        if (ringOut)
+        {
+            Retire(layers[index]);
+        }
+
+        layers[index] = null;
+    }
+
+    /// <summary>The child a channel is routed to, or null when there is none to hand back yet.</summary>
+    /// <param name="channel">The MIDI channel, 1 to 16.</param>
+    /// <returns>
+    /// The child playing that channel. Null when NOTHING is routed to it, and null as well when a
+    /// factory is routed to it whose child has not been built yet - <see cref="IsRouted"/> tells
+    /// the two apart, and the child appears here as soon as the channel is first played.
+    /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
+    public IMidiSynthesizer GetChannel(int channel) => SynthesizerOf(routes[Index(channel)]);
+
+    /// <summary>The layer over a channel, or null when there is none to hand back yet.</summary>
+    /// <param name="channel">The MIDI channel, 1 to 16.</param>
+    /// <returns>
+    /// The layer over that channel. Null when the channel has NO layer, and null as well when a
+    /// factory is routed as its layer whose child has not been built yet - <see cref="HasLayer"/>
+    /// tells the two apart.
+    /// </returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="channel"/> is outside 1 to 16.</exception>
+    public IMidiSynthesizer GetLayer(int channel) => SynthesizerOf(layers[Index(channel)]);
 
     /// <summary>Whether anything is routed to a channel, created or not.</summary>
     /// <param name="channel">The MIDI channel, 1 to 16.</param>
@@ -328,6 +563,11 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// An IMMEDIATE note-off-all drops every retired child as well, because the caller is asking
+    /// for silence now and a ring-out is the opposite of that. A releasing one leaves them alone:
+    /// each was released when it was retired, and telling it again would say nothing new.
+    /// </remarks>
     public void NoteOffAll(bool immediate)
     {
         foreach (var route in AllRoutes())
@@ -336,13 +576,20 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
             // strange way to spend a hundred megabytes.
             route.Synthesizer?.NoteOffAll(immediate);
         }
+
+        if (immediate)
+        {
+            retired.Clear();
+        }
     }
 
     /// <inheritdoc />
     /// <remarks>
     /// Returns every child that has been created to its initial state and clears
     /// <see cref="UnroutedMessageCount"/>. The routing table is configuration rather than state, so
-    /// it is left alone: a reset router plays the same arrangement from the beginning.
+    /// it is left alone: a reset router plays the same arrangement from the beginning. Retired
+    /// children are DROPPED rather than reset - they belong to the performance that has just been
+    /// abandoned, not to the one about to start.
     /// </remarks>
     public void Reset()
     {
@@ -351,16 +598,24 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
             route.Synthesizer?.Reset();
         }
 
+        retired.Clear();
         unroutedMessageCount = 0;
     }
 
     /// <inheritdoc />
     /// <remarks>
+    /// <para>
     /// Each created child renders the frames asked for - whatever its own block size - and is
     /// mixed in at its gain; the sum is then scaled by <see cref="MasterVolume"/>. A channel routed
     /// lazily and never played is SKIPPED rather than built, because a synthesizer that has been
     /// sent no message renders silence anyway - which is what lets a rendition over a large sample
     /// library cost only the parts the music uses.
+    /// </para>
+    /// <para>
+    /// Retired children are rendered here too, after the routing table and at the gain each of them
+    /// had, and this is where one of them is let go: when its voices have finished and its output
+    /// has been silent for a moment, or when <see cref="RingOutLimit"/> is up.
+    /// </para>
     /// </remarks>
     public void Render(Span<float> left, Span<float> right)
     {
@@ -404,6 +659,8 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
             }
         }
 
+        RenderRetired(left, right, frames);
+
         if (masterVolume == 1.0F)
         {
             return;
@@ -415,6 +672,117 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
             right[index] *= masterVolume;
         }
     }
+
+    // Mixes in whatever is still ringing out, and lets go of whatever has finished. Walked
+    // backwards so that a child leaving does not move the ones not yet rendered.
+    private void RenderRetired(Span<float> left, Span<float> right, int frames)
+    {
+        if (retired.Count == 0)
+        {
+            return;
+        }
+
+        var limitFrames = (long)(ringOutLimit.TotalSeconds * sampleRate);
+        var silenceFrames = (long)sampleRate * SilenceMilliseconds / 1000L;
+
+        for (var index = retired.Count - 1; index >= 0; index--)
+        {
+            var child = retired[index];
+            var scratchL = scratchLeft.AsSpan(0, frames);
+            var scratchR = scratchRight.AsSpan(0, frames);
+
+            child.Synthesizer.Render(scratchL, scratchR);
+
+            var gain = child.Gain;
+            var silent = child.SilentFrames;
+
+            for (var frame = 0; frame < frames; frame++)
+            {
+                var leftSample = scratchL[frame];
+                var rightSample = scratchR[frame];
+
+                left[frame] += gain * leftSample;
+                right[frame] += gain * rightSample;
+
+                if (Math.Abs(leftSample) > SilenceLevel || Math.Abs(rightSample) > SilenceLevel)
+                {
+                    silent = 0;
+                }
+                else
+                {
+                    silent++;
+                }
+            }
+
+            child.SilentFrames = silent;
+            child.FramesRendered += frames;
+
+            // THE VOICES AND THE OUTPUT, both: a child carrying a reverb is still audible after its
+            // last voice has ended, and a child whose voices are in a silent stage of an envelope
+            // has not finished. The limit is the backstop under the pair of them.
+            var finished = child.Synthesizer.ActiveVoiceCount == 0 && silent >= silenceFrames;
+
+            if (finished || child.FramesRendered >= limitFrames)
+            {
+                retired.RemoveAt(index);
+            }
+        }
+    }
+
+    // Retires the child a replacement has displaced, when replacements are told to ring out.
+    private void RetireReplaced(Route route)
+    {
+        if (ringOutReplacedChildren)
+        {
+            Retire(route);
+        }
+    }
+
+    // Takes a child out of the routing table and into the ring-out list. A route whose lazy factory
+    // never ran has nothing sounding, so there is nothing to retire.
+    private void Retire(Route route)
+    {
+        var synthesizer = route == null ? null : route.Synthesizer;
+
+        if (synthesizer == null)
+        {
+            return;
+        }
+
+        // A RELEASE, not a cut: the notes let go of the key, so their release stages and whatever
+        // the child's own effects are still carrying play out rather than stopping dead.
+        synthesizer.NoteOffAll(immediate: false);
+        retired.Add(new RetiredChild(synthesizer, route.Gain));
+    }
+
+    // Brings a retired instance back: it is about to be routed again, and a child may be rendered
+    // only once per block.
+    private void Recall(IMidiSynthesizer synthesizer)
+    {
+        for (var index = 0; index < retired.Count; index++)
+        {
+            if (ReferenceEquals(retired[index].Synthesizer, synthesizer))
+            {
+                retired.RemoveAt(index);
+                return;
+            }
+        }
+    }
+
+    // Whether the slot already holds this very instance, in which case the call is a gain update
+    // rather than a replacement: there is nothing to retire and nothing to build.
+    private static bool TrySetGainOfSameChild(Route route, IMidiSynthesizer synthesizer, float gain)
+    {
+        if (route == null || synthesizer == null || !ReferenceEquals(route.Synthesizer, synthesizer))
+        {
+            return false;
+        }
+
+        route.Gain = gain;
+        return true;
+    }
+
+    private static IMidiSynthesizer SynthesizerOf(Route route) => route == null ? null : route.Synthesizer;
 
     private static float GainOf(Route route) => route == null ? 0.0F : route.Gain;
 
@@ -463,6 +831,10 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
                 "create a second synthesizer for the second part.",
                 nameof(synthesizer));
         }
+
+        // Nothing above this point can still throw, so a retired instance being routed again comes
+        // out of retirement here: it is about to be rendered from the table instead.
+        Recall(synthesizer);
 
         return new Route(synthesizer, null, gain);
     }
@@ -560,5 +932,26 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
         internal Func<IMidiSynthesizer> Factory { get; }
 
         internal float Gain { get; set; }
+    }
+
+    // A child that has left the routing table and is still sounding: mixed at the gain it had,
+    // with the two counters that decide when it has nothing left to say.
+    private sealed class RetiredChild
+    {
+        internal RetiredChild(IMidiSynthesizer synthesizer, float gain)
+        {
+            Synthesizer = synthesizer;
+            Gain = gain;
+        }
+
+        internal IMidiSynthesizer Synthesizer { get; }
+
+        internal float Gain { get; }
+
+        // How long it has been retired, in frames, against the ring-out limit.
+        internal long FramesRendered { get; set; }
+
+        // How many frames it has been silent for without a break.
+        internal long SilentFrames { get; set; }
     }
 }

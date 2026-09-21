@@ -65,6 +65,19 @@ REPOSITORY LAYOUT
   tests/CodeBrix.Audio.Engine.Tests/ native-decode-path tests
   tests/CodeBrix.Audio.ModestSynth.Tests/  the add-on's test project
   tests/Assets/                      audio, soundfont and synth fixtures
+  samples/                           runnable samples, each with its OWN .slnx
+                                     and NOT referenced by CodeBrix.Audio.slnx,
+                                     so the library never builds or tests them.
+                                     They reference the src projects rather than
+                                     the published packages, take nothing but
+                                     nuget.org besides, are never packed, and
+                                     carry nothing about any particular song or
+                                     instrument - what they render comes from
+                                     what the user points them at. samples/
+                                     .gitignore is the second line of defence
+                                     against a render landing in the repository;
+                                     a sample refuses an output folder inside it
+                                     as the first.
   CodeBrix.Audio.slnx                the solution. The Solution Items folder
                                      carries .gitignore, AGENT-README.txt,
                                      EXTRAS-README.txt, global.json,
@@ -995,9 +1008,28 @@ SHARP EDGES IN THE MULTI-TRACK PLAYER
   - MultiTrackDataProvider always returns a FULL buffer: the engine treats a short
     read as "that is all there was" and stops asking, so the end of the song is
     signalled only by the NEXT call returning zero.
-  - The level measurement renders at MultiTrackPlayer.LevelMeasurementSampleRate
-    (22050). A test that plants a loudness ratio must build its reference at that
-    rate too.
+  - The level measurement renders AT THE RATE THE MUSIC WILL BE HEARD AT - the
+    prepared device's rate, DefaultRenderSampleRate when nothing is prepared, or
+    the rate a render is about to use - with LevelMeasurementSampleRate (22050)
+    as a FLOOR under it, and nothing else. It used to be that fixed 22050, and
+    the reason it is not any more is worth keeping in mind before anyone lowers
+    it again for speed: a rate carries no energy above half of itself, so an
+    instrument whose sound sits above 11 kHz measures as almost silent there and
+    is handed a make-up gain many times too large.
+    MultiTrackPlayerLevelMatchTests fences it with a synthesizer that renders a
+    partial only where the rate can carry it - 25 times the correct gain at
+    22050 against 1.00 at 44100. A test that plants a loudness ratio must build
+    its reference at the rate the measurement will really run at.
+  - The measurement then renders the matched mix ONCE MORE to find its peak,
+    which is the only honest way to get it: per-track peaks do not add up,
+    because two tracks peak at different moments. That pass is what
+    LastLevelMatch reports, it is skipped entirely when no track was matched, and
+    it is roughly a third of the measurement's cost.
+  - Every OFFLINE render - Render, RenderToWav, RenderToFile, RenderToStream and
+    the level measurement - switches each Decent Sampler synthesizer among the
+    tracks into the offline streaming mode for the render and back afterwards,
+    through OfflineStreamingScope. The LIVE path must NOT: a synthesizer feeding
+    a device reads files on the render call in that mode.
   - 60 ms at 120 BPM is 0.12 of a beat, which is 58 ticks at 480 ppq, not 48.
   - A synthesizer factory may be called several times and from a worker thread.
     Share the SoundFont or the SfzInstrument, never the synthesizer.
@@ -1089,8 +1121,113 @@ TO RETUNE ONE VOICING:
      percussion note, so a failure names the program rather than saying
      "something in the bank".
 
+THREE PROGRAMS SIT DELIBERATELY BELOW THE HELD-NOTE FIGURE - 004 Electric
+Piano 1, 027 Electric Guitar (clean) and 109 Bag pipe. A held middle C is not how
+any of them is heard: each sustains and sums where its family neighbours decay,
+and on the phrases the auditions play they stood four to six decibels above the
+family around them, which is the one imbalance a listener notices. Each was
+trimmed by the SAME KIND of measurement on THAT phrase - the loudest hundred
+milliseconds of the program's own audition phrase against the median of its seven
+family neighbours - and each trim is written beside its Level in GmProgramRows.cs
+with the figure it came from. The fence is a bank test that measures the whole
+family here, in this run, on this machine, and asserts the trimmed program stays
+within a decibel and a half of its neighbours' median; it is not pinned to a
+figure taken anywhere else. The held-note band still holds all three. IF YOU
+RETUNE ONE OF THE THREE, measure it on its phrase as well as on the held note -
+otherwise the trim is silently undone.
+
+053 VOICE OOHS IS A FOURTH, for the same reason and by the same measurement: its
+whole voicing was rebuilt, and the rebuilt rows sat two and a half decibels above
+the ensemble family on the sustained chord that family's audition plays while
+being exactly level with the bank on a held note. All three of its readings are
+trimmed together so they stay matched to each other; GmChoirRows.cs says so at
+the top. 052 Choir Aahs needed no trim. Both are cases of the same family fence.
+
 TO RETUNE A WHOLE FAMILY, change its spine in GmFamilyTemplates.cs instead - one
 edit reaches all eight of its programs.
+
+THE TWO VOICE PROGRAMS ARE BUILT DIFFERENTLY FROM EVERY OTHER ONE, and their
+rows live in GmChoirRows.cs rather than in GmProgramRows.cs. 052 Choir Aahs and
+053 Voice Oohs sing a VOWEL, and a vowel is not a waveform: it is two or three
+resonances that stay where they are in Hertz while the harmonics of the note run
+up and down through them. A spectrum of fixed HARMONIC levels - which is what
+every other recipe in the bank produces - slides bodily up with the note, and
+that is exactly what an organ stop does and what a voice does not. So the voice
+programs are the one place where a layer's oscillator is not built from a
+ModestPatch at all.
+
+  GmChoirOscillator IS ONE SINGER. A band-limited sawtooth (the source a larynx
+  and a pair of lips together make), plus breath - white noise added at the
+  source so the same throat shapes the air as shapes the tone, loud as the note
+  starts and slight in the sustain - through five two-pole resonators in
+  cascade, then a first-order lift for the top. THE FIRST THREE RESONANCES ARE
+  THE VOWEL and the last two are the higher poles every throat has whatever it
+  is saying; without them three resonances alone leave nothing at all above
+  three kilohertz, which was measured and is far darker than any voice.
+
+  ITS PITCH IS NEVER QUITE THE NOTE. Each singer draws from its SEED a slow
+  two-component wander under a hertz, and a vibrato with its own rate, depth and
+  moment of arrival, so a unison of three is three people rather than one person
+  three times over. The seeds come from the voicing's own counter, so a render
+  still repeats exactly.
+
+  THE LEVEL IS WORKED OUT, NOT GUESSED. A fixed resonance sampled by a moving
+  set of harmonics is loud when a harmonic lands on it and quiet when two
+  straddle it - measured that way, two neighbouring notes came out ten decibels
+  apart. The oscillator therefore sums the loudness of the note's own harmonics
+  through its own cascade and divides it back out, and no resonance is allowed
+  to be narrower than the gap between two of that note's harmonics. Both are in
+  GmChoirOscillator; neither is a knob to turn casually.
+
+  TO RETUNE ONE. The vowel is a row's SHAPE, from a closed "oo" at 0 to an open
+  "ah" at 1; the breath is its RING, 1 being the ordinary amount. How many
+  people are singing is the row's Unison, how far apart they stand is its Detune
+  and Spread, and everything else - the envelope, the filter, the sends, the
+  Level - is ordinary row data read exactly as it is for every other program.
+  The formant frequencies themselves, the bandwidths, the wander and the vibrato
+  spreads are in GmChoirSpec.cs, written as a bass's set and a soprano's set and
+  interpolated with the key.
+
+  THERE ARE THREE READINGS OF BOTH PROGRAMS, and they are the same voice set
+  three ways:
+
+    Breathy  THREE singers standing well apart, with plenty of air, a rounded
+             darker vowel and a soft top. THIS IS WHAT THE BANK SINGS, and it
+             is GmChoirRows.BankVoicing.
+    Massed   the same air, the same vowel, the same spacing, with SIX singers
+             in two groups that do not quite shape the vowel the same way.
+             Fuller, and about three quarters of the render speed. THIS IS
+             WHAT THE PUBLIC GeneralMidiEnsemble.Full ASKS FOR, and it is
+             GmChoirRows.LargerSection.
+    Section  a close section of three on the fully open vowel with only a
+             little air, in a bright room. Focused and defined - and the one a
+             listener still heard as a shade organ-like, which is why it is
+             INTERNAL ONLY: no public seam reaches it. It is kept for the
+             comparison renders under TestResults/GmRenders/choir-ab.
+
+  THE PUBLIC OPT-IN AND THE INTERNAL SWITCH ARE TWO DIFFERENT THINGS, and they
+  meet in GeneralMidiSynthesizer.ProgramRuntime:
+
+    - GeneralMidiAdjustment.Ensemble is PUBLIC, per program, and read when a
+      note starts. Full asks for GmChoirRows.LargerSection on a program that
+      HasLargerSection, and on every other program it takes the ordinary path
+      and hands back the very same runtime object - which is what makes "Full
+      changes nothing where there is no larger section" true sample for sample
+      rather than merely intended.
+    - GeneralMidiSynthesizer.ChoirVoicing is INTERNAL, per instance rather than
+      process-wide so one test cannot change what another hears, and it says
+      which reading this synthesizer uses when the adjustment says Standard.
+
+  TO MAKE A DIFFERENT READING THE ONE THE BANK SINGS, change BankVoicing.
+  Nothing else changes: no API, no test, no other file. All three readings are
+  calibrated onto one held-middle-C figure, so the choice is a matter of taste
+  and not of level - though 053's three all sit a decibel and a half below the
+  bank's figure together, for the reason GmChoirRows.cs gives at the top.
+
+  THE PUBLIC FORMANT OSCILLATOR IS UNTOUCHED BY ALL OF THIS.
+  FormantOscillator is shipped, public, fenced sample by sample (below) and
+  still exactly what it was; the bank simply no longer reaches for it. A preset
+  that names the formant waveform gets the same tone it always did.
 
 THE ONE NUMBER TO GET RIGHT IN AN FM RECIPE IS THE MODULATOR LEVEL, and
 GmTones.cs says so at the top. The engine turns a modulator level of 1.0 into two

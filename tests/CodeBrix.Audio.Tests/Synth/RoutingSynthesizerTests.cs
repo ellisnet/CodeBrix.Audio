@@ -623,6 +623,470 @@ public class RoutingSynthesizerTests
         onePart.UnroutedMessageCount.Should().BeGreaterThan(0);
     }
 
+    // ----- replacing a child, and letting it ring out -----
+
+    [Fact]
+    public void replacing_a_child_keeps_it_in_the_mix_until_it_has_finished()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var first = new RecordingSynthesizer(level: 0.5F) { ActiveVoiceCount = 2 };
+        router.SetChannel(1, first, gain: 0.5F);
+
+        //Act
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+        var mix = Render(router, frames: 8);
+
+        //Assert
+        // The replaced child is RELEASED rather than cut, and goes on being mixed at the gain it
+        // had - so the part it was playing does not stop dead at the seam.
+        first.NoteOffAllCount.Should().Be(1);
+        router.RetiredChildCount.Should().Be(1);
+        mix.Left[0].Should().BeApproximately(0.25F, 1e-6F);
+    }
+
+    [Fact]
+    public void a_retired_child_is_released_once_its_voices_and_its_tail_are_gone()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var first = new RecordingSynthesizer(level: 0.5F) { ActiveVoiceCount = 2 };
+        router.SetChannel(1, first);
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+
+        //Act
+        // Its voices end, but it is still carrying a tail - so it stays.
+        first.ActiveVoiceCount = 0;
+        Render(router, frames: Rate / 4);
+        var whileTheTailRings = router.RetiredChildCount;
+
+        // And now the tail has gone too.
+        first.Level = 0.0F;
+        Render(router, frames: Rate / 4);
+
+        //Assert
+        whileTheTailRings.Should().Be(1);
+        router.RetiredChildCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void a_retired_child_is_always_released_by_the_ring_out_limit()
+    {
+        //Arrange - a child that never stops sounding and never runs out of voices.
+        var router = new RoutingSynthesizer(Rate) { RingOutLimit = TimeSpan.FromMilliseconds(10) };
+        var first = new RecordingSynthesizer(level: 0.5F) { ActiveVoiceCount = 4 };
+        router.SetChannel(1, first);
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+
+        //Act
+        Render(router, frames: (Rate / 100) + 1);
+
+        //Assert
+        // Nothing may go on costing CPU for ever, whatever it claims to still be sounding.
+        router.RetiredChildCount.Should().Be(0);
+        router.RingOutLimit.Should().Be(TimeSpan.FromMilliseconds(10));
+    }
+
+    [Fact]
+    public void the_ring_out_limit_must_not_be_negative()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+
+        //Act
+        var act = () => router.RingOutLimit = TimeSpan.FromSeconds(-1);
+
+        //Assert
+        act.Should().Throw<ArgumentOutOfRangeException>();
+        router.RingOutLimit.Should().Be(RoutingSynthesizer.DefaultRingOutLimit);
+    }
+
+    [Fact]
+    public void with_the_ring_out_switched_off_a_replaced_child_leaves_the_mix_at_once()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate) { RingOutReplacedChildren = false };
+        var first = new RecordingSynthesizer(level: 0.5F) { ActiveVoiceCount = 2 };
+        router.SetChannel(1, first);
+
+        //Act
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+        var mix = Render(router, frames: 8);
+
+        //Assert
+        // Exactly what a router did before the ring-out existed: the old child is simply gone.
+        router.RetiredChildCount.Should().Be(0);
+        first.NoteOffAllCount.Should().Be(0);
+        mix.Left[0].Should().Be(0.0F);
+    }
+
+    [Fact]
+    public void a_replaced_layer_rings_out_the_same_way()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var layer = new RecordingSynthesizer(level: 0.5F);
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+        router.SetLayer(1, layer, gain: 0.5F);
+
+        //Act
+        router.SetLayer(1, new RecordingSynthesizer(level: 0.0F));
+        var mix = Render(router, frames: 8);
+
+        //Assert
+        router.RetiredChildCount.Should().Be(1);
+        mix.Left[0].Should().BeApproximately(0.25F, 1e-6F);
+    }
+
+    [Fact]
+    public void a_lazy_route_that_was_never_built_has_nothing_to_retire()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        router.SetChannel(1, () => new RecordingSynthesizer());
+
+        //Act
+        router.SetChannel(1, new RecordingSynthesizer());
+
+        //Assert
+        // Nothing was ever built, so nothing was ever sounding.
+        router.RetiredChildCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void ClearChannel_is_immediate_by_default_and_rings_out_when_asked()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var cut = new RecordingSynthesizer(level: 0.5F);
+        var rung = new RecordingSynthesizer(level: 0.5F);
+        router.SetChannel(1, cut);
+        router.SetChannel(2, rung);
+
+        //Act
+        router.ClearChannel(1);
+        var afterTheCut = router.RetiredChildCount;
+        router.ClearChannel(2, ringOut: true);
+
+        //Assert
+        // "So the channel goes silent" is what ClearChannel has always promised, and it still does.
+        afterTheCut.Should().Be(0);
+        cut.NoteOffAllCount.Should().Be(0);
+        router.RetiredChildCount.Should().Be(1);
+        rung.NoteOffAllCount.Should().Be(1);
+        router.IsRouted(2).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ClearLayer_is_immediate_by_default_and_rings_out_when_asked()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        router.SetChannel(1, new RecordingSynthesizer());
+        var layer = new RecordingSynthesizer(level: 0.5F);
+        router.SetLayer(1, layer);
+
+        //Act
+        router.ClearLayer(1, ringOut: true);
+
+        //Assert
+        router.HasLayer(1).Should().BeFalse();
+        router.RetiredChildCount.Should().Be(1);
+        layer.NoteOffAllCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void a_ring_out_asked_for_by_name_happens_even_with_the_switch_off()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate) { RingOutReplacedChildren = false };
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.5F));
+
+        //Act
+        router.ClearChannel(1, ringOut: true);
+
+        //Assert
+        // The switch governs REPLACEMENT; an explicit request is a request.
+        router.RetiredChildCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void the_same_instance_back_into_its_own_slot_is_a_gain_update()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var child = new RecordingSynthesizer(level: 0.4F);
+        router.SetChannel(1, child, gain: 1.0F);
+
+        //Act
+        router.SetChannel(1, child, gain: 0.5F);
+        var mix = Render(router, frames: 4);
+
+        //Assert
+        // Nothing was replaced, so nothing was retired and the child never heard a note-off.
+        router.GetChannelGain(1).Should().Be(0.5F);
+        router.RetiredChildCount.Should().Be(0);
+        child.NoteOffAllCount.Should().Be(0);
+        router.Synthesizers.Should().ContainSingle();
+        mix.Left[0].Should().BeApproximately(0.2F, 1e-6F);
+    }
+
+    [Fact]
+    public void the_same_layer_back_into_its_own_slot_is_a_gain_update()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var layer = new RecordingSynthesizer(level: 0.4F);
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+        router.SetLayer(1, layer, gain: 1.0F);
+
+        //Act
+        router.SetLayer(1, layer, gain: 0.25F);
+
+        //Assert
+        router.GetLayerGain(1).Should().Be(0.25F);
+        router.RetiredChildCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void a_retired_instance_routed_again_comes_out_of_retirement()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var child = new RecordingSynthesizer(level: 0.4F) { ActiveVoiceCount = 1 };
+        router.SetChannel(1, child);
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+
+        //Act
+        var whileRetired = router.RetiredChildCount;
+        router.SetChannel(2, child, gain: 0.5F);
+        var mix = Render(router, frames: 4);
+
+        //Assert
+        // And it is rendered ONCE - from the table - rather than once there and once in the mix of
+        // what is ringing out.
+        whileRetired.Should().Be(1);
+        router.RetiredChildCount.Should().Be(0);
+        router.GetChannel(2).Should().BeSameAs(child);
+        mix.Left[0].Should().BeApproximately(0.2F, 1e-6F);
+    }
+
+    [Fact]
+    public void an_immediate_NoteOffAll_drops_every_retired_child()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.5F));
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+
+        //Act
+        router.NoteOffAll(immediate: true);
+        var mix = Render(router, frames: 4);
+
+        //Assert
+        router.RetiredChildCount.Should().Be(0);
+        mix.Left[0].Should().Be(0.0F);
+    }
+
+    [Fact]
+    public void a_releasing_NoteOffAll_leaves_the_retired_alone()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.5F));
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+
+        //Act
+        router.NoteOffAll(immediate: false);
+
+        //Assert
+        // Each was released when it was retired; saying it again would say nothing new.
+        router.RetiredChildCount.Should().Be(1);
+    }
+
+    [Fact]
+    public void Reset_drops_every_retired_child()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.5F));
+        router.SetChannel(1, new RecordingSynthesizer(level: 0.0F));
+
+        //Act
+        router.Reset();
+
+        //Assert
+        // They belong to the performance that has just been abandoned.
+        router.RetiredChildCount.Should().Be(0);
+    }
+
+    [Fact]
+    public void ActiveVoiceCount_counts_what_is_still_ringing_out()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var retiring = new RecordingSynthesizer { ActiveVoiceCount = 3 };
+        router.SetChannel(1, retiring);
+
+        //Act
+        router.SetChannel(1, new RecordingSynthesizer { ActiveVoiceCount = 2 });
+
+        //Assert
+        router.ActiveVoiceCount.Should().Be(5);
+    }
+
+    [Fact]
+    public void Synthesizers_does_not_list_a_retired_child()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var replaced = new RecordingSynthesizer();
+        var replacement = new RecordingSynthesizer();
+        router.SetChannel(1, replaced);
+
+        //Act
+        router.SetChannel(1, replacement);
+
+        //Assert
+        // Synthesizers is the routing table, and a retired child has left it.
+        router.Synthesizers.Should().ContainSingle();
+        router.Synthesizers[0].Should().BeSameAs(replacement);
+        router.RetiredChildCount.Should().Be(1);
+    }
+
+    // ----- reading the table back -----
+
+    [Fact]
+    public void GetChannel_and_GetLayer_hand_back_the_children_that_exist()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        var main = new RecordingSynthesizer();
+        var layer = new RecordingSynthesizer();
+        router.SetChannel(3, main);
+        router.SetLayer(3, layer);
+
+        //Act & Assert
+        router.GetChannel(3).Should().BeSameAs(main);
+        router.GetLayer(3).Should().BeSameAs(layer);
+    }
+
+    [Fact]
+    public void GetChannel_is_null_for_an_empty_slot_and_for_a_lazy_child_not_yet_built()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+        router.SetChannel(2, () => new RecordingSynthesizer());
+
+        //Act
+        var beforePlaying = router.GetChannel(2);
+        router.ProcessMidiMessage(1, 0x90, 60, 100);
+
+        //Assert
+        // IsRouted is what tells "nothing here" from "not built yet"; the child appears as soon as
+        // the channel is first played.
+        router.GetChannel(1).Should().BeNull();
+        router.IsRouted(1).Should().BeFalse();
+        beforePlaying.Should().BeNull();
+        router.IsRouted(2).Should().BeTrue();
+        router.GetChannel(2).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void GetChannel_and_GetLayer_are_addressed_one_to_sixteen()
+    {
+        //Arrange
+        var router = new RoutingSynthesizer(Rate);
+
+        //Act
+        var channel = () => router.GetChannel(17);
+        var layer = () => router.GetLayer(0);
+
+        //Assert
+        channel.Should().Throw<ArgumentOutOfRangeException>();
+        layer.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    // ----- the ring-out with real audio (D28's render path) -----
+
+    [Fact]
+    public void a_child_replaced_under_a_held_note_does_not_cut_the_note_off()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+
+        var ringing = new RoutingSynthesizer(Rate);
+        ringing.SetChannel(1, new SoundFontSynthesizer(soundFont, Rate));
+        ringing.ProcessMidiMessage(0, 0x90, 60, 100);
+        Render(ringing, frames: Rate / 10);
+
+        var cut = new RoutingSynthesizer(Rate) { RingOutReplacedChildren = false };
+        cut.SetChannel(1, new SoundFontSynthesizer(soundFont, Rate));
+        cut.ProcessMidiMessage(0, 0x90, 60, 100);
+        Render(cut, frames: Rate / 10);
+
+        //Act
+        ringing.SetChannel(1, new SoundFontSynthesizer(soundFont, Rate));
+        cut.SetChannel(1, new SoundFontSynthesizer(soundFont, Rate));
+
+        var afterRinging = Render(ringing, frames: Rate / 20);
+        var afterCut = Render(cut, frames: Rate / 20);
+
+        //Assert
+        // Two renders taken on THIS machine in THIS run, compared with each other rather than with
+        // pinned values - see MAINTAINER-README, "PINNED RENDERS AND THE PLATFORM MATHS LIBRARY".
+        afterRinging.Left.Max(Math.Abs).Should().BeGreaterThan(1e-3F);
+        afterCut.Left.Max(Math.Abs).Should().BeLessThan(1e-6F);
+    }
+
+    [Fact]
+    public void a_note_released_by_a_replacement_decays_through_its_release()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var router = new RoutingSynthesizer(Rate);
+        router.SetChannel(1, new SoundFontSynthesizer(soundFont, Rate));
+        router.ProcessMidiMessage(0, 0x90, 60, 100);
+        Render(router, frames: Rate / 10);
+
+        //Act
+        router.SetChannel(1, new SoundFontSynthesizer(soundFont, Rate));
+
+        var early = Render(router, frames: Rate / 100);
+        Render(router, frames: Rate / 2);
+        var late = Render(router, frames: Rate / 100);
+
+        //Assert
+        // A RELEASE, not an all-sound-off: it is still there, and it is on its way down.
+        early.Left.Max(Math.Abs).Should().BeGreaterThan(1e-3F);
+        late.Left.Max(Math.Abs).Should().BeLessThan(early.Left.Max(Math.Abs));
+    }
+
+    [Fact]
+    public void an_offline_render_hears_a_part_re_voiced_in_the_middle_of_the_piece()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var sequence = BuildTwoPartSequence();
+
+        var ringing = new RoutingSynthesizer(Rate);
+        ringing.SetChannel(1, new SoundFontSynthesizer(soundFont, Rate));
+        ringing.SetChannel(2, new SoundFontSynthesizer(soundFont, Rate));
+
+        //Act
+        var beforeReplacing = SoundFontRenderer.Render(ringing, sequence, TimeSpan.FromSeconds(0.5));
+
+        ringing.SetChannel(1, new SoundFontSynthesizer(soundFont, Rate));
+        var afterReplacing = SoundFontRenderer.Render(ringing, sequence, TimeSpan.FromSeconds(0.5));
+
+        //Assert
+        // SoundFontRenderer resets the synthesizer before it starts, which lets the retired child
+        // go - so the offline path plays the arrangement the table describes and nothing else.
+        ringing.RetiredChildCount.Should().Be(0);
+        afterReplacing.Length.Should().Be(beforeReplacing.Length);
+        afterReplacing.Max(Math.Abs).Should().BeGreaterThan(0.0001F);
+    }
+
     private static MidiSequence BuildTwoPartSequence()
     {
         var collection = new MidiEventCollection(1, 120);

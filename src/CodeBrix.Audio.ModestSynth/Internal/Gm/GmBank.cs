@@ -22,6 +22,13 @@ internal static class GmBank
     private static readonly GmVoiceSpec[] Percussion =
         new GmVoiceSpec[GeneralMidi.HighestPercussionNote - GeneralMidi.LowestPercussionNote + 1];
 
+    // The two voice programs have readings the bank does not carry, and only they do, so those get
+    // a cache of their own rather than another copy of the whole bank. Every reading is built once
+    // and shared, exactly as the rest of the bank is; nothing here is ever mutated after it is
+    // built.
+    private static readonly GmVoiceSpec[,] AlternateChoirs =
+        new GmVoiceSpec[GmChoirRows.VoicingCount, 2];
+
     internal static bool IsPercussionNote(int noteNumber) =>
         noteNumber >= GeneralMidi.LowestPercussionNote && noteNumber <= GeneralMidi.HighestPercussionNote;
 
@@ -48,6 +55,37 @@ internal static class GmBank
                 percussion: false);
 
             Programs[program] = built;
+            return built;
+        }
+    }
+
+    // The same program in a named reading of the choir. Every program but the two voice ones has
+    // only one reading and answers exactly as the single-argument overload does, and so does either
+    // voice program in the reading the bank itself carries.
+    internal static GmVoiceSpec Program(int program, GmChoirVoicing voicing)
+    {
+        if (voicing == GmChoirRows.BankVoicing || !GmChoirRows.IsChoirProgram(program))
+        {
+            return Program(program);
+        }
+
+        int index = GmChoirRows.ChoirIndex(program);
+
+        GmVoiceSpec built = AlternateChoirs[(int)voicing, index];
+        if (built != null) { return built; }
+
+        lock (Gate)
+        {
+            built = AlternateChoirs[(int)voicing, index];
+            if (built != null) { return built; }
+
+            built = Build(
+                GmChoirRows.Row(program, voicing),
+                GeneralMidi.FamilyOf((GeneralMidiProgram)program),
+                GeneralMidi.DisplayName((GeneralMidiProgram)program),
+                percussion: false);
+
+            AlternateChoirs[(int)voicing, index] = built;
             return built;
         }
     }
@@ -104,6 +142,7 @@ internal static class GmBank
         {
             GmLayerSpec layer = spec.Layers[i];
             layer.Patch = GmTones.Create(layer.Tone, layer.Shape, layer.Ring);
+            layer.Choir = GmChoirSpec.For(layer.Tone, layer.Shape, layer.Ring);
         }
 
         LimitOscillators(spec);

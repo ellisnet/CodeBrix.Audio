@@ -69,6 +69,11 @@ public sealed class MidiStream
     // A thoroughly confused producer cannot grow the problem list without bound.
     private const int MaxProblems = 100;
 
+    // How far past a walk's own tick a time-to-tick answer may reach. A moment beyond this at the
+    // tempo in force is not a musical position any more, and the cap keeps the arithmetic inside a
+    // 64-bit tick count.
+    private const long MaxTickAhead = long.MaxValue / 4;
+
     private readonly object gate = new object();
     private readonly List<Entry> entries = new List<Entry>(InitialCapacity);
     private readonly MidiEventCollection recording;
@@ -81,6 +86,7 @@ public sealed class MidiStream
     private int order;
     private int nextTrack = 1;
     private long horizonTicks;
+    private long settledTicks = -1;
     private long conductorEndTicks = -1;
     private int eventCount;
     private int lateEventCount;
@@ -163,7 +169,9 @@ public sealed class MidiStream
     /// <remarks>
     /// This is what a player reports as its duration while a stream is playing, and what a seek
     /// beyond the end clamps to. For a completed stream it equals <c>ToSequence().Length</c>
-    /// exactly - the two are derived with the same arithmetic, not merely to within a rounding.
+    /// exactly - the two are derived with the same arithmetic, not merely to within a rounding -
+    /// unless <see cref="AdvanceHorizon"/> has carried the horizon past the last event, in which
+    /// case it is longer by the settled rest at the end, which the sequence does not carry.
     /// </remarks>
     public TimeSpan HorizonTime
     {
@@ -347,6 +355,60 @@ public sealed class MidiStream
     }
 
     /// <summary>
+    /// Carries the horizon forward over music that is settled and empty: "everything up to this
+    /// tick has been decided, and there is simply nothing in it".
+    /// </summary>
+    /// <param name="tick">The tick everything up to which is settled.</param>
+    /// <remarks>
+    /// <para>
+    /// A producer that has composed a rest - a bar of silence, a gap between phrases - has nothing
+    /// to append for it, and a stream whose horizon still sits at the last note STARVES there: the
+    /// head holds, and the rest is not played but waited through. This is how the rest is declared
+    /// instead. The head then walks through the settled silence exactly as it walks through written
+    /// music, the pre-roll is satisfied by it, and <see cref="HorizonTime"/> and a player's
+    /// duration grow with it.
+    /// </para>
+    /// <para>
+    /// It only ever RAISES the horizon: a tick at or behind it is a no-op, because the producer has
+    /// already said at least that much. It creates no timeline entry, is not counted in
+    /// <see cref="EventCount"/>, and leaves the recording untouched - <see cref="ToMidiEventCollection"/>
+    /// and <see cref="ToSequence"/> carry exactly what was appended, so a rest declared here is not
+    /// in the saved file. A stream this is never called on behaves precisely as it did without it.
+    /// </para>
+    /// <para>
+    /// A COMPLETED stream whose horizon lies beyond its last event PLAYS THE TRAILING REST OUT: the
+    /// head runs on through the silence and the stream ends at the horizon, not at the last note.
+    /// A declared rest is music, and a piece that ends with one ends when the rest does.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="tick"/> is negative.</exception>
+    /// <exception cref="InvalidOperationException">The stream has been completed.</exception>
+    public void AdvanceHorizon(long tick)
+    {
+        if (tick < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tick), tick,
+                "The tick the horizon is advanced to must be a non-negative value.");
+        }
+
+        lock (gate)
+        {
+            RequireNotCompleted();
+
+            if (tick <= horizonTicks)
+            {
+                return;
+            }
+
+            // The horizon has moved, so a reader that cached the horizon's time learns its cache is
+            // stale - the same signal an append gives.
+            version++;
+            horizonTicks = tick;
+            settledTicks = tick;
+        }
+    }
+
+    /// <summary>
     /// Says there is no more to come. Appending after this throws; playback advances without
     /// waiting for a pre-roll, drains to the last event and ends. Calling it again does nothing.
     /// </summary>
@@ -355,6 +417,67 @@ public sealed class MidiStream
         lock (gate)
         {
             completed = true;
+        }
+    }
+
+    /// <summary>
+    /// The moment a tick falls at, read from this stream's own tempo map.
+    /// </summary>
+    /// <param name="tick">The tick to place in time.</param>
+    /// <returns>The time that tick falls at.</returns>
+    /// <remarks>
+    /// <para>
+    /// Defined for EVERY tick, including ticks beyond the horizon that nothing has been written at
+    /// yet: the last tempo the timeline carries goes on from there, so a producer can ask where a
+    /// bar it has not written yet will fall. It is taken under the stream's own lock, so it is safe
+    /// while the stream is playing and while its producer is appending - and the answer is a
+    /// snapshot, which a later tempo change behind that tick can move.
+    /// </para>
+    /// <para>
+    /// It depends on the MUSIC and on nothing else: tempo changes retime it, and the meta events a
+    /// producer may carry on the conductor track - text, markers, key signatures - do not, however
+    /// many of them there are. The playback clock takes one further step, through the tick the
+    /// recording's conductor track ends at, because a merged MIDI file does; the two can therefore
+    /// differ by a single hundred-nanosecond tick, and never by more.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="tick"/> is negative.</exception>
+    public TimeSpan TimeAtTick(long tick)
+    {
+        if (tick < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tick), tick, "The tick must be a non-negative value.");
+        }
+
+        lock (gate)
+        {
+            return TimeAtTickIndependentUnderGate(tick);
+        }
+    }
+
+    /// <summary>
+    /// The tick a moment falls at - the inverse of <see cref="TimeAtTick"/>.
+    /// </summary>
+    /// <param name="time">The moment to place on the timeline.</param>
+    /// <returns>The tick that moment falls at.</returns>
+    /// <remarks>
+    /// Defined beyond the horizon in the same way: the last tempo carries on. It is the LARGEST
+    /// tick whose <see cref="TimeAtTick"/> is at or before <paramref name="time"/>, so
+    /// <c>TickAtTime(TimeAtTick(t))</c> gives back <c>t</c> for any resolution and tempo at which a
+    /// tick lasts longer than a hundred nanoseconds - which is every musical one. Faster than that,
+    /// several ticks share a moment and the last of them is the answer.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="time"/> is negative.</exception>
+    public long TickAtTime(TimeSpan time)
+    {
+        if (time < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(time), time, "The time must be a non-negative value.");
+        }
+
+        lock (gate)
+        {
+            return TickAtTimeUnderGate(time);
         }
     }
 
@@ -426,6 +549,13 @@ public sealed class MidiStream
 
     /// <summary>The horizon, while holding <see cref="Gate"/>.</summary>
     internal long HorizonTicksUnderGate => horizonTicks;
+
+    /// <summary>
+    /// The furthest tick <see cref="AdvanceHorizon"/> has declared settled, or -1 when it has never
+    /// been called. A completed stream is not finished until the head has reached it, which is what
+    /// makes a trailing rest play out. Only touch it while holding <see cref="Gate"/>.
+    /// </summary>
+    internal long SettledTicksUnderGate => settledTicks;
 
     /// <summary>Whether the producer has finished, while holding <see cref="Gate"/>.</summary>
     internal bool IsCompletedUnderGate => completed;
@@ -510,6 +640,134 @@ public sealed class MidiStream
         }
 
         return walk.Time;
+    }
+
+    /// <summary>
+    /// The time a tick falls at, WITHOUT the step through the conductor track's end that the
+    /// playback walk takes. Callers hold <see cref="Gate"/>.
+    /// </summary>
+    /// <param name="tick">The tick to place in time.</param>
+    /// <returns>The time that tick falls at.</returns>
+    /// <remarks>
+    /// The public conversion's walk. <see cref="TimeAtTickUnderGate(Walk, long)"/> steps through
+    /// <see cref="ConductorEndTicks"/> because <c>MidiSequence.MergeTracks</c> walks the
+    /// end-of-track event the exported conductor track carries there - which is what makes a
+    /// completed stream render what its sequence renders, and which is pinned by a test. The cost
+    /// of that faithfulness is that appending a meta event nobody plays MOVES the tick a stream's
+    /// conductor track ends at, and so splits one tick delta in two where there was one; each split
+    /// truncates to a hundred-nanosecond tick, so the answer can shift by one of them. An answer a
+    /// caller is given for its own arithmetic should not depend on how many markers the producer
+    /// wrote, so this walk leaves that step out and the playback walk keeps it.
+    /// </remarks>
+    internal TimeSpan TimeAtTickIndependentUnderGate(long tick)
+    {
+        var walk = default(Walk);
+        walk.Reset();
+
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            if (entry.Tick > tick)
+            {
+                break;
+            }
+
+            if (!entry.SplitsTime)
+            {
+                continue;
+            }
+
+            walk.AdvanceTo(entry.Tick, ticksPerQuarterNote);
+
+            if (entry.IsTempo)
+            {
+                walk.Tempo = entry.Message.Tempo;
+            }
+        }
+
+        if (tick > walk.Tick)
+        {
+            walk.AdvanceTo(tick, ticksPerQuarterNote);
+        }
+
+        return walk.Time;
+    }
+
+    /// <summary>
+    /// The tick a time falls at, the exact inverse of
+    /// <see cref="TimeAtTickIndependentUnderGate"/>. Callers hold <see cref="Gate"/>.
+    /// </summary>
+    /// <param name="time">The moment to place on the timeline.</param>
+    /// <returns>The tick that moment falls at.</returns>
+    internal long TickAtTimeUnderGate(TimeSpan time)
+    {
+        var walk = default(Walk);
+        walk.Reset();
+
+        // Forward to the last stop the walk makes at or before the moment asked for; from there the
+        // tempo is constant and the answer is arithmetic.
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+
+            if (!entry.SplitsTime)
+            {
+                continue;
+            }
+
+            if (walk.TimeAt(entry.Tick, ticksPerQuarterNote) > time)
+            {
+                break;
+            }
+
+            walk.AdvanceTo(entry.Tick, ticksPerQuarterNote);
+
+            if (entry.IsTempo)
+            {
+                walk.Tempo = entry.Message.Tempo;
+            }
+        }
+
+        return TickInSegment(walk, time);
+    }
+
+    // The largest tick of the segment the walk stands in whose own time is still at or before the
+    // moment asked for. The estimate is the analytic answer - a tick's time is the walk's plus the
+    // TRUNCATED product, so the last tick to fit is the one just under (room + 1) / product - and
+    // the two single steps around it settle whatever the floating-point division rounded.
+    private long TickInSegment(in Walk walk, TimeSpan time)
+    {
+        if (time <= walk.Time)
+        {
+            return walk.Tick;
+        }
+
+        var spanTicksPerTick = 60.0 / (ticksPerQuarterNote * walk.Tempo) * TimeSpan.TicksPerSecond;
+        var estimate = ((time - walk.Time).Ticks + 1.0) / spanTicksPerTick;
+
+        if (!(estimate > 0.0))
+        {
+            estimate = 0.0;
+        }
+
+        if (estimate > MaxTickAhead)
+        {
+            estimate = MaxTickAhead;
+        }
+
+        var ahead = (long)estimate;
+
+        while (ahead > 0 && walk.TimeAt(walk.Tick + ahead, ticksPerQuarterNote) > time)
+        {
+            ahead--;
+        }
+
+        while (ahead < MaxTickAhead && walk.TimeAt(walk.Tick + ahead + 1, ticksPerQuarterNote) <= time)
+        {
+            ahead++;
+        }
+
+        return walk.Tick + ahead;
     }
 
     /// <summary>

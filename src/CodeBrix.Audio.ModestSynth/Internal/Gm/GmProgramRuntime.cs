@@ -69,13 +69,23 @@ internal sealed class GmProgramRuntime
 
     private IModestVoiceOscillator Build(int layer)
     {
-        IModestOscillator oscillator = spec.Layers[layer].Patch.CreateOscillator(sampleRate);
+        GmLayerSpec layerSpec = spec.Layers[layer];
 
         // Every noisy source gets a seed of its own, so a chord of noise voices is a chord rather
         // than one voice at three times the level - and the seeds are drawn from a counter, so a
         // render repeats exactly.
         uint seed = seedBase ^ ((++seedCounter) * 2246822519u);
         if (seed == 0u) { seed = 1u; }
+
+        // A sung vowel is the one recipe a ModestPatch cannot describe, so it is built here instead.
+        // The seed is what gives this singer a vibrato and a pitch wander of its own, which is why a
+        // unison of three sounds like three people rather than one of them three times over.
+        if (layerSpec.Choir != null)
+        {
+            return new GmChoirOscillator(sampleRate, layerSpec.Choir, seed);
+        }
+
+        IModestOscillator oscillator = layerSpec.Patch.CreateOscillator(sampleRate);
 
         if (oscillator is NoiseOscillator noise) { noise.Seed = seed; }
         if (oscillator is Pluck1Oscillator pluck) { pluck.Seed = seed; }

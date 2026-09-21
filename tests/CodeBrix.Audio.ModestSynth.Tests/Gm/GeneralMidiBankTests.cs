@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CodeBrix.Audio.Midi;
+using CodeBrix.Audio.Synth;
 using SilverAssertions;
 using Xunit;
 
@@ -38,6 +39,10 @@ public class GeneralMidiBankTests
     // Long enough for a pad with a second-long attack to reach its body, which is what the loudness
     // band has to compare.
     private const double LoudnessHold = 1.4;
+
+    // The tail rendered after an audition phrase, so a decay is measured rather than cut off. It is
+    // the tail the bank's loudness was measured with.
+    private static readonly TimeSpan PhraseTail = TimeSpan.FromSeconds(1.5);
 
     /// <summary>Every General MIDI program number.</summary>
     /// <returns>One case per program, 0 to 127.</returns>
@@ -206,6 +211,84 @@ public class GeneralMidiBankTests
             levels[loudest],
             GeneralMidi.DisplayName((GeneralMidiPercussion)(GeneralMidi.LowestPercussionNote + quietest)),
             levels[quietest]);
+    }
+
+    /// <summary>
+    /// The programs whose rows carry a level trim have to stay with their families on the phrase
+    /// they are actually heard on.
+    /// </summary>
+    /// <param name="program">The program to measure against its own family.</param>
+    /// <remarks>
+    /// A held middle C says all 128 programs are level, and on the phrases the auditions play these
+    /// sustained and summed their way clear of the family around them - the one imbalance a listener
+    /// noticed. Their rows were trimmed for it, and this is the fence: the eight programs of the
+    /// family are measured HERE, in THIS run, on the same machine, and the trimmed one is compared
+    /// with the median of its seven neighbours. Nothing is pinned to a figure recorded on another
+    /// machine. The two VOICE programs are here because their whole voicing was rebuilt, which moved
+    /// where they sit on a sustained chord even though it left them level on a held note.
+    /// </remarks>
+    [Theory]
+    [InlineData((int)GeneralMidiProgram.ElectricPiano1)]
+    [InlineData((int)GeneralMidiProgram.ElectricGuitarClean)]
+    [InlineData((int)GeneralMidiProgram.BagPipe)]
+    [InlineData((int)GeneralMidiProgram.ChoirAahs)]
+    [InlineData((int)GeneralMidiProgram.VoiceOohs)]
+    public void a_trimmed_program_stands_with_its_family_on_the_phrase_it_is_heard_on(int program)
+    {
+        //Arrange
+        int first = program / GeneralMidi.ProgramsPerFamily * GeneralMidi.ProgramsPerFamily;
+        double[] levels = new double[GeneralMidi.ProgramsPerFamily];
+
+        //Act
+        for (int index = 0; index < levels.Length; index++)
+        {
+            levels[index] = PhraseLevel(first + index);
+        }
+
+        //Assert
+        List<double> neighbours = new List<double>();
+
+        for (int index = 0; index < levels.Length; index++)
+        {
+            if (first + index != program) { neighbours.Add(levels[index]); }
+        }
+
+        neighbours.Sort();
+
+        double family = neighbours[neighbours.Count / 2];
+        double decibels = 20.0 * Math.Log10(levels[program - first] / family);
+
+        Math.Abs(decibels).Should().BeLessThan(
+            1.5,
+            "{0} ({1:F4}) must stand with the {2} family ({3:F4}) on the phrase it is heard on, " +
+            "and it is {4:F1} dB away",
+            GeneralMidi.DisplayName((GeneralMidiProgram)program),
+            levels[program - first],
+            GeneralMidi.DisplayName(GeneralMidi.FamilyOf((GeneralMidiProgram)program)),
+            family,
+            decibels);
+    }
+
+    // The loudest hundred milliseconds of a program playing ITS OWN audition phrase, at the default
+    // master volume - which is how a listener meets it, and what the trims were measured on.
+    private static double PhraseLevel(int program)
+    {
+        GmAuditionPlan plan = GmAudition.SingleProgram(program);
+
+        float[] interleaved = SoundFontRenderer.Render(
+            new GeneralMidiSynthesizer(GmProbe.SampleRate), plan.Sequence, PhraseTail);
+
+        int frames = interleaved.Length / 2;
+        float[] left = new float[frames];
+        float[] right = new float[frames];
+
+        for (int frame = 0; frame < frames; frame++)
+        {
+            left[frame] = interleaved[frame * 2];
+            right[frame] = interleaved[(frame * 2) + 1];
+        }
+
+        return GmProbe.LoudestWindow((left, right));
     }
 
     [Fact]

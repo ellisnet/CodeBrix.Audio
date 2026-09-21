@@ -21,8 +21,13 @@ internal enum GmTone
     // The waveguide string: shape is the pick (mellow to bright), ring is how long it holds on.
     Pluck,
 
-    // The formant tone - the vowel-like spectrum the choir and voice programs are built on.
+    // The formant tone - one fixed resonance near 2.4 kHz over the note's own fundamental.
     Formant,
+
+    // A SUNG VOWEL: a glottal source with breath in it, through two or three resonances that stay
+    // where they are in Hertz while the note moves. Shape is the vowel, from a closed "oo" at 0 to
+    // an open "ah" at 1; ring is how much air goes with the tone. See GmChoirSpec.
+    ChoirVowel,
 
     // Additive stacks. Shape tilts them darker (0) or brighter (1).
     HarmonicOrgan,

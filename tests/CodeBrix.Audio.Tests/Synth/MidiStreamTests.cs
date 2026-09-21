@@ -309,4 +309,233 @@ public class MidiStreamTests
         noteOn.Velocity.Should().Be(111);
         noteOn.NoteLength.Should().Be(240);
     }
+
+    // ----- placing a tick in time, and a moment on the timeline -----
+
+    [Fact]
+    public void TimeAtTick_reads_the_stream_own_tempo_map()
+    {
+        //Arrange - 480 ticks per quarter note, 120 BPM to start with and half that from tick 960.
+        var stream = new MidiStream(480);
+        stream.AppendTempo(0, 120);
+        stream.AppendNote(0, 1, 60, 100, 480);
+        stream.AppendTempo(960, 60);
+        stream.AppendNote(960, 1, 62, 100, 480);
+
+        //Act & Assert
+        stream.TimeAtTick(0).Should().Be(TimeSpan.Zero);
+        stream.TimeAtTick(480).TotalSeconds.Should().BeApproximately(0.5, 1e-6);
+        stream.TimeAtTick(960).TotalSeconds.Should().BeApproximately(1.0, 1e-6);
+
+        // A quarter note lasts a whole second from the change, so 480 more ticks cost a second.
+        stream.TimeAtTick(1440).TotalSeconds.Should().BeApproximately(2.0, 1e-6);
+    }
+
+    [Fact]
+    public void TimeAtTick_carries_the_last_tempo_on_beyond_the_horizon()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+        stream.AppendTempo(0, 60);
+        stream.AppendNote(0, 1, 60, 100, 480);
+
+        //Act
+        var beyond = stream.TimeAtTick(4800);
+
+        //Assert
+        // Nothing has been written past tick 480, and a producer still wants to know where the bar
+        // it has not written yet will fall.
+        stream.HorizonTicks.Should().Be(480);
+        beyond.TotalSeconds.Should().BeApproximately(10.0, 1e-6);
+    }
+
+    [Fact]
+    public void TickAtTime_is_the_inverse_of_TimeAtTick_across_tempo_changes()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+        stream.AppendTempo(0, 131);
+        stream.AppendNote(0, 1, 60, 100, 480);
+        stream.AppendTempo(960, 73);
+        stream.AppendNote(960, 1, 62, 100, 480);
+
+        //Act & Assert
+        foreach (var tick in new long[] { 0, 1, 137, 479, 480, 959, 960, 961, 1440, 5000, 100000 })
+        {
+            stream.TickAtTime(stream.TimeAtTick(tick)).Should().Be(
+                tick, "tick {0} must come back from the time it falls at", tick);
+        }
+    }
+
+    [Fact]
+    public void TickAtTime_holds_a_moment_between_two_ticks_at_the_earlier_one()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+        stream.AppendTempo(0, 120);
+        stream.AppendNote(0, 1, 60, 100, 480);
+
+        //Act
+        var betweenTicks = stream.TimeAtTick(100) + TimeSpan.FromTicks(1);
+
+        //Assert
+        stream.TickAtTime(betweenTicks).Should().Be(100);
+    }
+
+    [Fact]
+    public void TimeAtTick_and_TickAtTime_refuse_what_is_not_on_the_timeline()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+
+        //Act
+        var negativeTick = () => stream.TimeAtTick(-1);
+        var negativeTime = () => stream.TickAtTime(TimeSpan.FromSeconds(-1));
+
+        //Assert
+        negativeTick.Should().Throw<ArgumentOutOfRangeException>();
+        negativeTime.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void TimeAtTick_does_not_depend_on_conductor_events_nobody_plays()
+    {
+        //Arrange - the same music twice, one copy carrying a marker the other does not. Tick 320
+        // is chosen: at 480 ticks per quarter note and 131 beats per minute the delta to tick 1000
+        // really does truncate differently split there than whole, so this is a case where the
+        // marker CAN move an answer rather than one where the arithmetic happens to line up.
+        var plain = BuildOneNote();
+        var marked = BuildOneNote();
+        marked.Append(new TextEvent("here", MetaEventType.Marker, 320));
+
+        //Act & Assert
+        foreach (var tick in new long[] { 0, 200, 320, 321, 1000, 4096 })
+        {
+            marked.TimeAtTick(tick).Should().Be(
+                plain.TimeAtTick(tick), "a marker at tick 320 must not move tick {0}", tick);
+
+            marked.TickAtTime(plain.TimeAtTick(tick)).Should().Be(tick);
+        }
+
+        // The PLAYBACK clock is a different matter, and deliberately so: it steps through the tick
+        // the recording's conductor track ends at, because the merged MIDI file does, and that is
+        // what keeps a stream rendering what its own sequence renders. Each stream still matches
+        // its own sequence exactly; the two differ from each other by a single TimeSpan tick at
+        // most, which is what the public conversion exists to step around.
+        plain.Complete();
+        marked.Complete();
+
+        plain.HorizonTime.Should().Be(plain.ToSequence().Length);
+        marked.HorizonTime.Should().Be(marked.ToSequence().Length);
+        (marked.HorizonTime - marked.TimeAtTick(marked.HorizonTicks)).Duration().Ticks
+            .Should().BeLessThanOrEqualTo(1);
+    }
+
+    // ----- carrying the horizon over a settled rest -----
+
+    [Fact]
+    public void AdvanceHorizon_moves_the_horizon_and_records_nothing()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+        stream.AppendNote(0, 1, 60, 100, 240);
+        var eventsBefore = stream.EventCount;
+        var recordedBefore = RecordedEventCount(stream);
+
+        //Act
+        stream.AdvanceHorizon(1920);
+
+        //Assert
+        stream.HorizonTicks.Should().Be(1920);
+        stream.HorizonTime.Should().Be(stream.TimeAtTick(1920));
+        stream.EventCount.Should().Be(eventsBefore);
+        RecordedEventCount(stream).Should().Be(recordedBefore);
+        stream.Problems.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AdvanceHorizon_never_lowers_the_horizon()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+        stream.AppendNote(0, 1, 60, 100, 240);
+
+        //Act
+        stream.AdvanceHorizon(1920);
+        stream.AdvanceHorizon(960);
+        stream.AdvanceHorizon(100);
+
+        //Assert
+        // The producer has already said at least this much, so saying less is saying nothing.
+        stream.HorizonTicks.Should().Be(1920);
+    }
+
+    [Fact]
+    public void AdvanceHorizon_leaves_the_recording_and_the_sequence_alone()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+        stream.AppendNote(0, 1, 60, 100, 960);
+
+        //Act
+        stream.AdvanceHorizon(3840);
+        stream.Complete();
+
+        //Assert
+        // A declared rest is not in the file: what was appended is what is saved.
+        stream.ToSequence().Length.TotalSeconds.Should().BeApproximately(1.0, 1e-6);
+        stream.HorizonTime.TotalSeconds.Should().BeApproximately(4.0, 1e-6);
+    }
+
+    [Fact]
+    public void AdvanceHorizon_is_refused_after_the_stream_has_been_completed()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+        stream.AppendNote(0, 1, 60, 100, 240);
+        stream.Complete();
+
+        //Act
+        var act = () => stream.AdvanceHorizon(1920);
+
+        //Assert
+        act.Should().Throw<InvalidOperationException>();
+        stream.HorizonTicks.Should().Be(240);
+    }
+
+    [Fact]
+    public void AdvanceHorizon_refuses_a_negative_tick()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+
+        //Act
+        var act = () => stream.AdvanceHorizon(-1);
+
+        //Assert
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    private static int RecordedEventCount(MidiStream stream)
+    {
+        var collection = stream.ToMidiEventCollection();
+        var total = 0;
+
+        for (var track = 0; track < collection.Tracks; track++)
+        {
+            total += collection.GetTrackEvents(track).Count;
+        }
+
+        return total;
+    }
+
+    // 480 ticks per quarter note at 131 BPM: one tick is 9541.98 hundred-nanosecond ticks, so it
+    // does matter where a walk stops on the way.
+    private static MidiStream BuildOneNote()
+    {
+        var stream = new MidiStream(480);
+        stream.AppendTempo(0, 131);
+        stream.AppendNote(0, 1, 60, 100, 1000);
+        return stream;
+    }
 }

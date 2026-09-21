@@ -91,8 +91,12 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
     private readonly GeneralMidiSynthesizerSettings settings;
     private readonly GmChannel[] channels = new GmChannel[ChannelCount];
     private readonly GmVoice[] voices;
+
     private readonly GmProgramRuntime[] programRuntimes = new GmProgramRuntime[GeneralMidi.ProgramCount];
     private readonly GmProgramRuntime[] percussionRuntimes = new GmProgramRuntime[PercussionRuntimeCount];
+
+    // The larger section, for the programs that offer one. Built only if a consumer asks for it.
+    private readonly GmProgramRuntime[] largerSectionRuntimes = new GmProgramRuntime[2];
 
     private readonly float[] blockLeft;
     private readonly float[] blockRight;
@@ -116,6 +120,7 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
     private int blockRead;
     private long stamp;
     private float masterVolume;
+    private GmChoirVoicing choirVoicing = GmChoirRows.BankVoicing;
 
     /// <summary>Creates a multi-timbral General MIDI synthesizer at a sample rate.</summary>
     /// <param name="sampleRate">Samples per second, 8,000 to 192,000.</param>
@@ -296,6 +301,34 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
     {
         get => masterVolume;
         set => masterVolume = float.IsNaN(value) ? masterVolume : value < 0f ? 0f : value;
+    }
+
+    // WHICH READING OF THE CHOIR THIS SYNTHESIZER SINGS. It starts on GmChoirRows.BankVoicing - the
+    // one the bank itself carries - and it is internal, and it belongs to the INSTANCE rather than
+    // to the process, so a test that wants to hear one of the others cannot change what another
+    // test hears while both are running. Setting it lets go of the program runtimes so the next
+    // note is built from the new reading; notes already sounding keep the voicing they started on,
+    // which is the same rule a program change follows.
+    internal GmChoirVoicing ChoirVoicing
+    {
+        get => choirVoicing;
+
+        set
+        {
+            if (choirVoicing == value) { return; }
+
+            choirVoicing = value;
+
+            for (int program = 0; program < programRuntimes.Length; program++)
+            {
+                programRuntimes[program] = null;
+            }
+
+            for (int index = 0; index < largerSectionRuntimes.Length; index++)
+            {
+                largerSectionRuntimes[index] = null;
+            }
+        }
     }
 
     /// <summary>The General MIDI program a channel is playing.</summary>
@@ -682,7 +715,7 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
         }
         else
         {
-            runtime = ProgramRuntime(state.Program);
+            runtime = ProgramRuntime(state.Program, Adjustments.EnsembleFor(state.Program));
             adjustment = Adjustments.ResolveProgram(state.Program);
         }
 
@@ -857,14 +890,36 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
         return quietestReleased ?? oldest;
     }
 
-    private GmProgramRuntime ProgramRuntime(int program)
+    private GmProgramRuntime ProgramRuntime(int program, GeneralMidiEnsemble ensemble)
     {
+        // A program that has no larger section to offer takes the ordinary path whatever was asked
+        // for, so the SAME runtime object is used either way and Full cannot change its sound.
+        if (ensemble == GeneralMidiEnsemble.Full &&
+            GmChoirRows.HasLargerSection(program) &&
+            choirVoicing != GmChoirRows.LargerSection)
+        {
+            int index = GmChoirRows.ChoirIndex(program);
+            GmProgramRuntime larger = largerSectionRuntimes[index];
+
+            if (larger == null)
+            {
+                larger = new GmProgramRuntime(
+                    GmBank.Program(program, GmChoirRows.LargerSection), settings.SampleRate,
+                    voices.Length, Seed(program));
+
+                largerSectionRuntimes[index] = larger;
+            }
+
+            return larger;
+        }
+
         GmProgramRuntime runtime = programRuntimes[program];
 
         if (runtime == null)
         {
             runtime = new GmProgramRuntime(
-                GmBank.Program(program), settings.SampleRate, voices.Length, Seed(program));
+                GmBank.Program(program, choirVoicing), settings.SampleRate, voices.Length,
+                Seed(program));
 
             programRuntimes[program] = runtime;
         }
@@ -935,7 +990,7 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
     {
         state.Program = program;
 
-        SetInsert(state, GmBank.Program(program).Insert);
+        SetInsert(state, GmBank.Program(program, choirVoicing).Insert);
     }
 
     private void SetInsert(GmChannel state, GmInsertSpec insert)

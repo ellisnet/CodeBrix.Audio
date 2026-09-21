@@ -1,8 +1,9 @@
 namespace CodeBrix.Audio.ModestSynth;
 
 /// <summary>
-/// The seven knobs a consumer may turn on ONE General MIDI program, or on one note of the percussion
-/// kit: level, brightness, attack, release, vibrato depth, reverb send and pan.
+/// The knobs a consumer may turn on ONE General MIDI program, or on one note of the percussion kit:
+/// level, brightness, attack, release, vibrato depth, reverb send, pan, and how many players or
+/// singers the program puts on a note.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -21,7 +22,7 @@ namespace CodeBrix.Audio.ModestSynth;
 /// <para>
 /// An adjustment is read when a NOTE STARTS. Changing one while a note is sounding affects the next
 /// note, not the one already playing, and it survives a program change because it belongs to the
-/// program rather than to the channel.
+/// program rather than to the channel. <see cref="Ensemble" /> follows the same rule.
 /// </para>
 /// </remarks>
 /// <example>
@@ -33,10 +34,11 @@ namespace CodeBrix.Audio.ModestSynth;
 /// celesta.Brightness = -0.8;          // most of an octave down on the filter
 /// celesta.Level = 0.8;
 ///
-/// // Give the choir a longer release and a deeper vibrato.
+/// // Give the choir a longer release and a deeper vibrato, and ask for a fuller one.
 /// var choir = synthesizer.Adjustments.Program(GeneralMidiProgram.ChoirAahs);
 /// choir.Release = 2.0;
 /// choir.VibratoDepth = 1.5;
+/// choir.Ensemble = GeneralMidiEnsemble.Full;      // twice the singers on every note
 ///
 /// // Move the whole drum kit slightly right, and dry out the snare.
 /// synthesizer.Adjustments.Percussion.Pan = 0.15;
@@ -52,6 +54,7 @@ public sealed class GeneralMidiAdjustment
     private double vibratoDepth = 1.0;
     private double pan;
     private double? reverbSend;
+    private GeneralMidiEnsemble ensemble;
 
     /// <summary>
     /// A gain MULTIPLIER on the program's own level, 0 to 4. Default 1, which changes nothing.
@@ -144,10 +147,46 @@ public sealed class GeneralMidiAdjustment
         set => pan = Clamp(value, -1.0, 1.0, pan);
     }
 
+    /// <summary>
+    /// How many players or singers this program puts on one note.
+    /// <see cref="GeneralMidiEnsemble.Standard" /> - the default - is the section the bank carries;
+    /// <see cref="GeneralMidiEnsemble.Full" /> asks for the larger one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// IT IS PER PROGRAM, AND MOST PROGRAMS HAVE ONLY ONE SECTION. Asking for
+    /// <see cref="GeneralMidiEnsemble.Full" /> on a program that has no larger section changes
+    /// nothing at all - the render is identical, sample for sample - rather than being refused, so
+    /// a consumer may set it broadly without checking which programs answer. The choral voices are
+    /// what answer it today; it is the natural place for a string section to gain a larger reading
+    /// later.
+    /// </para>
+    /// <para>
+    /// IT COSTS WHAT MORE PLAYERS COST, because a larger section is more oscillators on the same
+    /// note. On the choral voices it is twice the singers, and the whole synthesizer renders at
+    /// roughly two thirds to three quarters of the speed it does without it; the package's
+    /// AGENT-README carries the measured figures.
+    /// </para>
+    /// <para>
+    /// Like every other knob here it is read when a NOTE STARTS, so it reaches the notes that
+    /// follow rather than the ones already sounding. A value that is not one of the two defined
+    /// ones is treated as <see cref="GeneralMidiEnsemble.Standard" />.
+    /// </para>
+    /// </remarks>
+    public GeneralMidiEnsemble Ensemble
+    {
+        get => ensemble;
+
+        set => ensemble = value == GeneralMidiEnsemble.Full
+            ? GeneralMidiEnsemble.Full
+            : GeneralMidiEnsemble.Standard;
+    }
+
     /// <summary>Whether every knob is still where it started, so this adjustment does nothing.</summary>
     public bool IsDefault =>
         level == 1.0 && brightness == 0.0 && attack == 1.0 && release == 1.0 &&
-        vibratoDepth == 1.0 && pan == 0.0 && !reverbSend.HasValue;
+        vibratoDepth == 1.0 && pan == 0.0 && !reverbSend.HasValue &&
+        ensemble == GeneralMidiEnsemble.Standard;
 
     /// <summary>Puts every knob back where it started.</summary>
     public void Reset()
@@ -159,6 +198,7 @@ public sealed class GeneralMidiAdjustment
         vibratoDepth = 1.0;
         pan = 0.0;
         reverbSend = null;
+        ensemble = GeneralMidiEnsemble.Standard;
     }
 
     /// <summary>Copies another adjustment's values over this one's.</summary>
@@ -178,6 +218,7 @@ public sealed class GeneralMidiAdjustment
         vibratoDepth = other.vibratoDepth;
         pan = other.pan;
         reverbSend = other.reverbSend;
+        ensemble = other.ensemble;
     }
 
     /// <summary>Makes an independent copy.</summary>

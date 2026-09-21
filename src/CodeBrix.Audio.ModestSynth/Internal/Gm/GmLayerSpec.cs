@@ -27,6 +27,12 @@ internal sealed class GmLayerSpec
     // layer can be any waveform the package generates, FM algorithms and wavetables included.
     internal ModestPatch Patch;
 
+    // Set only on a layer whose recipe is a SUNG VOWEL, where a patch cannot say what is needed -
+    // two or three resonances that stay put in Hertz are a filter rather than a waveform. When it
+    // is here the layer's oscillator is a GmChoirOscillator built from it, and Patch describes only
+    // the source and the start phase.
+    internal GmChoirSpec Choir;
+
     internal double Level = 1.0;
 
     internal double Transpose;
@@ -63,6 +69,7 @@ internal sealed class GmLayerSpec
             Shape = Shape,
             Ring = Ring,
             Patch = Patch,
+            Choir = Choir == null ? null : Choir.Clone(),
             Level = Level,
             Transpose = Transpose,
             FineCents = FineCents,

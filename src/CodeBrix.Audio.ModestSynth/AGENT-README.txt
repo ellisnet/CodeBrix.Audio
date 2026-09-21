@@ -371,14 +371,24 @@ is an honest best rather than an imitation: a concert piano and a solo bowed
 string are convincing as a synthesizer's piano and a synthesizer's violin, and
 not as the instruments themselves.
 
+THE TWO VOICE PROGRAMS SING. Choir Aahs and Voice Oohs are built as a voice is:
+a glottal source with breath in it, through resonances that STAY WHERE THEY ARE
+in Hertz while the note moves through them, which is what separates a vowel from
+an organ stop, whose whole spectrum slides with the note. Several singers share
+each key, and no two of them hold the pitch identically - each has a slow wander
+and a vibrato of its own rate, depth and moment, drawn from a seed, so a render
+still repeats exactly. They cost a little over a warm pad of the same shape, and
+there is a FULLER reading of both, with twice the singers, a consumer may ask
+for - see ENSEMBLE under the per-program adjustments.
+
 IF YOU WANT RECORDED INSTRUMENTS, CHANGE ONE LINE. The instrument-library seam
 in CodeBrix.Audio takes a SoundFont, and a MappedInstrumentLibrary takes Decent
 Sampler packs and SFZ files one voice at a time over whatever base you start
 from - including this one, which is exactly the workflow that seam is for: start
 here, listen, and swap the voices you want to swap.
 
-THE SEVEN PER-PROGRAM ADJUSTMENTS
-----------------------------------
+THE PER-PROGRAM ADJUSTMENTS
+----------------------------
 These are the SUPPORTED way to change how a program sounds. The bank's own rows
 are internal and may be retuned in a later release without any API change, so
 anything written against them would break; these do not.
@@ -390,6 +400,10 @@ anything written against them would break; these do not.
 
     // "Give the choir a longer release."
     synthesizer.Adjustments.Program(GeneralMidiProgram.ChoirAahs).Release = 2.0;
+
+    // "Give me a fuller choir." Twice the singers on every note.
+    synthesizer.Adjustments.Program(GeneralMidiProgram.ChoirAahs).Ensemble =
+        GeneralMidiEnsemble.Full;
 
     // Move the whole kit slightly right - its layout is KEPT - and dry out just
     // the snare.
@@ -405,7 +419,19 @@ anything written against them would break; these do not.
     VibratoDepth   MULTIPLIER, 0..4          (1)
     ReverbSend     REPLACES, 0..1, or null   (null = the program's own)
     Pan            OFFSET, -1..1             (0)
+    Ensemble       Standard or Full          (Standard) how many players
     IsDefault / Reset() / CopyFrom(other) / Clone()
+
+  ENSEMBLE IS THE ONE THAT CHANGES THE VOICING RATHER THAN A NUMBER ON TOP OF
+  IT. Full asks a program for its LARGER SECTION, and MOST PROGRAMS HAVE ONLY
+  ONE: on those it changes nothing at all, sample for sample, rather than being
+  refused, so it is safe to set broadly. The two voice programs - Choir Aahs and
+  Voice Oohs - are what answer it today, where Full is twice the singers on
+  every note, matched to the same loudness. It costs what more players cost: the
+  whole synthesizer renders at roughly two thirds to three quarters of the speed
+  it does without it, and held four voices deep the choir goes from about eighty
+  times real time to about sixty. Like the rest, it is read when a NOTE STARTS,
+  and on the library's template it reaches the synthesizers made after it is set.
 
   GeneralMidiAdjustments
     Program(0..127) or Program(GeneralMidiProgram)
@@ -499,11 +525,12 @@ seen and lowered.
   WHAT COSTS MOST. A voicing that does not use a feature does not pay for it: no
   filter is a skipped stage, no LFO is a skipped update, a single oscillator is
   one oscillator, and a program naming no insert effect builds none. What is
-  dear is what stacks - a stereo unison, an extra layer, a six-operator FM pair,
-  and above all CHOIR AAHS, the one program built on a summed vowel spectrum,
-  which is the dearest voice in the bank at several times what a pad costs.
-  Stacking three choir notes under a melody is the most expensive thing you can
-  ask this bank for; everything else is cheap beside it.
+  dear is what stacks - a stereo unison, an extra layer and a six-operator FM
+  pair - so the dearest voicings are the ones that use several of those at once.
+  The two voice programs sing through fixed resonances, which cost the same
+  whatever the pitch is rather than growing with the number of harmonics, so
+  even asking them for their fuller section is only about twice a warm pad.
+  Nothing in the bank is in a class of its own for cost any more.
 
   RENDERING ALLOCATES NOTHING. The first few notes of a program build that
   program's oscillators, which are then recycled for ever, and a program change
@@ -2013,7 +2040,12 @@ QUICK REFERENCE
   Change how a program      synthesizer.Adjustments.Program(
     sounds                      GeneralMidiProgram.Celesta).Brightness = -0.8
                             Level, Brightness, Attack, Release, VibratoDepth,
-                            ReverbSend, Pan - read when a note STARTS
+                            ReverbSend, Pan, Ensemble - read when a note STARTS
+  A fuller choir            synthesizer.Adjustments.Program(
+                                GeneralMidiProgram.ChoirAahs).Ensemble =
+                                    GeneralMidiEnsemble.Full
+                            // twice the singers; nothing on a program that
+                            // has only one section
   Change it everywhere      GeneralMidiInstrumentLibrary.Instance.Adjustments
                             // a TEMPLATE, copied into what it creates next
   Move or dry the kit       synthesizer.Adjustments.Percussion.Pan = 0.15

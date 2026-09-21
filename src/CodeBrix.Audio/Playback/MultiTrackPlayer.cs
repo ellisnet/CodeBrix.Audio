@@ -48,10 +48,19 @@ public sealed partial class MultiTrackPlayer : IDisposable
     public const int DefaultRenderSampleRate = 44100;
 
     /// <summary>
-    /// The rate <see cref="MeasureRelativeTrackLevels()"/> renders at. Loudness does not depend on
-    /// the sample rate, so the measurement runs at a low one and costs about half of what a
-    /// full-rate render would.
+    /// The LOWEST rate a level measurement ever runs at. A measurement follows the rate the music
+    /// will be rendered or played at, and this is only the floor under it.
     /// </summary>
+    /// <remarks>
+    /// LOUDNESS DEPENDS ON THE SAMPLE RATE, whatever the arithmetic suggests, because a rate
+    /// carries no energy above half of itself. An instrument whose sound sits mostly above 11 kHz -
+    /// a synthesized cymbal, a bright hi-hat - measures as almost silent at 22050 Hz and is then
+    /// handed a make-up gain many times too large, which is an overload in the render that follows.
+    /// So a measurement runs at the rate the music will really be heard at:
+    /// <see cref="MeasureRelativeTrackLevels()"/> uses the prepared device's rate, or
+    /// <see cref="DefaultRenderSampleRate"/> when the player is not prepared, and
+    /// <see cref="Render(int, TimeSpan?)"/> measures at the rate it is rendering.
+    /// </remarks>
     public const int LevelMeasurementSampleRate = 22050;
 
     /// <summary>How long the mix keeps rendering past the end of the song, by default.</summary>
@@ -63,13 +72,19 @@ public sealed partial class MultiTrackPlayer : IDisposable
 
     private readonly object gate = new object();
     private readonly List<PlayerTrack> tracks = new List<PlayerTrack>();
+    private readonly List<string> problems = new List<string>();
     private readonly TempoSource tempoSource = new TempoSource();
 
     private MultiTrackDataProvider provider;
     private SoundPlayer player;
     private SynchronizationContext syncContext;
     private Task levelMeasurement = Task.CompletedTask;
-    private bool autoMeasurementStarted;
+    private LevelMatchResult lastLevelMatch;
+
+    // Whether ANY measurement has been started on this player, however. It is what keeps the
+    // automatic measurement - Prepare's, and an offline render's - from running a second time over
+    // work a consumer has already had done.
+    private bool measurementStarted;
     private float volume = 1.0f;
     private bool isLooping;
     private TimeSpan tail = DefaultTail;
@@ -91,6 +106,22 @@ public sealed partial class MultiTrackPlayer : IDisposable
     public IReadOnlyList<PlayerTrack> Tracks
     {
         get { lock (gate) { return tracks.ToArray(); } }
+    }
+
+    /// <summary>
+    /// Everything that could not be honoured when this player was BUILT, one human-readable line
+    /// each. Empty for a clean build, and empty on a player assembled by hand. Never thrown.
+    /// </summary>
+    /// <remarks>
+    /// A loader fills this - <see cref="Load(Suno.SunoSong, Suno.SunoPlayerOptions)"/> reports a
+    /// per-stem instrument naming a part the song does not have, a part whose notes the chosen
+    /// instrument library does not cover, and the like. It is the same idiom as
+    /// <c>SunoSong.Problems</c>: things worth telling a developer about that are not worth stopping
+    /// for, because a silent part is otherwise indistinguishable from a fault in the music.
+    /// </remarks>
+    public IReadOnlyList<string> Problems
+    {
+        get { lock (gate) { return problems.ToArray(); } }
     }
 
     /// <summary>
@@ -117,11 +148,54 @@ public sealed partial class MultiTrackPlayer : IDisposable
     /// <see cref="LevelMeasurement"/> if you need the result to be in before you read a gain.
     /// </para>
     /// <para>
+    /// OFFLINE, WITH NO DEVICE, it is honoured too: <see cref="Render(int, TimeSpan?)"/> and the
+    /// renders built on it measure - at the rate they are rendering - before they render, when the
+    /// option is on and no measurement has run yet. A render never silently ignores it.
+    /// </para>
+    /// <para>
     /// It writes <see cref="PlayerTrack.MidiSourceGain"/> and nothing else. With it off, NO gain the
     /// consumer did not set is ever touched.
     /// </para>
     /// </remarks>
     public bool AutoSetRelativeTrackLevels { get; set; }
+
+    /// <summary>
+    /// Whether a completed level measurement also sets <see cref="Volume"/> to
+    /// <see cref="LevelMatchResult.SuggestedVolume"/>, so the matched mix lands exactly at full
+    /// scale. Defaults to <see langword="false"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// OFF BY DEFAULT, and deliberately: nothing in this player limits or normalises anything the
+    /// consumer did not ask it to, and a measurement writes
+    /// <see cref="PlayerTrack.MidiSourceGain"/> alone. Turn this on and the measurement writes
+    /// <see cref="Volume"/> as well - the one figure that would otherwise cost a whole extra render
+    /// to find.
+    /// </para>
+    /// <para>
+    /// It fits in BOTH directions: a mix that would clip is turned down, and a mix with headroom
+    /// going spare is turned up to use it. Read <see cref="LastLevelMatch"/> instead when you want
+    /// to decide for yourself.
+    /// </para>
+    /// </remarks>
+    public bool FitVolumeAfterLevelMatching { get; set; }
+
+    /// <summary>
+    /// What the most recent level measurement found - how many tracks were matched, what the
+    /// matched mix peaks at, and the <see cref="Volume"/> that would make it fit. Null until a
+    /// measurement that matched at least one track has completed.
+    /// </summary>
+    /// <remarks>
+    /// Written when the measurement finishes, so read it after
+    /// <see cref="MeasureRelativeTrackLevels()"/> returns or after
+    /// <see cref="LevelMeasurement"/> completes. A measurement that matched nothing - no track holds
+    /// both a recording and a MIDI performance - leaves this as it was and renders no mix to
+    /// measure.
+    /// </remarks>
+    public LevelMatchResult LastLevelMatch
+    {
+        get { lock (gate) { return lastLevelMatch; } }
+    }
 
     /// <summary>
     /// The most recent level measurement, as a task that completes when the gains have been
@@ -132,7 +206,7 @@ public sealed partial class MultiTrackPlayer : IDisposable
     /// <remarks>
     /// A measurement is started by <see cref="Prepare"/> when
     /// <see cref="AutoSetRelativeTrackLevels"/> is on, and by
-    /// <see cref="MeasureRelativeTrackLevelsAsync"/>. The synchronous
+    /// <see cref="MeasureRelativeTrackLevelsAsync()"/>. The synchronous
     /// <see cref="MeasureRelativeTrackLevels()"/> has finished by the time it returns, so it leaves
     /// a completed task here as well.
     /// </remarks>
@@ -471,7 +545,7 @@ public sealed partial class MultiTrackPlayer : IDisposable
             player = newPlayer;
             syncContext ??= SynchronizationContext.Current;
 
-            StartLevelMeasurement(snapshot);
+            StartLevelMeasurement(snapshot, rate);
         }
     }
 
@@ -570,7 +644,18 @@ public sealed partial class MultiTrackPlayer : IDisposable
     /// <para>
     /// Every per-track control and <see cref="Volume"/> apply, so what comes out is what the
     /// speakers would have produced. Nothing is limited or normalised: a mix that adds up past 1.0
-    /// comes back past 1.0, and turning it down is what <see cref="Volume"/> is for.
+    /// comes back past 1.0, and turning it down is what <see cref="Volume"/> is for -
+    /// <see cref="LastLevelMatch"/> says by how much.
+    /// </para>
+    /// <para>
+    /// WITH <see cref="AutoSetRelativeTrackLevels"/> ON and no measurement yet run, this MEASURES
+    /// first, at the rate it is about to render at, on this thread. No audio device is needed for
+    /// that, and a render never quietly produces a mix whose gains were never written.
+    /// </para>
+    /// <para>
+    /// Any Decent Sampler synthesizer among the tracks is switched to the offline streaming mode
+    /// for the render and put back afterwards, exactly as <c>SoundFontRenderer</c> does: an offline
+    /// render outruns a background reader, and a starved block is written as silence.
     /// </para>
     /// </remarks>
     public float[] Render(int sampleRate = DefaultRenderSampleRate, TimeSpan? tailLength = null)
@@ -579,6 +664,8 @@ public sealed partial class MultiTrackPlayer : IDisposable
         {
             throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "The sample rate must be positive.");
         }
+
+        EnsureLevelsMeasuredForRender(sampleRate);
 
         PlayerTrack[] snapshot;
         TimeSpan effectiveTail;
@@ -602,6 +689,7 @@ public sealed partial class MultiTrackPlayer : IDisposable
         }
 
         using (var mix = new MultiTrackMix(snapshot, sampleRate, null))
+        using (OfflineStreamingScope.Enter(mix.MidiSynthesizers))
         {
             var frames = mix.LengthFrames + (long)(effectiveTail.TotalSeconds * sampleRate);
             if (frames <= 0)
@@ -674,6 +762,140 @@ public sealed partial class MultiTrackPlayer : IDisposable
     }
 
     /// <summary>
+    /// Renders the whole song to a file, in whatever format the file's EXTENSION names.
+    /// </summary>
+    /// <param name="outputPath">
+    /// Path of the file to write, overwritten if it exists. Its extension chooses the writer
+    /// through <see cref="AudioFileWriterRegistry"/>: <c>.wav</c> and <c>.aif</c> / <c>.aiff</c>
+    /// out of the box, and any other format a consumer has registered.
+    /// </param>
+    /// <param name="sampleRate">The rate to render at.</param>
+    /// <param name="tailLength">How long to keep rendering past the end of the song. Defaults to <see cref="Tail"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="outputPath"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive.</exception>
+    /// <exception cref="NotSupportedException">
+    /// No writer is registered for the file's extension. The message names it and lists what IS
+    /// registered.
+    /// </exception>
+    /// <remarks>
+    /// This is <see cref="Render(int, TimeSpan?)"/> with the samples written out, so it measures
+    /// levels and switches a Decent Sampler synthesizer to the offline mode exactly as that does.
+    /// <see cref="RenderToWav(string, int, TimeSpan?)"/> is the shorter way to the 32-bit float WAV
+    /// it has always written; this is the way to every other registered format and every other
+    /// depth.
+    /// </remarks>
+    public void RenderToFile(string outputPath, int sampleRate = DefaultRenderSampleRate,
+        TimeSpan? tailLength = null)
+    {
+        if (outputPath == null)
+        {
+            throw new ArgumentNullException(nameof(outputPath));
+        }
+
+        var factory = AudioFileWriterRegistry.Resolve(outputPath);
+
+        RenderToFile(outputPath, factory.DefaultFormat(sampleRate, 2), tailLength);
+    }
+
+    /// <summary>
+    /// Renders the whole song to a file in a format of your choosing - 16-bit PCM, for instance,
+    /// instead of the 32-bit float a <c>.wav</c> is written as by default.
+    /// </summary>
+    /// <param name="outputPath">Path of the file to write; its extension chooses the writer.</param>
+    /// <param name="format">
+    /// The format to store. Its <see cref="WaveFormat.SampleRate"/> is what the render is produced
+    /// at, and its <see cref="WaveFormat.Channels"/> must be 2, because a mix is stereo.
+    /// </param>
+    /// <param name="tailLength">How long to keep rendering past the end of the song. Defaults to <see cref="Tail"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="outputPath"/> or <paramref name="format"/> is null.</exception>
+    /// <exception cref="ArgumentException">The format is not stereo, or the writer refuses it.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the file's extension.</exception>
+    public void RenderToFile(string outputPath, WaveFormat format, TimeSpan? tailLength = null)
+    {
+        if (outputPath == null)
+        {
+            throw new ArgumentNullException(nameof(outputPath));
+        }
+
+        RequireStereo(format);
+
+        // Resolved BEFORE the file is created, so an unregistered extension does not leave an empty
+        // file behind.
+        var factory = AudioFileWriterRegistry.Resolve(outputPath);
+        var samples = Render(format.SampleRate, tailLength);
+
+        using (var stream = File.Create(outputPath))
+        using (var writer = factory.Create(stream, format))
+        {
+            writer.Write(samples, 0, samples.Length);
+            writer.Finish();
+        }
+    }
+
+    /// <summary>
+    /// Renders the whole song to a stream, in whatever format an extension names.
+    /// </summary>
+    /// <param name="output">
+    /// The stream to write to. It is NEVER closed by this method, and it must be seekable when the
+    /// chosen writer says so - WAV and AIFF both do, because they patch their headers.
+    /// </param>
+    /// <param name="fileNameOrExtension">The format to write, as ".wav", "wav" or "mix.wav".</param>
+    /// <param name="sampleRate">The rate to render at.</param>
+    /// <param name="tailLength">How long to keep rendering past the end of the song. Defaults to <see cref="Tail"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="output"/> or <paramref name="fileNameOrExtension"/> is null.</exception>
+    /// <exception cref="ArgumentException">The stream cannot be written to, or cannot seek and the format needs it to.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the extension.</exception>
+    public void RenderToStream(Stream output, string fileNameOrExtension,
+        int sampleRate = DefaultRenderSampleRate, TimeSpan? tailLength = null)
+    {
+        if (fileNameOrExtension == null)
+        {
+            throw new ArgumentNullException(nameof(fileNameOrExtension));
+        }
+
+        var factory = AudioFileWriterRegistry.Resolve(fileNameOrExtension);
+
+        RenderToStream(output, fileNameOrExtension, factory.DefaultFormat(sampleRate, 2), tailLength);
+    }
+
+    /// <summary>Renders the whole song to a stream, in a format of your choosing.</summary>
+    /// <param name="output">The stream to write to. It is never closed by this method.</param>
+    /// <param name="fileNameOrExtension">The format to write, as ".wav", "wav" or "mix.wav".</param>
+    /// <param name="format">
+    /// The format to store. Its sample rate is what the render is produced at, and it must be
+    /// stereo.
+    /// </param>
+    /// <param name="tailLength">How long to keep rendering past the end of the song. Defaults to <see cref="Tail"/>.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentException">The format is not stereo, or the stream is unusable for it.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the extension.</exception>
+    public void RenderToStream(Stream output, string fileNameOrExtension, WaveFormat format,
+        TimeSpan? tailLength = null)
+    {
+        if (output == null)
+        {
+            throw new ArgumentNullException(nameof(output));
+        }
+
+        if (fileNameOrExtension == null)
+        {
+            throw new ArgumentNullException(nameof(fileNameOrExtension));
+        }
+
+        RequireStereo(format);
+
+        var factory = AudioFileWriterRegistry.Resolve(fileNameOrExtension);
+        var samples = Render(format.SampleRate, tailLength);
+
+        using (var writer = factory.Create(output, format))
+        {
+            writer.Write(samples, 0, samples.Length);
+            writer.Finish();
+        }
+    }
+
+    /// <summary>
     /// Measures each track's recording against its own MIDI rendition and sets
     /// <see cref="PlayerTrack.MidiSourceGain"/> so the two are the same loudness.
     /// </summary>
@@ -682,31 +904,59 @@ public sealed partial class MultiTrackPlayer : IDisposable
     /// This BLOCKS the calling thread until the measurement is done - it is what
     /// <see cref="AutoSetRelativeTrackLevels"/> runs on a worker thread, run here on yours. Call it
     /// when you want it done before the next line, or want to redo it after changing an instrument;
-    /// call <see cref="MeasureRelativeTrackLevelsAsync"/> instead when you would rather wait for it
+    /// call <see cref="MeasureRelativeTrackLevelsAsync()"/> instead when you would rather wait for it
     /// without holding a thread. Only tracks holding BOTH a recording and a MIDI performance are
     /// touched - there is nothing to match against otherwise.
     /// </para>
     /// <para>
-    /// The measure is RMS over the whole track, at <see cref="LevelMeasurementSampleRate"/>. It
-    /// decodes and synthesizes the whole song to do it, so it is seconds of work, not milliseconds.
-    /// A track whose recording or rendition is effectively silent is left alone.
+    /// The measure is RMS over the whole track, AT THE RATE THE MUSIC WILL BE HEARD AT: the
+    /// prepared device's rate when the player is prepared, and
+    /// <see cref="DefaultRenderSampleRate"/> when it is not. It decodes and synthesizes the whole
+    /// song to do it, and then renders the matched mix once more to find what it peaks at, so it is
+    /// seconds of work rather than milliseconds. A track whose recording or rendition is
+    /// effectively silent is left alone. NO AUDIO DEVICE IS OPENED - this is the way to match
+    /// levels for an offline render.
     /// </para>
     /// <para>
     /// It has finished by the time it returns, so <see cref="LevelMeasurement"/> is a completed
-    /// task afterwards and the two members read as the pair they look like.
+    /// task afterwards, <see cref="LastLevelMatch"/> holds what it found, and the members read as
+    /// the pair they look like.
     /// </para>
     /// </remarks>
     /// <exception cref="ObjectDisposedException">The player has been disposed.</exception>
-    public void MeasureRelativeTrackLevels()
+    public void MeasureRelativeTrackLevels() => MeasureRelativeTrackLevels(MeasurementRate());
+
+    /// <summary>
+    /// Measures each track's recording against its own MIDI rendition AT A RATE YOU CHOOSE, and
+    /// sets <see cref="PlayerTrack.MidiSourceGain"/> so the two are the same loudness.
+    /// </summary>
+    /// <param name="sampleRate">
+    /// The rate to measure at, which should be the rate the music will be rendered or played at.
+    /// Anything below <see cref="LevelMeasurementSampleRate"/> is raised to it.
+    /// </param>
+    /// <exception cref="ObjectDisposedException">The player has been disposed.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive.</exception>
+    /// <remarks>
+    /// The rate matters: an instrument whose energy sits above half the measuring rate measures as
+    /// almost silent and is then given a make-up gain many times too large. Measure at the rate you
+    /// will render at.
+    /// </remarks>
+    public void MeasureRelativeTrackLevels(int sampleRate)
     {
+        if (sampleRate <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "The sample rate must be positive.");
+        }
+
         PlayerTrack[] snapshot;
         lock (gate)
         {
             ThrowIfDisposed();
+            measurementStarted = true;
             snapshot = tracks.ToArray();
         }
 
-        MeasureLevels(snapshot);
+        MeasureLevels(snapshot, sampleRate);
 
         lock (gate)
         {
@@ -733,14 +983,43 @@ public sealed partial class MultiTrackPlayer : IDisposable
     /// running starts a second one rather than joining the first; the last one started is the one
     /// <see cref="LevelMeasurement"/> reports.
     /// </remarks>
-    public Task MeasureRelativeTrackLevelsAsync()
+    public Task MeasureRelativeTrackLevelsAsync() => MeasureRelativeTrackLevelsAsync(MeasurementRate());
+
+    /// <summary>
+    /// Starts <see cref="MeasureRelativeTrackLevels(int)"/> on a worker thread at a rate you
+    /// choose, and returns the task it runs on.
+    /// </summary>
+    /// <param name="sampleRate">
+    /// The rate to measure at, which should be the rate the music will be rendered or played at.
+    /// Anything below <see cref="LevelMeasurementSampleRate"/> is raised to it.
+    /// </param>
+    /// <returns>The running measurement. Await it to know the gains have been written.</returns>
+    /// <exception cref="ObjectDisposedException">The player has been disposed.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive.</exception>
+    public Task MeasureRelativeTrackLevelsAsync(int sampleRate)
     {
+        if (sampleRate <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "The sample rate must be positive.");
+        }
+
         lock (gate)
         {
             ThrowIfDisposed();
+            measurementStarted = true;
             var snapshot = tracks.ToArray();
-            levelMeasurement = Task.Run(() => MeasureLevels(snapshot));
+            levelMeasurement = Task.Run(() => MeasureLevels(snapshot, sampleRate));
             return levelMeasurement;
+        }
+    }
+
+    // The rate the music will be heard at: the device's when one is open, and the rate an offline
+    // render uses when there is not.
+    private int MeasurementRate()
+    {
+        lock (gate)
+        {
+            return provider != null ? provider.SampleRate : DefaultRenderSampleRate;
         }
     }
 
@@ -877,19 +1156,55 @@ public sealed partial class MultiTrackPlayer : IDisposable
     }
 
     // Callers hold the gate.
-    private void StartLevelMeasurement(PlayerTrack[] snapshot)
+    private void StartLevelMeasurement(PlayerTrack[] snapshot, int sampleRate)
     {
-        if (!AutoSetRelativeTrackLevels || autoMeasurementStarted)
+        if (!AutoSetRelativeTrackLevels || measurementStarted)
         {
             return;
         }
 
-        autoMeasurementStarted = true;
-        levelMeasurement = Task.Run(() => MeasureLevels(snapshot));
+        measurementStarted = true;
+        levelMeasurement = Task.Run(() => MeasureLevels(snapshot, sampleRate));
     }
 
-    private static void MeasureLevels(PlayerTrack[] snapshot)
+    // Measures before an OFFLINE render, so that turning the option on and rendering without ever
+    // preparing does what it says rather than rendering with every gain still at 1.0. It measures
+    // at the rate the render is about to run at, which is the rate that loudness means anything at.
+    private void EnsureLevelsMeasuredForRender(int sampleRate)
     {
+        PlayerTrack[] snapshot;
+
+        lock (gate)
+        {
+            ThrowIfDisposed();
+
+            if (!AutoSetRelativeTrackLevels || measurementStarted)
+            {
+                return;
+            }
+
+            measurementStarted = true;
+            snapshot = tracks.ToArray();
+        }
+
+        MeasureLevels(snapshot, sampleRate);
+
+        lock (gate)
+        {
+            if (levelMeasurement.IsCompleted)
+            {
+                levelMeasurement = Task.CompletedTask;
+            }
+        }
+    }
+
+    private void MeasureLevels(PlayerTrack[] snapshot, int sampleRate)
+    {
+        // The floor is the only thing left of the old fixed measurement rate: a caller who asks for
+        // a measurement at a very low rate still gets one that can see an instrument's energy.
+        var rate = sampleRate < LevelMeasurementSampleRate ? LevelMeasurementSampleRate : sampleRate;
+        var matched = 0;
+
         foreach (var track in snapshot)
         {
             if (!track.HasAudioSource || !track.HasMidiSource)
@@ -897,8 +1212,8 @@ public sealed partial class MultiTrackPlayer : IDisposable
                 continue;
             }
 
-            var audioRms = MeasureRms(track, TrackSource.Audio);
-            var midiRms = MeasureRms(track, TrackSource.Midi);
+            var audioRms = MeasureRms(track, TrackSource.Audio, rate);
+            var midiRms = MeasureRms(track, TrackSource.Midi, rate);
 
             // Nothing to match: a silent recording or a rendition that produced no sound would only
             // give an absurd ratio, so the gain the consumer set stands.
@@ -909,44 +1224,144 @@ public sealed partial class MultiTrackPlayer : IDisposable
 
             var ratio = audioRms / midiRms;
             track.MidiSourceGain = (float)Math.Clamp(ratio, 1.0 / 32.0, 32.0);
+            matched++;
+        }
+
+        if (matched == 0)
+        {
+            // Nothing was matched, so there is no matched mix to report on and no reason to pay for
+            // rendering one.
+            return;
+        }
+
+        var result = new LevelMatchResult(rate, matched, MeasureMixPeak(snapshot, rate));
+
+        lock (gate)
+        {
+            lastLevelMatch = result;
+        }
+
+        if (FitVolumeAfterLevelMatching)
+        {
+            Volume = result.SuggestedVolume;
         }
     }
 
-    private static double MeasureRms(PlayerTrack track, TrackSource source)
+    // The peak of the SUMMED mix, found by rendering it once with the gains just written. Per-track
+    // peaks cannot be added up: two tracks peak at different moments and cancel as often as they
+    // reinforce, so the only honest answer is the one the mixer itself produces.
+    private static float MeasureMixPeak(PlayerTrack[] snapshot, int sampleRate)
     {
         const int chunkFrames = 4096;
 
-        using (SourceRenderer renderer = source == TrackSource.Audio
-                   ? new AudioSourceRenderer(track.AudioSource, LevelMeasurementSampleRate)
-                   : new MidiSourceRenderer(track, LevelMeasurementSampleRate))
+        using (var mix = new MultiTrackMix(snapshot, sampleRate, null))
+        using (OfflineStreamingScope.Enter(mix.MidiSynthesizers))
         {
-            var total = renderer.LengthFrames;
+            var total = mix.LengthFrames;
             if (total <= 0)
             {
-                return 0.0;
+                return 0.0f;
             }
 
             var buffer = new float[chunkFrames * 2];
-            var sumOfSquares = 0.0;
-            var counted = 0L;
+            var peak = 0.0f;
             var rendered = 0L;
 
             while (rendered < total)
             {
                 var take = (int)Math.Min(chunkFrames, total - rendered);
                 var span = buffer.AsSpan(0, take * 2);
-                renderer.Render(span);
+                mix.Render(span);
 
                 for (var i = 0; i < span.Length; i++)
                 {
-                    sumOfSquares += (double)span[i] * span[i];
+                    var magnitude = Math.Abs(span[i]);
+                    if (magnitude > peak)
+                    {
+                        peak = magnitude;
+                    }
                 }
 
-                counted += span.Length;
                 rendered += take;
             }
 
-            return counted == 0 ? 0.0 : Math.Sqrt(sumOfSquares / counted);
+            return peak;
+        }
+    }
+
+    private static double MeasureRms(PlayerTrack track, TrackSource source, int sampleRate)
+    {
+        const int chunkFrames = 4096;
+
+        using (SourceRenderer renderer = source == TrackSource.Audio
+                   ? new AudioSourceRenderer(track.AudioSource, sampleRate)
+                   : new MidiSourceRenderer(track, sampleRate))
+        {
+            using (OfflineStreamingScope.Enter(SynthesizerOf(renderer)))
+            {
+                var total = renderer.LengthFrames;
+                if (total <= 0)
+                {
+                    return 0.0;
+                }
+
+                var buffer = new float[chunkFrames * 2];
+                var sumOfSquares = 0.0;
+                var counted = 0L;
+                var rendered = 0L;
+
+                while (rendered < total)
+                {
+                    var take = (int)Math.Min(chunkFrames, total - rendered);
+                    var span = buffer.AsSpan(0, take * 2);
+                    renderer.Render(span);
+
+                    for (var i = 0; i < span.Length; i++)
+                    {
+                        sumOfSquares += (double)span[i] * span[i];
+                    }
+
+                    counted += span.Length;
+                    rendered += take;
+                }
+
+                return counted == 0 ? 0.0 : Math.Sqrt(sumOfSquares / counted);
+            }
+        }
+    }
+
+    // A measurement is an offline render too, so the one synthesizer it drives gets the same
+    // treatment every other offline render gets.
+    private static IReadOnlyList<IMidiSynthesizer> SynthesizerOf(SourceRenderer renderer) =>
+        renderer is MidiSourceRenderer midi ? [midi.Synthesizer] : [];
+
+    // Callers do NOT hold the gate.
+    internal void AddProblems(IReadOnlyList<string> found)
+    {
+        if (found == null || found.Count == 0)
+        {
+            return;
+        }
+
+        lock (gate)
+        {
+            problems.AddRange(found);
+        }
+    }
+
+    private static void RequireStereo(WaveFormat format)
+    {
+        if (format == null)
+        {
+            throw new ArgumentNullException(nameof(format));
+        }
+
+        if (format.Channels != 2)
+        {
+            throw new ArgumentException(
+                $"A multi-track mix is stereo, so the output format must have 2 channels; this one " +
+                $"has {format.Channels}.",
+                nameof(format));
         }
     }
 

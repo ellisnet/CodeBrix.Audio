@@ -386,6 +386,9 @@ bar at a time while the music is already sounding.
                 ring-out of whatever was sounding) until more arrives
   pre-roll      how much has to be written ahead of the head before playback
                 starts, and before it starts again after a starvation
+  settled rest  music the producer has decided and that has nothing in it:
+                AdvanceHorizon carries the horizon over it, so the head plays
+                the silence instead of waiting in it
   late event    an event appended at a tick the head has already passed: it is
                 delivered at the next block and counted, never dropped
   complete      the producer's "no more": Append refuses from then on, and
@@ -449,6 +452,44 @@ answers from what is written ahead of the head, so it is right the moment a
 stream is loaded and not only once playback has begun — and watch
 stream.LateEventCount: a producer that keeps arriving late is telling you its
 pre-roll is too small.
+
+A REST IS MUSIC: DECLARE IT WITH AdvanceHorizon. The horizon is the latest tick
+APPENDED, and a bar of silence has nothing to append - so a producer that has
+composed a rest and written nothing leaves the head starving at the last note,
+waiting through the rest instead of playing it. stream.AdvanceHorizon(tick) is
+the producer saying "everything up to here is settled, and there is simply
+nothing in it":
+
+    stream.AppendNote(tick, 1, 60, 100, 240);
+    tick += 4 * 480;                  // a bar of rest follows
+    stream.AdvanceHorizon(tick);      // ... and it is DECIDED, not merely absent
+
+The head then walks through that silence exactly as it walks through written
+music, the pre-roll is satisfied by it, and Duration / HorizonTime grow with it.
+It only ever RAISES the horizon (a tick at or behind it does nothing), it is
+refused after Complete() exactly as Append is, it creates no event - EventCount
+does not move - and it leaves the RECORDING alone, so a declared rest is not in
+the .mid you save. A COMPLETED stream whose horizon lies past its last event
+PLAYS THE TRAILING REST OUT and ends at the horizon: a piece that ends in silence
+ends when the silence does. A stream you never call it on behaves exactly as it
+always did.
+
+IT IS BETTER THAN A PLACEHOLDER EVENT. Appending an empty text meta event at the
+far tick also moves the horizon, and it puts a marker nobody asked for into the
+saved file and moves the tick the recording's conductor track ends at, which the
+playback clock steps through. AdvanceHorizon does neither.
+
+TICKS AND TIME, BOTH WAYS. stream.TimeAtTick(tick) and stream.TickAtTime(time)
+convert through the stream's own tempo map, under its own lock, safely while the
+piece is playing and while the producer is appending. Both are defined BEYOND the
+horizon - the last tempo carries on - so a producer can ask where a bar it has
+not written yet will fall. They are exact inverses of each other, and they depend
+on the MUSIC alone: tempo changes retime them, and markers, text and key
+signatures do not, however many of them a producer writes. (The playback clock
+takes one further step, through the tick the conductor track ends at, because a
+merged MIDI file does; the two therefore differ by at most a single
+hundred-nanosecond TimeSpan tick, and HorizonTime remains the value that equals
+ToSequence().Length exactly.)
 
 COMPLETE() OR IT WAITS FOR EVER. A producer that simply stops writing leaves the
 player playing, and starved, with no end in sight — PlaybackEnded never fires.
@@ -686,6 +727,15 @@ so ask before you voice a part with one.
 A library that does not track key ranges reports the whole keyboard for every
 program it covers, which is the right answer for a synthesized bank.
 
+SO THE CHECK ONLY BITES ON A SAMPLED LIBRARY, and knowing which kind you have is
+the difference between a useful check and a check that always passes. A
+SYNTHESIZED bank - one that builds its sound from oscillators - covers 0 to 127
+on every program it has, and CoversNote is then true for everything. A library
+built from a SoundFont or from sample packs reports the ranges its samples really
+cover, program by program, and those are often narrower than the music: an
+instrument recorded from C3 up plays nothing below it. Ask before voicing a part
+with a sampled library; with a synthesized one the answer is free and always yes.
+
 THE REGISTRY, AND ITS RULES. InstrumentLibraryRegistry is static and
 process-wide, exactly as AudioFileReaderRegistry is.
 
@@ -899,17 +949,72 @@ reads wire channel 9 as its drum bank.
   router.SetChannel(channel, synthesizer[, gain])   a child, built now
   router.SetChannel(channel, factory[, gain])       a child, built on first use
   router.SetLayer(channel, synthesizer or factory[, gain])
-  router.ClearChannel(channel)        drops the channel AND its layer
-  router.ClearLayer(channel)
+  router.ClearChannel(channel)        drops the channel AND its layer, at once
+  router.ClearChannel(channel, ringOut)             ... or lets them ring out
+  router.ClearLayer(channel[, ringOut])
   router.IsRouted / .HasLayer(channel)
+  router.GetChannel(channel) / .GetLayer(channel)   the child itself, or null
   router.GetChannelGain / .SetChannelGain / .GetLayerGain / .SetLayerGain
   router.MasterVolume                 1.0 by default - unity, so an arrangement
                                       is not quietly re-balanced
-  router.ActiveVoiceCount             summed over the children that exist
-  router.Synthesizers                 only the children already built
+  router.RingOutReplacedChildren      true by default - see below
+  router.RingOutLimit                 how long a retired child may go on
+  router.RetiredChildCount            how many are still ringing out
+  router.ActiveVoiceCount             summed over the children that exist AND
+                                      whatever is still ringing out
+  router.Synthesizers                 only the children already built, and only
+                                      the ones in the table - never a retired one
   router.UnroutedMessageCount         how many messages arrived for a channel
                                       with no instrument on it
   RoutingSynthesizer.ChannelCount (16) / .DefaultBlockSize (64)
+  RoutingSynthesizer.DefaultRingOutLimit (ten seconds)
+
+A REPLACED CHILD RINGS OUT. Routing something new onto a slot that already holds
+a built child - a part re-voiced in the middle of a piece, a follow-up prompt
+whose music puts other instruments on the same channels - does NOT cut the old
+child off. It is RETIRED: released (a note-off-all that lets the notes GO of the
+key, not an all-sound-off that stops them dead), sent no further messages, and
+KEPT IN THE MIX at the gain it had until it has nothing left to say. So a held
+note decays through its release and a reverb tail finishes, instead of the part
+vanishing mid-note at the seam.
+
+  - "NOTHING LEFT TO SAY" is the child's ActiveVoiceCount reaching zero AND its
+    output falling silent, both. A child carrying a reverb is still audible after
+    its last voice has ended, so the voice count alone would cut the tail off.
+  - RingOutLimit is the backstop: ten seconds unless you change it, after which a
+    retired child is let go whatever it claims to still be sounding. Nothing can
+    cost CPU for ever. It is read per block, so lowering it releases children that
+    are already retired; TimeSpan.Zero lets each go at the next block.
+  - RetiredChildCount counts them, and ActiveVoiceCount includes their voices.
+    Synthesizers does not list them - that is the routing TABLE, which they have
+    left.
+  - NoteOffAll(immediate: true) and Reset() DROP every retired child at once -
+    both are asking for silence now. NoteOffAll(immediate: false) leaves them
+    alone: each was released when it was retired.
+  - SET RingOutReplacedChildren = false FOR THE OLD BEHAVIOUR, where a replaced
+    child leaves the mix at the moment the new one takes the slot.
+
+  router.SetChannel(1, warmPad, 0.8F);
+  // ... the pad is sounding a held chord ...
+  router.SetChannel(1, brightLead, 0.8F);   // the pad releases and rings out
+  router.RetiredChildCount;                 // 1, until the pad has finished
+
+CLEARING IS STILL IMMEDIATE. ClearChannel(channel) and ClearLayer(channel) mean
+what they always meant - the channel goes silent - whatever
+RingOutReplacedChildren says. Ask for a ring-out by name if you want one:
+ClearChannel(channel, ringOut: true), and that request is honoured even with the
+switch off. The switch governs REPLACEMENT.
+
+THE SAME INSTANCE BACK INTO ITS OWN SLOT IS A GAIN UPDATE, not a replacement:
+nothing is retired, the child hears no note-off, and the new gain simply applies.
+Putting it into a DIFFERENT slot is still the error it always was. A RETIRED
+instance routed again COMES OUT OF RETIREMENT - it goes back into the table and
+is rendered once, from there.
+
+READING THE TABLE BACK. GetChannel(channel) and GetLayer(channel) hand back the
+child itself. Both are null when the slot is empty AND when a factory is routed
+there whose child has not been built yet; IsRouted / HasLayer tell those two
+apart, and the child appears as soon as the channel is first played.
 
 FIVE RULES IT ENFORCES OR RELIES ON:
 
@@ -1060,7 +1165,11 @@ MIDI:
   - MidiFile              : reads a Standard MIDI File; MidiFile.Export(...)
                             writes one. TOLERANT BY DEFAULT - see below.
   - MidiEvent (hierarchy) : NoteOnEvent, NoteEvent, TextEvent, MetaEvent,
-                            TempoEvent, TimeSignatureEvent, etc.
+                            TempoEvent, TimeSignatureEvent, etc. NoteOnEvent
+                            carries its paired note-off (OffEvent, NoteLength) -
+                            move the pair with noteOn.MoveTo(tick), because
+                            assigning AbsoluteTime moves only the start; see
+                            "COMMON PITFALLS TO AVOID".
   - MidiEventCollection   : per-track event collection used for read and write.
   - MidiReadMode          : Tolerant (the default everywhere) or Strict. The one
                             option both MIDI readers share.
@@ -1402,6 +1511,12 @@ PATHS" above first:
                             HorizonTime, IsCompleted, EventCount, LateEventCount,
                             Problems; ToMidiEventCollection() for the editable
                             recording and ToSequence() for the finished piece.
+                            AdvanceHorizon(tick) declares a SETTLED REST - music
+                            decided and empty - so the head plays it rather than
+                            waiting in it; it records nothing and is refused after
+                            Complete(). TimeAtTick(tick) and TickAtTime(time)
+                            convert through the stream's own tempo map, under its
+                            own lock, and are defined past the horizon.
                             Channels are 1-based, as everywhere in the Midi model.
                             See "PLAYING MIDI THAT IS STILL BEING WRITTEN".
   - MidiStreamSequencer   : drives a synthesizer from a MidiStream; Play/Stop/
@@ -1415,9 +1530,15 @@ PATHS" above first:
                             renderer drives it as one synthesizer, so a voiced
                             arrangement plays live, follows a MidiStream still
                             being written, and renders offline through one code
-                            path. THE ROUTING TABLE COUNTS 1-16 while
-                            ProcessMidiMessage takes the wire's 0-15 - see
-                            "ROUTING THE PARTS OF AN ARRANGEMENT".
+                            path. A child REPLACED in an occupied slot is
+                            released and RINGS OUT rather than being cut off
+                            (RingOutReplacedChildren, RingOutLimit,
+                            RetiredChildCount); clearing a channel stays
+                            immediate unless asked otherwise. GetChannel /
+                            GetLayer read the table back. THE ROUTING TABLE
+                            COUNTS 1-16 while ProcessMidiMessage takes the
+                            wire's 0-15 - see "ROUTING THE PARTS OF AN
+                            ARRANGEMENT".
   - Reverb / Chorus       : the two SEND effects SoundFontSynthesizer uses,
                             public so a synthesizer of your own can use the same
                             ones. They take the send bus and OVERWRITE the
@@ -2359,10 +2480,10 @@ MATCHING THE LEVELS
   writes the ratio into MidiSourceGain. The balance between the parts then follows
   the original recording whichever source each track is playing. Gain is never
   touched, and while the option is off nothing writes a gain you did not set.
-  It costs a full decode and a full synthesis pass per track - seconds, not
-  milliseconds - so with the option on, Prepare starts it on a worker and does
-  not wait for it. LevelMeasurement is the task it runs on, and awaiting that is
-  how you know the gains are in:
+  It costs a full decode and a full synthesis pass per track, and then one render
+  of the matched mix - seconds, not milliseconds - so with the option on, Prepare
+  starts it on a worker and does not wait for it. LevelMeasurement is the task it
+  runs on, and awaiting that is how you know the gains are in:
 
     player.AutoSetRelativeTrackLevels = true;
     player.Prepare();
@@ -2373,7 +2494,8 @@ MATCHING THE LEVELS
   already-completed task, so that await is safe on any player and simply returns
   at once when there is nothing to wait for - no null check, no guard.
 
-  Two other ways to run it, with the option left off:
+  Two other ways to run it, with the option left off. NEITHER OPENS THE AUDIO
+  DEVICE, which is what makes them the offline answer:
 
     await player.MeasureRelativeTrackLevelsAsync();   // on a worker; the task it
                                                       //   returns IS
@@ -2385,14 +2507,98 @@ MATCHING THE LEVELS
   Call either again after changing an instrument, when the gains they wrote no
   longer describe what a track renders.
 
+  THE RATE IT MEASURES AT MATTERS, and this is the one thing to understand about
+  the feature. A sample rate carries no energy above half of itself, so an
+  instrument whose sound sits mostly up there - a synthesized cymbal, a bright
+  hi-hat - measures as almost silent at a low rate and is then handed a make-up
+  gain many times too large. So the measurement follows the rate the music will
+  really be heard at: the prepared device's rate when the player is prepared,
+  MultiTrackPlayer.DefaultRenderSampleRate when it is not, and the render's own
+  rate when a render starts one. Both measuring calls take an explicit rate when
+  you want to choose:
+
+    player.MeasureRelativeTrackLevels(48000);
+    await player.MeasureRelativeTrackLevelsAsync(48000);
+
+  LevelMeasurementSampleRate is now only the FLOOR under that - the lowest rate a
+  measurement ever runs at.
+
+  HEADROOM: WHAT THE MATCHED MIX WILL PEAK AT. Matching reliably pushes a mix past
+  full scale and there is nothing wrong with that measurement - a General MIDI kit
+  really is far quieter than a mastered drum recording, so the make-up gain on that
+  track really is large, and several large gains add up. The measurement has
+  rendered everything anyway, so it renders the matched mix once more and reports
+  what it peaks at:
+
+    player.MeasureRelativeTrackLevels();
+
+    var match = player.LastLevelMatch;          // null until a measurement that
+    if (match != null && match.WouldClip)       //   matched a track completes
+    {
+        player.Volume = match.SuggestedVolume;  // lands the mix at full scale
+    }
+
+    match.MixPeak             the largest absolute sample the matched mix reaches,
+                              at unity master volume, with each track on the source
+                              it is on. It is the peak of the SUMMED mix, measured
+                              by rendering it - per-track peaks do not add up to it.
+    match.SuggestedVolume     the Volume that would put that peak exactly at 1.0.
+                              Below 1 when the mix would clip, above 1 when there
+                              is headroom going spare.
+    match.WouldClip           whether MixPeak is past 1.0.
+    match.MatchedTrackCount   how many tracks had a gain written.
+    match.SampleRate          the rate the measurement ran at.
+
+  NOTHING IS APPLIED. This is a report; the rule that nothing is limited or
+  normalised still holds. FitVolumeAfterLevelMatching (false by default) is the
+  opt-in that acts on it: with it set, a completed measurement writes Volume as
+  well, in both directions - a mix that would clip is turned down, a quiet one is
+  turned up to use its headroom.
+
 OFFLINE, WITH NO AUDIO DEVICE
   Render(sampleRate)              the whole mix as interleaved stereo float.
-  RenderToWav(path or Stream)     the same, written out.
-  Both build their own decoders and synthesizers at the rate you ask for, render,
-  and release them, so rendering while the same song plays is legitimate. Volume
-  and every per-track control apply; nothing is limited or normalised, so a mix
-  that adds up past 1.0 comes back past 1.0. A four-minute song at 44.1 kHz is
-  about 84 MB of float in one array.
+  RenderToWav(path or Stream)     the same, written out as 32-bit float stereo.
+  RenderToFile(path)              the format the EXTENSION names, through
+                                  AudioFileWriterRegistry - .wav and .aif / .aiff
+                                  out of the box, and anything else registered.
+  RenderToFile(path, WaveFormat)  a format of your choosing, so a 16-bit PCM
+                                  bounce is one argument:
+                                    player.RenderToFile("mix.wav",
+                                        new WaveFormat(48000, 16, 2));
+  RenderToStream(stream, ".wav")               the same, on a stream you own. The
+  RenderToStream(stream, ".wav", WaveFormat)   stream is never closed, and must be
+                                               seekable when the writer says so.
+  All of them build their own decoders and synthesizers at the rate you ask for,
+  render, and release them, so rendering while the same song plays is legitimate.
+  Volume and every per-track control apply; nothing is limited or normalised, so a
+  mix that adds up past 1.0 comes back past 1.0 - see HEADROOM above for what to
+  set Volume to. A four-minute song at 44.1 kHz is about 84 MB of float in one
+  array.
+
+  MATCHING THE LEVELS OFFLINE: do NOT call Prepare() - it opens the audio device,
+  which an offline render has no use for and which may fail outright on a machine
+  where something else holds it. Call MeasureRelativeTrackLevels() (or await
+  MeasureRelativeTrackLevelsAsync()) and then render:
+
+    player.MeasureRelativeTrackLevels(48000);   // no device; the render's rate
+    var samples = player.Render(48000);
+
+  With AutoSetRelativeTrackLevels set and no measurement yet run, a render MEASURES
+  FIRST, on the calling thread, at the rate it is about to render at. A render
+  never quietly produces a mix whose gains were never written.
+
+  A DECENT SAMPLER SYNTHESIZER AMONG THE TRACKS is switched to the offline
+  streaming mode for the render and put back afterwards, exactly as
+  SoundFontRenderer does it - see PLAYING DECENT SAMPLER INSTRUMENTS. You do not
+  have to set it yourself, and a synthesizer you built in the offline mode stays
+  in it.
+
+WHAT COULD NOT BE HONOURED
+  player.Problems is one human-readable line per thing a LOADER could not honour
+  when it built this player - a per-stem instrument naming a part the song does
+  not have, a part whose notes the chosen instrument library does not cover.
+  Empty for a clean build and on a player you assembled yourself. Never thrown:
+  a silent part is otherwise indistinguishable from a fault in the music.
 
 ONE MERGED GENERAL MIDI FILE
   ExportMergedMidi(path or Stream) writes every MIDI track into one type 1 SMF at
@@ -2497,9 +2703,37 @@ WHAT YOU GET
               Problems, Options, song["Drums"] by name, ClearCache().
   SunoStem    Name, HasWav / HasMp3 / HasAudio / HasMidi, Midi (a MidiSequence),
               GmProgram, Channel, IsPercussion, NoteCount, MidiCoverage,
-              Duration, AudioSampleRate, AudioChannels, the alignment members
-              below, GetAudioPath() / OpenAudio() (WAV preferred, MP3 fallback)
-              and the WAV- and MP3-specific forms of both.
+              UsedNotes / LowestNote / HighestNote, Duration, AudioSampleRate,
+              AudioChannels, the alignment members below, GetAudioPath() /
+              OpenAudio() (WAV preferred, MP3 fallback) and the WAV- and
+              MP3-specific forms of both, and ReadMonoAudio(out rate).
+
+WHAT NOTES A TRANSCRIPTION HOLDS
+  stem.UsedNotes is every distinct MIDI note number the stem's .mid plays,
+  ascending, with LowestNote and HighestNote either end of it (-1 each when there
+  are no notes). On a percussion stem they are KIT PIECES rather than pitches.
+  They are gathered while the file is read, so asking costs nothing and needs no
+  second parse - which is what makes the coverage check two lines:
+
+    foreach (var note in stem.UsedNotes)
+    {
+        if (!library.Coverage.CoversNote(stem.GmProgram, note))
+        {
+            // that note will not sound: voice the part differently, or transpose
+        }
+    }
+
+  A player built with an instrument library does this for you and reports what it
+  finds in player.Problems.
+
+READING A STEM'S WAVEFORM
+  stem.ReadMonoAudio(out var sampleRate) decodes the whole recording to mono float
+  samples - the channels averaged - at the file's own rate, for a level meter, a
+  waveform view, an energy search or a measurement of your own. It decodes the
+  WHOLE stem and caches nothing: a four-minute part at 48 kHz is about 46 MB in
+  one array, so hold what you get rather than calling it twice, and never call it
+  on the audio thread. A stem with no recording returns an empty array and a rate
+  of zero rather than throwing.
 
   The stem vocabulary is OPEN. The twelve known names - Vocals, Backing Vocals,
   Drums, Percussion, Bass, Guitar, Keyboard, Piano, Synth, Strings, Brass, FX -
@@ -2517,6 +2751,13 @@ NEAR-EMPTY MIDI STEMS, AND WHAT MidiCoverage IS FOR
   between 0.1 and 0.9. NoteCount is the raw count. Every note counts as sounding
   for at least SunoLoadOptions.MinimumNoteHold, or a complete drum transcription
   would measure as covering none of the song.
+
+  USE BOTH NUMBERS, not coverage alone. A two-note synth pad whose two notes are
+  very long passes an ordinary coverage floor and is still not the part - playing
+  it in place of the recording removes that part from the mix. A dense burst of
+  very short notes passes a note count while covering almost nothing. A floor on
+  each is the rule that holds up, and SunoStemSelection applies both for you, at
+  twelve notes and 0.02 coverage by default.
 
 ALIGNMENT
   A machine transcription does not land exactly on the audio it was transcribed
@@ -2560,32 +2801,72 @@ ALIGNMENT
   (track.MidiSourceOffset). Setting MeasureAlignment = false turns the whole
   thing off and leaves every offset at zero.
 
-BUILDING THE PLAYER
+BUILDING THE PLAYER - THE ONE-LINE WAY
+  Changing what a whole song sounds like is a NAME, and keeping the vocals as the
+  recording is a selection. This is the shape to start from:
+
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.ModestSynth;          // the add-on package
+    using CodeBrix.Audio.Playback;
+    using CodeBrix.Audio.Playback.Suno;
+
+    GeneralMidiInstrumentLibrary.Register();   // registers as "ModestSynthGm"
+
+    var song = SunoStemsLoader.Load("/downloads/My Song Stems.zip");
+
+    using var player = song.CreatePlayer(new SunoPlayerOptions
+    {
+        InstrumentLibraryName = "ModestSynthGm",
+        MidiStems = SunoStemSelection.EverythingBut("Vocals", "Backing Vocals"),
+        AutoSetRelativeTrackLevels = true,
+    });
+
+  That is the whole swap: every stem with a usable transcription plays through
+  that library at its own General MIDI program, percussion through the library's
+  kit, the vocals stay as Suno recorded them, and the parts are level-matched to
+  the original mix. Change the one name to change the whole sound.
+
   var player = song.CreatePlayer();                    // recordings only
-  var player = song.CreatePlayer(instrumentFactory);   // parts can play as MIDI
+  var player = song.CreatePlayer(instrumentFactory);   // the escape hatch
   var player = song.CreatePlayer(new SunoPlayerOptions { ... });
   var player = MultiTrackPlayer.Load(song, options);   // the same thing
 
   One track per stem, in the model's own order, named after the stem. Every track
   starts on its stem's RECORDING, which is the default mix: the song as it was
-  downloaded. Where a stem also has MIDI and an instrument can be built for it,
-  the same track carries the MIDI as its second source, so switching a part to a
-  synthesized rendition is a property change. A stem with MIDI and no recording
-  becomes a MIDI-only track; a stem with MIDI, no recording and no instrument is
-  not added at all.
+  downloaded - MidiStems is what moves a track off it. Where a stem also has MIDI
+  and an instrument can be built for it, the same track carries the MIDI as its
+  second source, so switching a part to a synthesized rendition is a property
+  change. A stem with MIDI and no recording becomes a MIDI-only track; a stem with
+  MIDI, no recording and no instrument is not added at all.
 
   SunoPlayerOptions
+    InstrumentLibraryName       a REGISTERED instrument library name, resolved
+                                through InstrumentLibraryRegistry when the player
+                                is built. Each stem gets
+                                CreateSynthesizer(stem.GmProgram, rate), or
+                                CreatePercussionSynthesizer(rate) when the stem is
+                                percussion.
+    InstrumentLibrary           the same, as an INSTANCE, for a library that was
+                                never registered. Wins over the name.
+    StemInstruments             an instrument for ONE NAMED STEM - see the next
+                                heading.
+    MidiStems                   which stems start on their transcription rather
+                                than their recording; a SunoStemSelection. Null by
+                                default, which leaves every track on its
+                                recording.
     InstrumentFactory           Func<SunoStem, int, IMidiSynthesizer>: build the
                                 instrument for one stem at one sample rate. It
                                 may be called more than once and from a worker,
                                 so never hand out the same synthesizer twice -
                                 share the SoundFont or the SFZ instrument behind
-                                them instead.
-    GeneralMidiSoundFontPath    used when there is no factory. Falls back to the
-                                path on SunoLoadOptions, so a song loaded with
-                                one needs no player options at all. The SoundFont
-                                is loaded ONCE through a SoundFontCache and
-                                shared by every track.
+                                them instead. This is the escape hatch for
+                                anything the library and the per-stem overrides
+                                cannot say.
+    GeneralMidiSoundFontPath    used when there is no library and no factory.
+                                Falls back to the path on SunoLoadOptions, so a
+                                song loaded with one needs no player options at
+                                all. The SoundFont is loaded ONCE through a
+                                SoundFontCache and shared by every track.
     SoundFontCache              which cache to load it through; null uses
                                 SunoPlayerOptions.SharedSoundFonts, a
                                 process-wide one you can Clear().
@@ -2600,9 +2881,82 @@ BUILDING THE PLAYER
     AutoSetRelativeTrackLevels  passed to the player; see PLAYING A MULTI-TRACK
                                 SONG above.
 
+  WHICH INSTRUMENT A STEM GETS - most specific first, and the order is fixed:
+    1. StemInstruments, for a stem named there;
+    2. InstrumentLibrary, or InstrumentLibraryName resolved through the registry;
+    3. InstrumentFactory;
+    4. GeneralMidiSoundFontPath, or the path the song was loaded with.
+  With none of the first two set, a player behaves exactly as it always has.
+  Setting BOTH a library and an InstrumentFactory is not an error - the library
+  wins - but it is reported in player.Problems, because a factory that is never
+  called is almost always a leftover.
+
+  ERRORS WHEN THE PLAYER IS BUILT, not from a worker in the middle of a song. A
+  name nothing is registered under is the registry's own error, listing what IS
+  registered; an empty registry is the registry's own error, naming what to
+  register; and a library that does not offer the PER-PART shape is refused by
+  name, because each stem is a part with a gain and a source of its own and one
+  multi-timbral synthesizer mixes internally at one level.
+
+  WHAT COULD NOT BE HONOURED IS REPORTED, never thrown - one line each in
+  player.Problems: a per-stem instrument or a selection naming a part the song
+  does not have, and a part whose program or notes the chosen library does not
+  cover. A part the library cannot play comes out SILENT, which is otherwise
+  indistinguishable from a fault in the music.
+
+    foreach (var problem in player.Problems) { Console.WriteLine(problem); }
+
+AN INSTRUMENT FOR ONE STEM - SunoPlayerOptions.StemInstruments
+  Keyed by STEM NAME, and that is the point. MappedInstrumentLibrary substitutes
+  by General MIDI PROGRAM, which is the wrong axis here: a stems export puts Drums
+  and Percussion both on channel 10 with a kit number for a program, and two
+  melodic parts of one song can carry the same program. The part is the stem.
+
+    var options = new SunoPlayerOptions { InstrumentLibraryName = "ModestSynthGm" };
+
+    options.StemInstruments["Bass"] = rate => new MyBassSynthesizer(rate);
+    options.StemInstruments.SetFromFile("Synth", "/packs/Grand/Grand.dspreset");
+    options.StemInstruments.SetPercussionFromFile("Drums", "/packs/Kit/kit.dspreset");
+
+  Set(name, factory)                     a synthesizer of your own, built on
+                                         demand at the rate it is handed.
+  SetFromFile(name, path, program = 0)   .dspreset / .dslibrary / .dsbundle
+                                         (Decent Sampler), a Decent Sampler
+                                         library FOLDER, .sfz, or .sf2 - whose
+                                         program is the third argument.
+  SetPercussionFromFile(name, path)      the same, taking a .sf2's KIT rather than
+                                         a melodic program.
+  Contains / TryGet / Remove / Clear / Count / StemNames, and the indexer, which
+  returns null for a stem that has none and removes one when set to null.
+
+  Names match the way song["Bass"] matches: case-insensitively, with surrounding
+  space ignored. A name the song has no stem for is reported, not thrown.
+  A FILE IS LOADED WHERE YOU WROTE THE PATH, so a typo is an error on that line;
+  one loaded instrument is shared by every synthesizer built from it.
+
+WHICH STEMS PLAY FROM MIDI - SunoStemSelection
+  SunoStemSelection.EverythingBut("Vocals", "Backing Vocals")
+  SunoStemSelection.Only("Drums", "Bass")
+  SunoStemSelection.Everything()
+  SunoStemSelection.Nothing()          // every track on its recording
+
+  A stem is included only when it is on the right side of the names AND its
+  transcription clears both floors - MinimumNoteCount (12) and MinimumMidiCoverage
+  (0.02), each settable:
+
+    var selection = SunoStemSelection.EverythingBut("Vocals");
+    selection.MinimumNoteCount = 40;       // this arrangement wants real parts only
+
+  selection.Includes(stem) is the same rule, for your own loop. Setting MidiStems
+  replaces the walk over player.Tracks every consumer otherwise writes; each
+  track's ActiveSource is still a property you can change afterwards.
+
 THE GENERAL MIDI SOUNDFONT
-  A MIDI stem needs an instrument, and the ordinary choice is one General MIDI
-  SoundFont for the whole song, applying each stem's own program and channel.
+  An instrument library is the shorter way to say all of this, and the rest of
+  this heading is what happens when you point the player at a .sf2 directly
+  instead. A MIDI stem needs an instrument, and this is the older choice: one
+  General MIDI SoundFont for the whole song, applying each stem's own program and
+  channel.
   RECOMMENDED: FluidR3_GM. It is MIT licensed, may be redistributed with your
   application, and covers all 128 programs and the standard drum kit that a
   stems export's program numbers refer to. TimGM6mb is smaller and is what many
@@ -2637,11 +2991,15 @@ TAKING THE SONG SOMEWHERE ELSE
   opens twelve MIDI files as one song.
 
 A COMPLETE EXAMPLE
-  Play the vocal from its recording and every other part through a General MIDI
-  SoundFont, with the levels of the original mix:
+  Play the vocals from their recordings and every other part through a named
+  instrument library, with the levels of the original mix:
 
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.ModestSynth;
     using CodeBrix.Audio.Playback;
     using CodeBrix.Audio.Playback.Suno;
+
+    GeneralMidiInstrumentLibrary.Register();          // "ModestSynthGm"
 
     var song = SunoStemsLoader.Load(@"D:\Downloads\My Song Stems.zip");
     foreach (var problem in song.Problems)
@@ -2651,23 +3009,55 @@ A COMPLETE EXAMPLE
 
     using var player = song.CreatePlayer(new SunoPlayerOptions
     {
-        GeneralMidiSoundFontPath = @"D:\SoundFonts\FluidR3_GM.sf2",
+        InstrumentLibraryName = "ModestSynthGm",
+        MidiStems = SunoStemSelection.EverythingBut("Vocals", "Backing Vocals"),
         AutoSetRelativeTrackLevels = true,
     });
 
-    foreach (var track in player.Tracks)
+    foreach (var problem in player.Problems)
     {
-        var stem = song[track.Name];
-        var worthPlaying = track.HasMidiSource && stem.MidiCoverage > 0.02;
-        if (worthPlaying && track.Name != "Vocals")
-        {
-            track.ActiveSource = TrackSource.Midi;
-        }
+        Console.WriteLine(problem);          // coverage, absent stem names
     }
 
     player.Prepare();
     await player.LevelMeasurement;           // the levels are in when this returns
     player.Play();
+
+  THE SAME SONG, OFFLINE, with no audio device anywhere near it. Render at 48000:
+  a stems export is 48 kHz throughout, and the default render rate is 44100, so
+  taking the default resamples every stem for no reason.
+
+    using var bounce = song.CreatePlayer(new SunoPlayerOptions
+    {
+        InstrumentLibraryName = "ModestSynthGm",
+        MidiStems = SunoStemSelection.EverythingBut("Vocals", "Backing Vocals"),
+    });
+
+    bounce.MeasureRelativeTrackLevels(48000);   // NOT Prepare() - see OFFLINE above
+    var match = bounce.LastLevelMatch;
+    if (match != null && match.WouldClip)
+    {
+        bounce.Volume = match.SuggestedVolume;  // matching routinely peaks past 1.0
+    }
+
+    bounce.RenderToFile("mix.wav", new WaveFormat(48000, 16, 2));
+
+  WRITING THE SELECTION YOURSELF, when the rule is not one a selection can state.
+  Use a floor on the NOTE COUNT as well as on the coverage - a two-note pad passes
+  a coverage floor on its own:
+
+    foreach (var track in player.Tracks)
+    {
+        var stem = song[track.Name];
+        var worthPlaying = track.HasMidiSource
+            && stem.NoteCount >= 12
+            && stem.MidiCoverage >= 0.02;
+
+        if (worthPlaying && !track.Name.Contains("Vocal", StringComparison.OrdinalIgnoreCase))
+        {
+            track.ActiveSource = TrackSource.Midi;
+        }
+    }
 
   One named part, without walking the list - player["Bass"] matches the way
   song["Bass"] does, and throws with the available names when there is no such
@@ -2679,7 +3069,15 @@ A COMPLETE EXAMPLE
         bass.ActiveSource = TrackSource.Midi;
     }
 
-  Give one part an instrument of its own instead of the General MIDI SoundFont:
+  Give one part an instrument of its own, with everything else still coming from
+  the library:
+
+    var options = new SunoPlayerOptions { InstrumentLibraryName = "ModestSynthGm" };
+    options.StemInstruments.SetFromFile("Synth", @"D:\Libraries\Strings\strings.sfz");
+    using var player = song.CreatePlayer(options);
+
+  The same thing written by hand, which is what InstrumentFactory is for when the
+  rule is more than "this stem gets this instrument":
 
     var strings = sfzCache.Get(@"D:\Libraries\Strings\strings.sfz");
     using var player = song.CreatePlayer((stem, rate) => stem.Name == "Synth"
@@ -2690,7 +3088,7 @@ A COMPLETE EXAMPLE
 
     song["Drums"].AlignmentOffset = TimeSpan.FromMilliseconds(-120);
     using var bounce = song.CreatePlayer(options);
-    bounce.RenderToWav("mix.wav", 44100);
+    bounce.RenderToWav("mix.wav", 48000);
 
 
 PLAYING DECENT SAMPLER INSTRUMENTS
@@ -2861,6 +3259,10 @@ MEMORY, STREAMING AND LAZY LOADING
 
   SoundFontRenderer does it for you - every render it makes is offline, and it
   switches a synthesizer you hand it over for the render and back afterwards.
+  MultiTrackPlayer does the same for every Decent Sampler synthesizer among its
+  tracks, in Render, RenderToWav, RenderToFile, RenderToStream and the level
+  measurement: switched for the render, put back when it ends, however it ends. A
+  synthesizer you built in the Offline mode stays in it.
   DecentSamplerSynthesizer.StreamingMode is settable, so a synthesizer built for
   a device can be borrowed for a bounce. Never leave Offline on a synthesizer
   feeding a live device: the render call then opens and reads files.
@@ -3927,6 +4329,21 @@ COMMON PITFALLS TO AVOID
     MidiFile.Export(). A type-0 collection may contain only one track (Export
     throws otherwise); use type 1 for multi-track files. NoteOnEvent
     auto-creates its paired note-off.
+  - RE-TIMING A NOTE: assigning NoteOnEvent.AbsoluteTime moves only the START.
+    A note is TWO events - the note-on and the NoteEvent its OffEvent points at -
+    and both normally sit in the same collection. NoteNumber and Channel push
+    their new value into the off event; AbsoluteTime deliberately does not, or a
+    loop that shifts every event of a collection would move each note-off twice,
+    once in its own right and once dragged along. So this silently shortens the
+    note:
+        note.AbsoluteTime += 480;        // NoteLength is now 480 ticks shorter
+    Use the method that exists for it, which carries the off event along:
+        note.MoveTo(note.AbsoluteTime + 480);        // NoteLength unchanged
+    — or build a fresh NoteOnEvent(tick, channel, noteNumber, velocity, length).
+    NoteLength is DERIVED from the pair, and it never reads as negative: a note
+    dragged past its own note-off reads as length 0, because a note that ends
+    before it starts is no note at all. (It still THROWS when there is no off
+    event to measure against, which only a file that breaks the rules produces.)
   - No resampling in the managed reader layer: the WaveStream readers hand back
     audio at the file's own rate and never convert it. The playback types DO
     convert — AudioFilePlayer and SoundEffectClip both take any rate — so the only
@@ -3975,6 +4392,21 @@ COMMON PITFALLS TO AVOID
     a Stream, and a Stream audio source is copied into memory when the track is
     built. Several hundred megabytes of WAV, twice. Use the default cache folder
     unless the host genuinely cannot write to disk.
+  - Prepare() opens the audio device, so it is the WRONG way to start a level
+    measurement for an offline render - and on a machine where something else
+    holds the device it may fail outright. Call MeasureRelativeTrackLevels() (or
+    await MeasureRelativeTrackLevelsAsync()), which needs no device, then render.
+  - Level matching routinely puts a mix PAST full scale, and nothing limits or
+    normalises it. That is not a fault in the measurement: a General MIDI kit is
+    far quieter than a mastered drum recording, so the make-up gain on that track
+    is genuinely large. Read LastLevelMatch.MixPeak and set Volume to
+    SuggestedVolume - or set FitVolumeAfterLevelMatching and have it done.
+  - Render a Suno song at 48000. A stems export is 48 kHz throughout, and
+    MultiTrackPlayer.DefaultRenderSampleRate is 44100, so taking the default
+    resamples every stem for nothing.
+  - MidiCoverage alone is not enough to decide whether a transcription is worth
+    playing: a pad of two very long notes passes any sensible coverage floor.
+    Put a floor on NoteCount beside it - SunoStemSelection applies both.
   - A MidiStream that is never COMPLETED never ends. The player stays Playing and
     starved, Position holds, and PlaybackEnded never fires - the stream cannot
     tell "nothing more yet" from "nothing more". Call stream.Complete() when the
@@ -4284,9 +4716,32 @@ file that exercises it.
                                 mix, source switching, the instrument factory,
                                 offline render equalling the sum of the tracks,
                                 and the merged export round-tripping.
-    Playback/Suno/FakeSongStems.cs   the synthetic export the two files above
-                                load - a stems set carrying every shape a real
-                                one has, built in code.
+    Playback/Suno/SunoInstrumentLibraryTests.cs   a stems song played through a
+                                NAMED instrument library: the per-part and
+                                percussion calls, the registry's errors at build
+                                time, a multi-timbral-only library refused,
+                                coverage reported rather than thrown, the
+                                per-stem override, the precedence pair by pair,
+                                and which stems play from MIDI.
+    Playback/Suno/SunoStemTests.cs   what a stem says about itself: the notes its
+                                transcription holds, and its recording as mono
+                                samples.
+    Playback/Suno/FakeSongStems.cs   the synthetic export the files above load -
+                                a stems set carrying every shape a real one has,
+                                built in code.
+    MultiTrackPlayerLevelMatchTests.cs   level matching: the rate it measures at
+                                (a bright instrument measures 25 times louder at
+                                the rate it will be played at than below its own
+                                energy), an offline render honouring the option
+                                with no Prepare, and the headroom it reports.
+    MultiTrackPlayerOfflineRenderTests.cs   what an offline render must get right
+                                beyond the samples: a Decent Sampler synthesizer
+                                switched to the offline streaming mode and put
+                                back even when the render throws, and the render
+                                written out through the registered writers.
+    Synth/BandLimitedTestSynthesizer.cs   the instrument those level tests need:
+                                one that renders a partial only where the sample
+                                rate can carry it.
 
   SOUNDFONT, SFZ, DECENT SAMPLER AND MIDI MUSIC
     Synth/MidiMusicPlayerTests.cs      the transport, Speed, the channel
@@ -4456,8 +4911,16 @@ QUICK REFERENCE CARD
   double a part with a second instrument   router.SetLayer(2, factory, 0.3F)
   build a part only when the music         router.SetChannel(2, () => ..., 0.5F)
     reaches it
+  re-voice a part without cutting the     router.SetChannel(1, other, 0.8F)
+    note it is holding                      // the old child rings out; it is
+                                            // the default
   play music that is still being written  var stream = new MidiStream(480);
                                           music.Load(soundFont, stream)
+  say a rest is settled, so the head      stream.AdvanceHorizon(tick)
+    plays it instead of waiting in it
+  place a tick in time, or a moment on    stream.TimeAtTick(tick)
+    the timeline                          stream.TickAtTime(time)
+  move a note and keep its length         note.MoveTo(newTick)
   say the music is finished               stream.Complete()
   save what was played as a .mid          MidiFile.Export(path,
                                               stream.ToMidiEventCollection())
@@ -4501,11 +4964,20 @@ QUICK REFERENCE CARD
   play several tracks as one song         new MultiTrackPlayer()
   play a Suno stems download              SunoStemsLoader.Load(path)
                                           song.CreatePlayer(options)
+  play a stems song through a library     options.InstrumentLibraryName = "..."
+  keep the vocals, swap the rest          options.MidiStems =
+                                            SunoStemSelection.EverythingBut(
+                                              "Vocals", "Backing Vocals")
+  give one part its own instrument        options.StemInstruments["Synth"] = ...
   swap one part to its MIDI, live         track.ActiveSource = TrackSource.Midi
   line a transcription up with its audio  MidiAudioAlignment.Estimate(...)
                                           track.MidiSourceOffset = result.Offset
   match a synthesized part to the mix     player.AutoSetRelativeTrackLevels = true
                                           await player.LevelMeasurement
+  match the levels with no audio device   player.MeasureRelativeTrackLevels(48000)
+  find out what the matched mix peaks at  player.LastLevelMatch.MixPeak
+  bounce a song as 16-bit PCM             player.RenderToFile(path,
+                                            new WaveFormat(48000, 16, 2))
   reach one track of a song by name       player["Drums"]
   merge a stems set into one .mid         song.ExportMergedMidi(path)
   bounce a multi-track song to a file     player.RenderToWav(path, 44100)
@@ -4588,9 +5060,15 @@ QUICK REFERENCE CARD
     stream.AppendNote(long tick, int channel, int note, int velocity, long length)
     stream.AppendTempo(long tick, double beatsPerMinute)
     stream.Append(MidiEvent midiEvent)      // also (IEnumerable<MidiEvent>)
+    stream.AdvanceHorizon(long tick)        // a settled rest, recorded nowhere
+    stream.TimeAtTick(long tick) / stream.TickAtTime(TimeSpan time)
     stream.Complete()
     stream.HorizonTicks / .HorizonTime / .LateEventCount / .Problems
     stream.ToMidiEventCollection() / stream.ToSequence()
+    noteOn.MoveTo(long absoluteTime)        // moves the off event with it
+    router.GetChannel(int channel) / router.GetLayer(int channel)
+    router.ClearChannel(int channel, bool ringOut)   // also ClearLayer
+    router.RingOutReplacedChildren / .RingOutLimit / .RetiredChildCount
     music.DropAuxiliaryOutputs = true                   // MidiMusicPlayer
     music.MpeMode = MpeMode.Auto / music.MpeMemberBendRange = 48
     music.GetReleaseVelocity(int channel, int key)
@@ -4722,10 +5200,16 @@ QUICK REFERENCE CARD
     player.FindTrack(string name)           // null if absent
     player.TryGetTrack(string name, out PlayerTrack track)
     player.MeasureRelativeTrackLevelsAsync()    // MeasureRelativeTrackLevels()
-                                                //   is the blocking form
+                                                //   is the blocking form; both
+                                                //   take an explicit sample rate
     player.LevelMeasurement                 // never null; completed until one runs
+    player.LastLevelMatch                   // MixPeak / SuggestedVolume / WouldClip
+    player.FitVolumeAfterLevelMatching = true   // opt in to acting on it
+    player.Problems                         // what a loader could not honour
     player.Render(int sampleRate = 44100, TimeSpan? tailLength = null)
     player.RenderToWav(string path, int sampleRate = 44100)
+    player.RenderToFile(string path, WaveFormat format, TimeSpan? tailLength = null)
+    player.RenderToStream(Stream output, string fileNameOrExtension, ...)
     player.ExportMergedMidi(string path)
     MidiAudioAlignment.Estimate(IReadOnlyList<double> noteOnTimesSeconds,
                                 ReadOnlySpan<float> monoAudio, int sampleRate,
@@ -4735,8 +5219,17 @@ QUICK REFERENCE CARD
     SunoStemsLoader.LoadAsync(string path, CancellationToken ct = default)
     song.CreatePlayer()                     // also (instrumentFactory) and (options)
     song.CreatePlayer(Func<SunoStem, int, IMidiSynthesizer> instruments)
+    song.CreatePlayer(new SunoPlayerOptions
+    {
+        InstrumentLibraryName = "ModestSynthGm",     // or InstrumentLibrary
+        MidiStems = SunoStemSelection.EverythingBut("Vocals"),
+    })
+    options.StemInstruments["Synth"] = rate => new MySynthesizer(rate)
+    options.StemInstruments.SetFromFile("Synth", "/packs/Grand/Grand.dspreset")
     song.ExportMergedMidi(string path)
     song["Drums"].AlignmentOffset           // settable; audio = midi + offset
+    song["Bass"].UsedNotes / .LowestNote / .HighestNote
+    song["Bass"].ReadMonoAudio(out int sampleRate)
     song.ClearCache() / SunoStemsLoader.ClearCache()
     MidiSequence.FromEvents(MidiEventCollection events,
                             MidiSequenceLoopType loopType = MidiSequenceLoopType.None)

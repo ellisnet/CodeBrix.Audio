@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    SunoInstrumentSwap - a sample, not a product. It is NOT in CodeBrix.Audio.slnx and it is
+    never packed; it exists so that the one-line way to re-voice a stems export can be RUN.
+
+    It references this repository's own src projects rather than the published packages, so it
+    demonstrates the current API before a release rather than the last one. Everything else it
+    needs comes from nuget.org.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SunoInstrumentSwap</AssemblyName>
+    <RootNamespace>SunoInstrumentSwap</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CodeBrix.Audio.Samples.FluidR3Gm.MitLicenseForever" Version="1.0.264.101" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\CodeBrix.Audio\CodeBrix.Audio.csproj" />
+    <ProjectReference Include="..\..\..\..\src\CodeBrix.Audio.ModestSynth\CodeBrix.Audio.ModestSynth.csproj" />
+  </ItemGroup>
+
+</Project>

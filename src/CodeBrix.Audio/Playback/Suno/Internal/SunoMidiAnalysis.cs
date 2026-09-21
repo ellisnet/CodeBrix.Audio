@@ -24,6 +24,8 @@ internal static class SunoMidiAnalysis
         internal int Channel { get; set; } = -1;
 
         internal TimeSpan SoundingTime { get; set; }
+
+        internal int[] UsedNotes { get; set; } = [];
     }
 
     /// <summary>
@@ -42,6 +44,7 @@ internal static class SunoMidiAnalysis
         var noteOns = new List<double>();
         var intervals = new List<(double Start, double End)>();
         var sounding = new Dictionary<int, List<double>>();
+        var used = new HashSet<int>();
 
         for (var i = 0; i < messages.Length; i++)
         {
@@ -73,6 +76,7 @@ internal static class SunoMidiAnalysis
 
                     result.NoteCount++;
                     noteOns.Add(seconds);
+                    used.Add(message.Data1);
                     Key(sounding, message.Channel, message.Data1).Add(seconds);
                     break;
 
@@ -102,6 +106,12 @@ internal static class SunoMidiAnalysis
 
         noteOns.Sort();
         result.NoteOnTimes = noteOns.ToArray();
+
+        var usedNotes = new int[used.Count];
+        used.CopyTo(usedNotes);
+        Array.Sort(usedNotes);
+        result.UsedNotes = usedNotes;
+
         result.SoundingTime = TimeSpan.FromSeconds(TotalCovered(intervals));
         return result;
     }

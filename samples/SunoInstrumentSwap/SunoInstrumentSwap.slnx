@@ -1,0 +1,17 @@
+<Solution>
+  <!-- SunoInstrumentSwap.slnx
+       The sample's OWN solution. CodeBrix.Audio.slnx deliberately does not mention it: a sample
+       is not part of what this repository builds, tests or publishes, and putting it in the root
+       solution would make every build of the library build the sample too.
+
+       The two library projects are here so that opening this solution gives you something that
+       builds and steps into the library source. -->
+  <Project Path="src/SunoInstrumentSwap/SunoInstrumentSwap.csproj" />
+  <Folder Name="/Libraries/">
+    <Project Path="../../src/CodeBrix.Audio/CodeBrix.Audio.csproj" />
+    <Project Path="../../src/CodeBrix.Audio.ModestSynth/CodeBrix.Audio.ModestSynth.csproj" />
+  </Folder>
+  <Folder Name="/Solution Items/">
+    <File Path="README.md" />
+  </Folder>
+</Solution>

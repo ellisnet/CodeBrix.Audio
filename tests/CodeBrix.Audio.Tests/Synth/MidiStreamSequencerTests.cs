@@ -633,6 +633,123 @@ public class MidiStreamSequencerTests
     /// writing at once, appended in an order that is deliberately NOT the order of the tracks they
     /// land on.
     /// </summary>
+    // ----- a settled rest carried by the horizon (the producer's "nothing here") -----
+
+    [Fact]
+    public void the_head_walks_through_a_settled_rest_instead_of_starving_at_the_last_event()
+    {
+        //Arrange - the music ends at tick 240, a quarter of a second in, and the head holds there.
+        var stream = new MidiStream(480);
+        stream.AppendNote(0, 1, 60, 100, 240);
+
+        var sequencer = new MidiStreamSequencer(NewSynthesizer());
+        sequencer.Play(stream);
+        Render(sequencer, 0.5);
+
+        var heldAt = sequencer.Position;
+        var starvedAtTheLastEvent = sequencer.IsStarved;
+
+        //Act - the producer says the next two seconds are settled and empty.
+        stream.AdvanceHorizon(1920);
+        Render(sequencer, 1.0);
+
+        //Assert
+        starvedAtTheLastEvent.Should().BeTrue();
+        heldAt.TotalSeconds.Should().BeApproximately(0.25, 0.01);
+        sequencer.IsStarved.Should().BeFalse();
+        sequencer.Position.TotalSeconds.Should().BeApproximately(1.25, 0.01);
+        sequencer.Length.Should().Be(stream.HorizonTime);
+    }
+
+    [Fact]
+    public void a_settled_rest_satisfies_the_pre_roll()
+    {
+        //Arrange - half a second has to be buffered and only a quarter of a second is written.
+        var stream = new MidiStream(480);
+        stream.Preroll = TimeSpan.FromSeconds(0.5);
+        stream.AppendNote(0, 1, 60, 100, 240);
+
+        var sequencer = new MidiStreamSequencer(NewSynthesizer());
+        sequencer.Play(stream);
+
+        var beforeTheRest = sequencer.IsStarved;
+
+        //Act
+        stream.AdvanceHorizon(1920);
+
+        //Assert
+        // A declared rest is as good as written music for the pre-roll: the producer has settled it.
+        beforeTheRest.Should().BeTrue();
+        sequencer.IsStarved.Should().BeFalse();
+    }
+
+    [Fact]
+    public void a_completed_stream_plays_a_trailing_settled_rest_out()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+        stream.AppendNote(0, 1, 60, 100, 240);
+        stream.AdvanceHorizon(1920);
+        stream.Complete();
+
+        var sequencer = new MidiStreamSequencer(NewSynthesizer());
+        sequencer.Play(stream);
+
+        //Act
+        Render(sequencer, 0.5);
+        var whileTheRestRuns = sequencer.EndOfStream;
+
+        Render(sequencer, 2.0);
+
+        //Assert
+        // A piece that ends in silence ends when the silence does, not at its last note.
+        whileTheRestRuns.Should().BeFalse();
+        sequencer.EndOfStream.Should().BeTrue();
+    }
+
+    [Fact]
+    public void a_completed_stream_with_no_settled_rest_still_ends_at_its_last_event()
+    {
+        //Arrange
+        var stream = new MidiStream(480);
+        stream.AppendNote(0, 1, 60, 100, 240);
+        stream.Complete();
+
+        var sequencer = new MidiStreamSequencer(NewSynthesizer());
+        sequencer.Play(stream);
+
+        //Act
+        Render(sequencer, 0.5);
+
+        //Assert
+        // PINNED: a stream AdvanceHorizon was never called on behaves exactly as it always did.
+        sequencer.EndOfStream.Should().BeTrue();
+    }
+
+    [Fact]
+    public void TimeAtTick_agrees_with_the_head_the_sequencer_reports()
+    {
+        //Arrange - content with three tempo changes and a conductor track that ends after them.
+        var stream = BuildFenceContent();
+        stream.Complete();
+
+        var sequencer = new MidiStreamSequencer(NewSynthesizer());
+        sequencer.Play(stream);
+
+        //Act
+        Render(sequencer, 1.5);
+
+        var head = sequencer.PositionTicks;
+
+        //Assert
+        // The head's tick is interpolated and truncated, so the two agree to within the tick the
+        // head was rounded down to - not to the hundred-nanosecond tick.
+        (stream.TimeAtTick(head) - sequencer.Position).Duration()
+            .Should().BeLessThan(TimeSpan.FromMilliseconds(5));
+
+        (stream.TickAtTime(sequencer.Position) - head).Should().BeInRange(-1, 1);
+    }
+
     private static MidiStream BuildFenceContent()
     {
         var stream = new MidiStream(480);

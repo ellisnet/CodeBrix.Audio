@@ -387,8 +387,16 @@ public sealed class MidiStreamSequencer : IAudioRenderer, IMidiPlaybackCore
     /// been delivered.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// This value is <see langword="true"/> when no stream is playing, the same way
     /// <see cref="MidiSequencer.EndOfSequence"/> is true before anything has been played.
+    /// </para>
+    /// <para>
+    /// A stream whose producer declared a SETTLED REST past its last event with
+    /// <see cref="MidiStream.AdvanceHorizon"/> is not finished until the head has played that rest
+    /// out: a piece that ends in silence ends when the silence does. A stream that rest was never
+    /// declared on ends at its last event, exactly as it always did.
+    /// </para>
     /// </remarks>
     public bool EndOfStream
     {
@@ -402,7 +410,14 @@ public sealed class MidiStreamSequencer : IAudioRenderer, IMidiPlaybackCore
 
             lock (current.Gate)
             {
-                return current.IsCompletedUnderGate && walk.Index >= current.Entries.Count;
+                if (!current.IsCompletedUnderGate || walk.Index < current.Entries.Count)
+                {
+                    return false;
+                }
+
+                var settled = current.SettledTicksUnderGate;
+
+                return settled < 0 || currentTime >= current.TimeAtTickUnderGate(walk, settled);
             }
         }
     }

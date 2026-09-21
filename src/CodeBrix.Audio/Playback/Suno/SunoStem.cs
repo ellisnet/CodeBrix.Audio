@@ -116,6 +116,34 @@ public sealed class SunoStem
     public int NoteCount { get; internal set; }
 
     /// <summary>
+    /// Every distinct MIDI note number the stem's transcription plays, ascending. Empty when the
+    /// stem has no MIDI. On a percussion stem these are KIT PIECES rather than pitches.
+    /// </summary>
+    /// <remarks>
+    /// This is what an instrument library's <see cref="Instruments.InstrumentCoverage"/> has to be
+    /// asked about: a sampled instrument that answers to notes 48 to 84 plays nothing outside that,
+    /// and the hole is silence in the middle of an arrangement rather than an error. Gathered while
+    /// the file is read, so asking costs nothing and needs no second parse.
+    /// <code>
+    /// foreach (var note in stem.UsedNotes)
+    /// {
+    ///     if (!library.Coverage.CoversNote(stem.GmProgram, note)) { /* that note will not sound */ }
+    /// }
+    /// </code>
+    /// </remarks>
+    public IReadOnlyList<int> UsedNotes { get; internal set; } = [];
+
+    /// <summary>
+    /// The lowest MIDI note number the stem's transcription plays, or -1 when it has no notes.
+    /// </summary>
+    public int LowestNote => UsedNotes.Count == 0 ? -1 : UsedNotes[0];
+
+    /// <summary>
+    /// The highest MIDI note number the stem's transcription plays, or -1 when it has no notes.
+    /// </summary>
+    public int HighestNote => UsedNotes.Count == 0 ? -1 : UsedNotes[UsedNotes.Count - 1];
+
+    /// <summary>
     /// The fraction of the song, 0 to 1, during which this stem's MIDI has a note sounding. Zero
     /// when the stem has no MIDI.
     /// </summary>
@@ -268,10 +296,35 @@ public sealed class SunoStem
     internal void AddProblem(string problem) => _problems.Add(problem);
 
     /// <summary>
-    /// Decodes the stem's audio to mono float samples, for the alignment estimator. Never called on
-    /// the audio thread, and never called at all unless an estimator is installed.
+    /// Decodes this stem's whole recording to MONO float samples - the channels averaged - and
+    /// returns them in one array, together with the rate they were decoded at.
     /// </summary>
-    internal float[] ReadMonoAudio(out int sampleRate)
+    /// <param name="sampleRate">
+    /// Receives the file's OWN sample rate. Nothing is resampled. Zero when the stem has no audio.
+    /// </param>
+    /// <returns>
+    /// One sample per frame, in file order, at <paramref name="sampleRate"/>. An EMPTY array when
+    /// the stem has no audio at all - never null, and never an exception for that reason.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// The song was loaded with <see cref="SunoZipExtraction.Memory"/> and the entry could not be
+    /// opened.
+    /// </exception>
+    /// <exception cref="IOException">The audio could not be read.</exception>
+    /// <remarks>
+    /// <para>
+    /// WHAT IT COSTS. It decodes the WHOLE stem and holds the result: a four-minute part at 48 kHz
+    /// is about 11.5 million floats, 46 MB, in one array, plus the decode itself. Nothing is cached
+    /// - each call decodes again - so hold what you get rather than calling it twice, and never
+    /// call it on the audio thread.
+    /// </para>
+    /// <para>
+    /// This is how you get a stem's waveform: a level meter, a waveform view, a search for where a
+    /// part has energy, a measurement of your own. It is the same decode the alignment estimator
+    /// runs on, which is why it is mono - a stems export's parts are mixed, not placed.
+    /// </para>
+    /// </remarks>
+    public float[] ReadMonoAudio(out int sampleRate)
     {
         sampleRate = 0;
         var key = _wavKey ?? _mp3Key;

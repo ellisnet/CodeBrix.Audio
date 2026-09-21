@@ -1,0 +1,28 @@
+# Nothing a sample PRODUCES belongs in this repository. A render of a stems export is hundreds of
+# megabytes and an extraction cache is more, and both are reproducible from the download they came
+# from. The samples themselves refuse an output folder inside the repository; this is the second
+# line of defence, for the times somebody points one here by hand anyway.
+
+renders/
+render/
+output/
+out/
+cache/
+stems-cache/
+sample-proof/
+tmp/
+
+# Audio and MIDI, wherever under samples/ they land. A sample's source is code and text; anything
+# that sounds came from somewhere else and is not ours to carry.
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.opus
+*.mid
+*.midi
+*.sf2
+*.sfz
+*.dspreset
+*.dslibrary
+*.dsbundle

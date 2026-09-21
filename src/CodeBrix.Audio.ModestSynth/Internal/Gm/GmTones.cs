@@ -59,6 +59,13 @@ internal static class GmTones
             case GmTone.Formant:
                 return new ModestPatch { Waveform = ModestWaveform.Formant };
 
+            case GmTone.ChoirVowel:
+                // A singer is built by GmChoirOscillator rather than from a patch, because two or
+                // three fixed resonances are a filter and a patch has no way to say so. The patch
+                // is still here, and still a saw: it is the SOURCE the singer's throat is fed, and
+                // it is what gives every copy of the layer a start phase of its own.
+                return new ModestPatch { Waveform = ModestWaveform.Saw, RandomPhase = true };
+
             case GmTone.HarmonicOrgan:
                 return Additive(Or(shape, 0.5), [1.0, 0.75, 0.5, 0.6, 0.0, 0.3, 0.0, 0.35]);
 

@@ -229,4 +229,82 @@ public class NoteOnEventTests
         clone.NoteLength.Should().Be(25);
         clone.AbsoluteTime.Should().Be(10);
     }
+
+    [Fact]
+    public void MoveTo_keeps_the_note_length_and_takes_the_off_event_with_it()
+    {
+        //Arrange
+        var noteOn = new NoteOnEvent(480, 1, 60, 100, 240);
+
+        //Act
+        noteOn.MoveTo(1920);
+
+        //Assert
+        noteOn.AbsoluteTime.Should().Be(1920);
+        noteOn.NoteLength.Should().Be(240);
+        noteOn.OffEvent.AbsoluteTime.Should().Be(2160);
+    }
+
+    [Fact]
+    public void MoveTo_moves_a_note_backwards_just_as_far()
+    {
+        //Arrange
+        var noteOn = new NoteOnEvent(1920, 1, 60, 100, 240);
+
+        //Act
+        noteOn.MoveTo(0);
+
+        //Assert
+        noteOn.AbsoluteTime.Should().Be(0);
+        noteOn.NoteLength.Should().Be(240);
+        noteOn.OffEvent.AbsoluteTime.Should().Be(240);
+    }
+
+    [Fact]
+    public void MoveTo_moves_a_note_on_that_carries_no_note_off()
+    {
+        //Arrange - a dangling note-on, the shape a file that breaks the rules produces.
+        using var stream = new MemoryStream(new byte[] { 60, 100 });
+        using var reader = new BinaryReader(stream);
+        var noteOn = new NoteOnEvent(reader);
+
+        //Act
+        var act = () => noteOn.MoveTo(480);
+
+        //Assert
+        act.Should().NotThrow();
+        noteOn.AbsoluteTime.Should().Be(480);
+        noteOn.OffEvent.Should().BeNull();
+    }
+
+    [Fact]
+    public void NoteLength_is_never_read_as_negative()
+    {
+        //Arrange - the note-on dragged past its own note-off, which is a note that ends before it
+        // starts rather than a note of negative length.
+        var noteOn = new NoteOnEvent(0, 1, 60, 100, 480);
+
+        //Act
+        noteOn.AbsoluteTime = 960;
+
+        //Assert
+        noteOn.NoteLength.Should().Be(0);
+    }
+
+    [Fact]
+    public void AbsoluteTime_still_moves_only_the_start_of_the_note()
+    {
+        //Arrange - PINNED ON PURPOSE. The setter is inherited behaviour and must stay as it is: a
+        // note-off sits in the collection in its own right, so a loop that shifts every event by
+        // assigning AbsoluteTime would move each note-off twice if the note-on dragged it along.
+        // MoveTo is the way to move a whole note.
+        var noteOn = new NoteOnEvent(0, 1, 60, 100, 480);
+
+        //Act
+        noteOn.AbsoluteTime = 240;
+
+        //Assert
+        noteOn.OffEvent.AbsoluteTime.Should().Be(480);
+        noteOn.NoteLength.Should().Be(240);
+    }
 }

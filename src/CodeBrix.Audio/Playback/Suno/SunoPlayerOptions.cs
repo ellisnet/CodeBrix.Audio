@@ -1,4 +1,5 @@
 using System;
+using CodeBrix.Audio.Instruments;
 using CodeBrix.Audio.Synth;
 
 namespace CodeBrix.Audio.Playback.Suno;
@@ -9,11 +10,43 @@ namespace CodeBrix.Audio.Playback.Suno;
 /// alignment is applied, and how percussion is handled.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Every property has a default that suits an ordinary export, so <c>new SunoPlayerOptions()</c> is
 /// a sensible thing to pass and passing nothing at all is equally sensible. The one thing worth
-/// setting is an instrument: without either <see cref="InstrumentFactory"/> or a General MIDI
-/// SoundFont there is nothing to play a MIDI stem THROUGH, so the player is built from the
-/// recordings alone.
+/// setting is an instrument: without an instrument library, an
+/// <see cref="InstrumentFactory"/> or a General MIDI SoundFont there is nothing to play a MIDI stem
+/// THROUGH, so the player is built from the recordings alone.
+/// </para>
+/// <para>
+/// THE ONE-LINE WAY is <see cref="InstrumentLibraryName"/>, with
+/// <see cref="StemInstruments"/> for the parts that want something else and
+/// <see cref="MidiStems"/> for which parts play from their transcription at all:
+/// </para>
+/// <code>
+/// using var player = song.CreatePlayer(new SunoPlayerOptions
+/// {
+///     InstrumentLibraryName = "ModestSynthGm",
+///     MidiStems = SunoStemSelection.EverythingBut("Vocals", "Backing Vocals"),
+///     AutoSetRelativeTrackLevels = true,
+/// });
+/// </code>
+/// <para>
+/// WHICH INSTRUMENT A STEM GETS - the order, most specific first:
+/// </para>
+/// <list type="number">
+/// <item><description><see cref="StemInstruments"/>, for a stem named there;</description></item>
+/// <item><description><see cref="InstrumentLibrary"/>, or <see cref="InstrumentLibraryName"/>
+/// resolved through <see cref="InstrumentLibraryRegistry"/>;</description></item>
+/// <item><description><see cref="InstrumentFactory"/>;</description></item>
+/// <item><description><see cref="GeneralMidiSoundFontPath"/>, or the path the song was loaded
+/// with.</description></item>
+/// </list>
+/// <para>
+/// WITH NONE OF THE FIRST TWO SET, a player behaves exactly as it always has. Setting BOTH a
+/// library and an <see cref="InstrumentFactory"/> is not an error - the library wins - but it is
+/// reported in the player's <see cref="MultiTrackPlayer.Problems"/>, because a factory that is
+/// never called is almost always a leftover.
+/// </para>
 /// </remarks>
 public sealed class SunoPlayerOptions
 {
@@ -37,6 +70,63 @@ public sealed class SunoPlayerOptions
     /// behind them instead; those are the expensive part and they are safe to share.
     /// </remarks>
     public Func<SunoStem, int, IMidiSynthesizer> InstrumentFactory { get; set; }
+
+    /// <summary>
+    /// The instrument library every MIDI stem is played through, BY REGISTERED NAME - the one-word
+    /// way to change what the whole song sounds like. Null - the default - means no library.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Resolved through <see cref="InstrumentLibraryRegistry"/> WHEN THE PLAYER IS BUILT, so an
+    /// unknown name is the registry's own error - listing what IS registered - on the line that
+    /// builds the player, rather than a surprise from a worker thread in the middle of a song. An
+    /// empty registry is the registry's own error too, naming what to register.
+    /// </para>
+    /// <para>
+    /// Each stem gets <c>CreateSynthesizer(stem.GmProgram, rate)</c>, or
+    /// <c>CreatePercussionSynthesizer(rate)</c> when the stem is percussion. A library that does
+    /// not offer the per-part shape is refused by name, because a stems export is an arrangement of
+    /// separate parts and one multi-timbral synthesizer cannot give them separate gains.
+    /// </para>
+    /// <para>
+    /// Ignored when <see cref="InstrumentLibrary"/> holds an instance.
+    /// </para>
+    /// </remarks>
+    public string InstrumentLibraryName { get; set; }
+
+    /// <summary>
+    /// The instrument library every MIDI stem is played through, as an INSTANCE - for a library
+    /// that was never registered, or one built for this song alone. Null - the default - falls back
+    /// to <see cref="InstrumentLibraryName"/>.
+    /// </summary>
+    /// <remarks>
+    /// The same rules as <see cref="InstrumentLibraryName"/>: per-part synthesizers, percussion
+    /// through the kit, and a library that does not offer the per-part shape is refused when the
+    /// player is built.
+    /// </remarks>
+    public IInstrumentLibrary InstrumentLibrary { get; set; }
+
+    /// <summary>
+    /// An instrument for one named stem, overriding the library for that stem alone. Never null;
+    /// empty by default.
+    /// </summary>
+    /// <remarks>
+    /// Keyed by STEM NAME rather than by General MIDI program, because in a stems export two parts
+    /// share channel 10 and two parts can share a program. See <see cref="SunoStemInstruments"/>.
+    /// </remarks>
+    public SunoStemInstruments StemInstruments { get; } = new SunoStemInstruments();
+
+    /// <summary>
+    /// Which stems start on their transcription instead of their recording. Null - the default -
+    /// leaves every track on its recording, which is what a player has always done.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="SunoStemSelection.EverythingBut(string[])"/> is the usual answer: everything with
+    /// a usable transcription except the vocals. Setting this replaces the loop over
+    /// <see cref="MultiTrackPlayer.Tracks"/> that every consumer otherwise writes; each track's
+    /// <see cref="PlayerTrack.ActiveSource"/> is still a property that can be changed afterwards.
+    /// </remarks>
+    public SunoStemSelection MidiStems { get; set; }
 
     /// <summary>
     /// The General MIDI SoundFont every MIDI stem is played through when
@@ -103,10 +193,20 @@ public sealed class SunoPlayerOptions
 
     /// <summary>Returns an independent copy of these options.</summary>
     /// <returns>A new instance carrying the same values.</returns>
-    public SunoPlayerOptions Clone() =>
-        new SunoPlayerOptions
+    /// <remarks>
+    /// The per-stem instruments and the stem selection are copied too, so changing either of them
+    /// afterwards does not reach a player that was already built. The loaded instruments THEMSELVES
+    /// are shared, as they are everywhere else - they are the expensive part and they are safe to
+    /// share.
+    /// </remarks>
+    public SunoPlayerOptions Clone()
+    {
+        var copy = new SunoPlayerOptions
         {
             InstrumentFactory = InstrumentFactory,
+            InstrumentLibraryName = InstrumentLibraryName,
+            InstrumentLibrary = InstrumentLibrary,
+            MidiStems = MidiStems == null ? null : MidiStems.Clone(),
             GeneralMidiSoundFontPath = GeneralMidiSoundFontPath,
             SoundFontCache = SoundFontCache,
             IncludeMidiSources = IncludeMidiSources,
@@ -114,4 +214,12 @@ public sealed class SunoPlayerOptions
             IgnoreNoteOffOnPercussion = IgnoreNoteOffOnPercussion,
             AutoSetRelativeTrackLevels = AutoSetRelativeTrackLevels,
         };
+
+        foreach (var stemName in StemInstruments.StemNames)
+        {
+            copy.StemInstruments.Set(stemName, StemInstruments[stemName]);
+        }
+
+        return copy;
+    }
 }

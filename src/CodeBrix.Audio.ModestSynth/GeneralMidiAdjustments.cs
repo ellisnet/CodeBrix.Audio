@@ -11,8 +11,8 @@ namespace CodeBrix.Audio.ModestSynth;
 /// <remarks>
 /// <para>
 /// This is the consumer's control over how the bank sounds (plan D49). The bank's own rows are
-/// internal and free to be retuned in a later, data-only release; these seven knobs per program are
-/// the stable surface over them.
+/// internal and free to be retuned in a later, data-only release; the handful of knobs per program
+/// here are the stable surface over them.
 /// </para>
 /// <para>
 /// Nothing is allocated for a program until it is asked for, so a synthesizer that nobody adjusts
@@ -160,6 +160,17 @@ public sealed class GeneralMidiAdjustments
         GeneralMidiAdjustments copy = new GeneralMidiAdjustments();
         copy.CopyFrom(this);
         return copy;
+    }
+
+    // Which section a program has been asked for. It is read separately from the rest because it
+    // chooses the VOICING a note is built from rather than a number applied on top of one, and
+    // because it must be answerable without building anything: an unadjusted program has no
+    // adjustment object at all.
+    internal GeneralMidiEnsemble EnsembleFor(int program)
+    {
+        GeneralMidiAdjustment adjustment = programs[program];
+
+        return adjustment == null ? GeneralMidiEnsemble.Standard : adjustment.Ensemble;
     }
 
     // What a voice actually starts with, for a melodic program.

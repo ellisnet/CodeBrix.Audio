@@ -430,6 +430,7 @@ public static class SunoStemsLoader
         var analysis = SunoMidiAnalysis.Analyse(sequence, options.MinimumNoteHold);
         stem.NoteCount = analysis.NoteCount;
         stem.NoteOnTimes = analysis.NoteOnTimes;
+        stem.UsedNotes = analysis.UsedNotes;
 
         if (analysis.Program >= 0)
         {

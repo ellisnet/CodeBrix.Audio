@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using CodeBrix.Audio.Midi;
+using CodeBrix.Audio.ModestSynth.Internal.Gm;
 using CodeBrix.Audio.Synth;
 using SilverAssertions;
 using Xunit;
@@ -100,25 +101,78 @@ public class GeneralMidiMeasurementTests
         Assert.SkipUnless(MeasurementsEnabled, MeasurementsSkipReason);
 
         //Arrange
-        // Program 52 is the one voicing in the bank built on the formant oscillator, which sums a
-        // vowel spectrum partial by partial. It is the expensive one, and how expensive it is
-        // decides whether a consumer can stack it.
+        // Program 52 sings through fixed resonances, which cost the same whatever the pitch is.
+        // How much it costs beside a plain pad of the same shape decides whether a consumer can
+        // stack it. ALL THREE READINGS are measured, because they differ in how many people are
+        // singing and that is the part that costs.
         Heading("RENDER SPEED - Choir Aahs held, and a cheap program for comparison");
 
         //Act & Assert
         foreach (int voices in new[] { 4, 8 })
         {
-            double choir = Measure(
-                Default, Held((int)GeneralMidiProgram.ChoirAahs, voices, 8.0), out int _);
-
             double pad = Measure(
                 Default, Held((int)GeneralMidiProgram.Pad2Warm, voices, 8.0), out int _);
 
-            Line(voices.ToString(CultureInfo.InvariantCulture) + " voices held   Choir Aahs " +
-                Times(choir) + "      Pad 2 (warm) " + Times(pad) +
-                "      ratio " + (pad / choir).ToString("0.0", CultureInfo.InvariantCulture) + "x");
+            Line(voices.ToString(CultureInfo.InvariantCulture) + " voices held   Pad 2 (warm) " +
+                Times(pad));
 
-            choir.Should().BeGreaterThan(0.0);
+            foreach (GeneralMidiEnsemble ensemble in Ensembles())
+            {
+                double choir = Measure(
+                    () => Sings(ensemble),
+                    Held((int)GeneralMidiProgram.ChoirAahs, voices, 8.0),
+                    out int _);
+
+                Line(voices.ToString(CultureInfo.InvariantCulture) + " voices held   Choir Aahs, " +
+                    Describe(ensemble).PadRight(34) + Times(choir) +
+                    "   pad : choir " +
+                    (pad / choir).ToString("0.0", CultureInfo.InvariantCulture) + "x");
+
+                choir.Should().BeGreaterThan(0.0);
+            }
+
+            // The reading the bank does NOT carry, for the record.
+            double section = Measure(
+                () => Reads(GmChoirVoicing.Section),
+                Held((int)GeneralMidiProgram.ChoirAahs, voices, 8.0),
+                out int _);
+
+            Line(voices.ToString(CultureInfo.InvariantCulture) + " voices held   Choir Aahs, " +
+                "the close section (internal only)  " + Times(section));
+
+            Line(string.Empty);
+
+            section.Should().BeGreaterThan(0.0);
+            pad.Should().BeGreaterThan(0.0);
+        }
+
+        // And the piece the choir's cost is actually paid on: the highest-rated music of either
+        // audition is celesta over choir aahs.
+        Heading("RENDER SPEED - the 9.7 duet, standard and full");
+
+        MidiSequence duet = GmRealPieces.Duet().Sequence;
+
+        foreach (GeneralMidiEnsemble ensemble in Ensembles())
+        {
+            double times = Measure(() => Sings(ensemble), duet, out int _);
+
+            Line(Describe(ensemble).PadRight(36) + Times(times) + "   " + Seconds(duet.Length));
+
+            times.Should().BeGreaterThan(0.0);
+        }
+
+        // And the worst case, with and without the opt-in.
+        Heading("RENDER SPEED - the dense fixture at the polyphony limit, standard and full");
+
+        MidiSequence dense = GmFixtures.DenseFixture(8.0);
+
+        foreach (GeneralMidiEnsemble ensemble in Ensembles())
+        {
+            double times = Measure(() => Sings(ensemble), dense, out int _);
+
+            Line(Describe(ensemble).PadRight(36) + Times(times) + "   " + Seconds(dense.Length));
+
+            times.Should().BeGreaterThan(0.0);
         }
     }
 
@@ -198,6 +252,30 @@ public class GeneralMidiMeasurementTests
     }
 
     private static GeneralMidiSynthesizer Default() => new GeneralMidiSynthesizer(SampleRate);
+
+    // The same synthesizer with the PUBLIC ensemble knob set on both voice programs - which is
+    // exactly how a consumer reaches the larger section.
+    private static GeneralMidiSynthesizer Sings(GeneralMidiEnsemble ensemble)
+    {
+        GeneralMidiSynthesizer synthesizer = new GeneralMidiSynthesizer(SampleRate);
+
+        synthesizer.Adjustments.Program(GeneralMidiProgram.ChoirAahs).Ensemble = ensemble;
+        synthesizer.Adjustments.Program(GeneralMidiProgram.VoiceOohs).Ensemble = ensemble;
+
+        return synthesizer;
+    }
+
+    // A reading reached the internal way, for the one that is not offered publicly.
+    private static GeneralMidiSynthesizer Reads(GmChoirVoicing voicing) =>
+        new GeneralMidiSynthesizer(SampleRate) { ChoirVoicing = voicing };
+
+    private static GeneralMidiEnsemble[] Ensembles() =>
+        [GeneralMidiEnsemble.Standard, GeneralMidiEnsemble.Full];
+
+    private static string Describe(GeneralMidiEnsemble ensemble) =>
+        ensemble == GeneralMidiEnsemble.Standard
+            ? "Standard (what the bank sings)"
+            : "Full (the public opt-in)";
 
     // A chord of n notes on one program, held for a while: the shape that costs the most.
     private static MidiSequence Held(int program, int voices, double seconds)

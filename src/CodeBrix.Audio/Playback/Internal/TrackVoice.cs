@@ -1,4 +1,5 @@
 using System;
+using CodeBrix.Audio.Synth;
 
 namespace CodeBrix.Audio.Playback.Internal;
 
@@ -31,6 +32,7 @@ internal sealed class TrackVoice : IDisposable
     private readonly SourceRenderer audio;
     private readonly SourceRenderer midi;
     private readonly DelayedSourceRenderer midiDelay;
+    private readonly MidiSourceRenderer midiRenderer;
     private readonly float crossfadeStep;
 
     private float[] audioBuffer = [];
@@ -66,7 +68,8 @@ internal sealed class TrackVoice : IDisposable
             {
                 // Wrapped even when the shift is zero, because it is re-read on every seek and a
                 // consumer may set it after the voice was built.
-                midiDelay = new DelayedSourceRenderer(new MidiSourceRenderer(track, sampleRate));
+                midiRenderer = new MidiSourceRenderer(track, sampleRate);
+                midiDelay = new DelayedSourceRenderer(midiRenderer);
                 midi = midiDelay;
             }
         }
@@ -89,6 +92,12 @@ internal sealed class TrackVoice : IDisposable
 
     /// <summary>The track this voice renders.</summary>
     internal PlayerTrack Track => track;
+
+    /// <summary>
+    /// The synthesizer this voice's MIDI source is being played through, or null when the voice has
+    /// no MIDI source. Not thread-safe; the mixer serializes it.
+    /// </summary>
+    internal IMidiSynthesizer MidiSynthesizer => midiRenderer?.Synthesizer;
 
     /// <summary>
     /// The frame, on the song's timeline, at which this track's last sample falls - its own length

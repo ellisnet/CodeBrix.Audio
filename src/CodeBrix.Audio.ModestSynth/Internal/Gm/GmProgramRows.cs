@@ -22,6 +22,14 @@ namespace CodeBrix.Audio.ModestSynth.Internal.Gm;
 // milliseconds of a held middle C at velocity 100 comes out at the same figure for all 128 programs,
 // which is what a General MIDI file assumes when it mixes itself. GeneralMidiBankTests fences the
 // band; a retune that changes a voicing's loudness has to move its Level back into it.
+//
+// THREE ROWS ARE DELIBERATELY BELOW THAT LINE - 004 Electric Piano 1, 027 Electric Guitar (clean)
+// and 109 Bag pipe. A held middle C is not how any of the three is heard: each one sustains and
+// sums where its family neighbours decay, so on the phrase the auditions actually play it stood
+// four to six decibels above the family around it and was the imbalance a listener noticed first.
+// Each was trimmed by measurement on THAT phrase - the loudest hundred milliseconds of its own tour
+// phrase against the median of its family - and each trim is written beside its Level below. The
+// held-note band still holds them; they simply sit at the quiet end of it.
 internal static class GmProgramRows
 {
     internal static GmRow Row(int program)
@@ -84,7 +92,9 @@ internal static class GmProgramRows
                 return new GmRow
                 {
                     Tone = GmTone.FmEPiano, Shape = 0.5, Ring = 0.8,
-                    Decay = 4.2, Release = 0.35, Cutoff = 4200.0, Level = 0.7802,
+                    // Level trimmed 1.7 dB from 0.7802: it stood at +4.4 dB on the piano family's
+                    // own phrase, where the rest of the family sits around +2.7 dB.
+                    Decay = 4.2, Release = 0.35, Cutoff = 4200.0, Level = 0.6415,
                     Insert = new GmInsertSpec
                     {
                         Type = ModestEffectTypes.Phaser,
@@ -316,7 +326,10 @@ internal static class GmProgramRows
                 return new GmRow
                 {
                     Tone = GmTone.Pluck, Shape = 0.42, Ring = 0.87,
-                    Cutoff = 3800.0, Decay = 4.5, Chorus = 0.35, Reverb = 0.34, Level = 1.29,
+                    // Level trimmed 3.1 dB from 1.29: it was the loudest thing in the bank at
+                    // +5.8 dB on the guitar phrase, 6.7 dB above 030 three programs away, and the
+                    // rest of its family sits around +2.7 dB.
+                    Cutoff = 3800.0, Decay = 4.5, Chorus = 0.35, Reverb = 0.34, Level = 0.9028,
                 };
 
             case 28: // Electric Guitar (muted) - the palm on the strings, so nothing rings
@@ -575,38 +588,13 @@ internal static class GmProgramRows
                     FilterLfo = 0.25, VibratoRate = 0.7, Chorus = 0.45, Level = 0.1313,
                 };
 
-            // THE ONE PROGRAM THAT USES THE FORMANT OSCILLATOR. Its vowel spectrum is a sum of many
-            // partials, which makes it the dearest tone in the bank to render - several times a pad,
-            // not many times, since the oscillator turns each partial as a vector rather than taking
-            // a sine per partial per sample. It is here because a mixed chorus was the highest-rated
-            // sound of either audition and the fixed formants are what make it one.
-            case 52: // Choir Aahs - the formant tone under a vowel wavetable; rated 9.7 in audition
-                return new GmRow
-                {
-                    Tone = GmTone.Formant,
-                    Attack = 0.13, Decay = 0.9, Sustain = 0.92, Release = 0.55,
-                    Cutoff = 2600.0, KeyTracking = 0.65, VelocityOctaves = 0.7,
-                    VibratoRate = 4.8, VibratoDepth = 11.0, VibratoDelay = 0.45, VibratoFade = 0.7,
-                    Layer2 = new GmLayerRow
-                    {
-                        Tone = GmTone.WavetableVox, Shape = 0.45, Level = 0.5,
-                        Unison = 2, Detune = 9.0, Spread = 0.8,
-                    },
-                    Level = 0.0502, VelocityToLevel = 0.7, VelocityToAttack = 0.4,
-                    Reverb = 0.7, Chorus = 0.25,
-                };
-
-            case 53: // Voice Oohs - the same throat with the mouth more closed
-                return new GmRow
-                {
-                    Tone = GmTone.WavetableVox, Shape = 0.12,
-                    Unison = 2, Detune = 8.0, Spread = 0.7,
-                    Attack = 0.12, Decay = 0.9, Sustain = 0.92, Release = 0.5,
-                    Cutoff = 1500.0, KeyTracking = 0.6,
-                    VibratoRate = 4.6, VibratoDepth = 10.0, VibratoDelay = 0.45,
-                    Layer2 = new GmLayerRow { Tone = GmTone.FmVoice, Shape = 0.4, Level = 0.3 },
-                    Level = 0.1902, VelocityToLevel = 0.7, Reverb = 0.68,
-                };
+            // THE TWO PROGRAMS THAT SING RATHER THAN PLAY. A vowel is two or three resonances that
+            // STAY WHERE THEY ARE while the note moves through them, which is a filter and not a
+            // waveform - so these two are the one place in the bank whose rows live in a file of
+            // their own, beside the voice that reads them. See GmChoirRows and GmChoirSpec.
+            case 52:    // Choir Aahs - rated 9.7 in audition
+            case 53:    // Voice Oohs - the same throat with the mouth nearly shut
+                return GmChoirRows.Row(program, GmChoirRows.BankVoicing);
 
             case 54: // Synth Voice - a vocal pad rather than a choir
                 return new GmRow
@@ -1184,7 +1172,10 @@ internal static class GmProgramRows
                         Tone = GmTone.HarmonicOdd, Shape = 0.4, FixedKey = 50.0,
                         Level = 0.3, Attack = 0.05, Sustain = 1.0, Release = 0.1,
                     },
-                    Level = 0.5343, VelocityToLevel = 0.3, Reverb = 0.45,
+                    // Level trimmed 2.7 dB from 0.5343: the drone keeps adding into the measuring
+                    // window, which put it at +5.4 dB on the ethnic family's phrase against the
+                    // family's own +2.7 dB.
+                    Level = 0.3915, VelocityToLevel = 0.3, Reverb = 0.45,
                 };
 
             case 110: // Fiddle - a violin played harder and faster
