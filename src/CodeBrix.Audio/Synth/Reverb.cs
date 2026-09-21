@@ -6,7 +6,29 @@ using System;
 // ReSharper disable once CheckNamespace
 namespace CodeBrix.Audio.Synth; //was previously: MeltySynth
 
-internal sealed class Reverb
+/// <summary>
+/// A stereo reverberation unit: the send effect <see cref="SoundFontSynthesizer"/> runs when its
+/// settings ask for reverb, and the one any other synthesizer in the family should reach for rather
+/// than growing a second implementation.
+/// </summary>
+/// <remarks>
+/// <para>
+/// IT IS A SEND EFFECT, NOT AN INSERT. <see cref="Process(float[], float[], float[])"/> takes a MONO
+/// input - the sum of everything being sent to it, each voice scaled by its own send level and by
+/// <see cref="InputGain"/> - and writes the WET signal alone into two output buffers. Add that wet
+/// signal to the dry mix yourself; the reverb never sees the dry path and never mixes it back.
+/// </para>
+/// <para>
+/// The buffer lengths are computed from the sample rate handed to the constructor, so build one per
+/// synthesizer and keep it. <see cref="Mute"/> clears the tails without disturbing the settings,
+/// which is what a reset wants.
+/// </para>
+/// <para>
+/// Nothing here is thread-safe and nothing allocates once the instance exists: it belongs to the
+/// thread rendering it, exactly as a synthesizer's voices do.
+/// </para>
+/// </remarks>
+public sealed class Reverb
 {
     private const float fixedGain = 0.015F;
     private const float scaleWet = 3F;
@@ -55,7 +77,12 @@ internal sealed class Reverb
     private float wet, wet1, wet2;
     private float width;
 
-    internal Reverb(int sampleRate)
+    /// <summary>Creates a reverb at a sample rate, with the classic default room.</summary>
+    /// <param name="sampleRate">
+    /// The rate the reverb will be run at, in Hz. The delay lines are scaled from the tuning the
+    /// algorithm was published at, so a reverb built for one rate must not be run at another.
+    /// </param>
+    public Reverb(int sampleRate)
     {
         cfsL = new CombFilter[]
         {
@@ -118,14 +145,31 @@ internal sealed class Reverb
         return (int)Math.Round((double)sampleRate / 44100 * tuning);
     }
 
+    /// <summary>
+    /// Reverberates a whole block: the wet signal for every frame of <paramref name="outputLeft"/>.
+    /// </summary>
+    /// <param name="input">
+    /// The mono send bus - everything going to the reverb, already scaled by each source's send
+    /// level and by <see cref="InputGain"/>.
+    /// </param>
+    /// <param name="outputLeft">The left wet output. OVERWRITTEN, not added to.</param>
+    /// <param name="outputRight">The right wet output. OVERWRITTEN, not added to.</param>
     public void Process(float[] input, float[] outputLeft, float[] outputRight)
     {
         Process(input, outputLeft, outputRight, outputLeft.Length);
     }
 
-    // The same reverb over the first `count` frames of the buffers, so a caller whose block is shorter
-    // than its scratch arrays does not advance the reverb through the unused tail. The Length-based
-    // overload above delegates here, so the SoundFont path is unchanged.
+    /// <summary>
+    /// Reverberates the first <paramref name="count"/> frames of a block, so a caller whose block is
+    /// shorter than its scratch arrays does not advance the reverb through the unused tail.
+    /// </summary>
+    /// <param name="input">
+    /// The mono send bus - everything going to the reverb, already scaled by each source's send
+    /// level and by <see cref="InputGain"/>.
+    /// </param>
+    /// <param name="outputLeft">The left wet output. OVERWRITTEN over those frames, not added to.</param>
+    /// <param name="outputRight">The right wet output. OVERWRITTEN over those frames, not added to.</param>
+    /// <param name="count">How many frames to process. Zero or less does nothing.</param>
     public void Process(float[] input, float[] outputLeft, float[] outputRight, int count)
     {
         if (count <= 0)
@@ -169,6 +213,10 @@ internal sealed class Reverb
         }
     }
 
+    /// <summary>
+    /// Clears every delay line, so the tail of what was playing does not survive into what plays
+    /// next. The settings are left alone.
+    /// </summary>
     public void Mute()
     {
         foreach (var cf in cfsL)
@@ -214,8 +262,19 @@ internal sealed class Reverb
         }
     }
 
+    /// <summary>
+    /// The gain a source should be multiplied by on its way into <see cref="Process(float[], float[], float[])"/>.
+    /// </summary>
+    /// <remarks>
+    /// The algorithm's comb filters are written to be fed at a small fraction of full scale; scaling
+    /// the send bus by this is what keeps the recirculating network from running away. Multiply each
+    /// voice's contribution by its own send level AND by this.
+    /// </remarks>
     public float InputGain => gain;
 
+    /// <summary>
+    /// How large the room sounds, nominally 0 (small and tight) to 1 (large and long). Default 0.5.
+    /// </summary>
     public float RoomSize
     {
         get
@@ -230,6 +289,10 @@ internal sealed class Reverb
         }
     }
 
+    /// <summary>
+    /// How fast the high frequencies die away inside the tail, 0 (bright and even) to 1 (dark, as a
+    /// soft room absorbs treble first). Default 0.5.
+    /// </summary>
     public float Damp
     {
         get
@@ -244,6 +307,10 @@ internal sealed class Reverb
         }
     }
 
+    /// <summary>
+    /// How loud the wet signal comes out, 0 to 1. Default one third, which is the level the
+    /// algorithm was published at. The DRY signal is not this unit's business at all.
+    /// </summary>
     public float Wet
     {
         get
@@ -258,6 +325,10 @@ internal sealed class Reverb
         }
     }
 
+    /// <summary>
+    /// How wide the tail is spread, 0 (the two outputs summed to the middle) to 1 (fully separated).
+    /// Default 1.
+    /// </summary>
     public float Width
     {
         get

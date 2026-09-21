@@ -1,6 +1,6 @@
 # CodeBrix.Audio.ModestSynth
 
-Synthesis for [CodeBrix.Audio](https://github.com/ellisnet/CodeBrix.Audio): oscillators that generate sound instead of playing recorded samples, and the creative effects a synth is expected to have. Band-limited classic waveforms, white noise, a waveguide plucked string, a multi-frame wavetable, a 64-partial additive oscillator, a six-operator FM engine and a formant tone, plus a phaser, a pitch shifter, two distortion curves, a stereo widener, a bit crusher and a stutter gate — usable on their own, playable straight from MIDI through a small polyphonic synthesizer, and the sound generators and effects a Decent Sampler instrument reaches for when a group holds an `<oscillator>` rather than a `<sample>`, or an effect chain names something the core does not carry.
+Synthesis for [CodeBrix.Audio](https://github.com/ellisnet/CodeBrix.Audio): oscillators that generate sound instead of playing recorded samples, the creative effects a synth is expected to have, and the complete General MIDI sound set built out of them. Band-limited classic waveforms, white noise, a waveguide plucked string, a multi-frame wavetable, a 64-partial additive oscillator, a six-operator FM engine and a formant tone, plus a phaser, a pitch shifter, two distortion curves, a stereo widener, a bit crusher and a stutter gate — usable on their own, playable straight from MIDI through a small polyphonic synthesizer, and the sound generators and effects a Decent Sampler instrument reaches for when a group holds an `<oscillator>` rather than a `<sample>`, or an effect chain names something the core does not carry. One line, `GeneralMidiInstrumentLibrary.Register()`, gives an application all 128 General MIDI programs and the 47-note percussion kit; `CodeBrix.Audio` ships no instruments of its own, so that is the call that makes its instrument seam sound.
 CodeBrix.Audio.ModestSynth depends only on .NET and CodeBrix.Audio, and is provided as a .NET 10 library and associated `CodeBrix.Audio.ModestSynth.MitLicenseForever` NuGet package.
 
 CodeBrix.Audio.ModestSynth supports applications and assemblies that target Microsoft .NET version 10.0 and later.
@@ -51,6 +51,10 @@ There is nothing else to add - no native-asset package, and no platform-specific
 * A parameter model, `ModestPatch`, that mirrors every documented oscillator attribute one for one, so a patch written for a sampler `<oscillator>` element plays here unchanged
 * `ModestSynthesizer` - a polyphonic synthesizer that plays a patch from MIDI events with no preset file involved: sixteen channels, velocity, the sustain pedal, pitch bend, glide, an amplitude envelope and voice stealing, implementing the same contract as the SoundFont, SFZ and sampler engines so every player and offline renderer in CodeBrix.Audio takes it
 * `ModestSynthPresets` - six worked example patches with the envelope settings that go with them: a sub sine, a saw lead, a plucked string, an FM electric piano, a wavetable pad on a table built in code, and an additive organ
+* `GeneralMidiSynthesizer` - a multi-timbral General MIDI synthesizer that plays a `.mid` with no configuration at all: sixteen channels each on one of the 128 programs, the percussion kit on channel 10 with its own layout and its choke groups, the file's own program changes choosing the instruments, and the controllers General MIDI files actually send. Its voice has a filter with its own envelope, exponential envelopes, up to three layers, a pitch envelope, a delayed LFO, velocity and key scaling, a stereo unison, per-program insert effects and reverb and chorus send buses on CC 91 and CC 93. Rendering allocates nothing, so it can share a machine with a game's own work
+* `GeneralMidiInstrumentLibrary` - the same sound set offered to CodeBrix.Audio's instrument registry under the name `ModestSynthGm`, in both shapes: one synthesizer per part, pinned to its program so a program change cannot re-voice it, or one multi-timbral synthesizer for a whole piece. Registration is one idempotent call and is always the consumer's, never a module initializer
+* A bank that is complete and honest: every one of the 128 programs and every percussion note is a deliberate voicing, nothing falls back to another program, and there is not one recorded sample in it — so it sounds like a good synthesizer rather than like sampled instruments, strongest on pads, bells, celesta, vibraphone, electric pianos, organs, plucked strings, choir textures, string ensembles and synth leads and basses, and an honest best on a concert piano or a solo bowed string. For recorded instruments, name a SoundFont library or swap voices in one at a time through CodeBrix.Audio's mapped instrument library
+* Seven per-program adjustments — level, brightness, attack, release, vibrato depth, reverb send and pan — as the supported way to change how a program sounds, set per synthesizer or once on the library for everything it creates afterwards, with the kit adjustable as a whole or a drum at a time. The bank's own voicing tables stay internal, so a later revoicing costs no API change
 * Effects that answer to both the attribute names and the `FX_*` binding names the format uses, matched without regard to case or punctuation, so a knob wired either way reaches the same parameter
 * Render and Process calls that allocate nothing, lock nothing and touch no file, so a voice or an effect can run straight from an audio callback
 
@@ -226,6 +230,32 @@ SoundFontRenderer.RenderToWavFile(synth, sequence, "piano.wav", TimeSpan.FromSec
 
 No preset file and no registration are involved. The patch is read when the synthesizer is built,
 so build another one for another sound.
+
+### Play a General MIDI file, with no SoundFont and no configuration
+
+```csharp
+using CodeBrix.Audio.Midi;
+using CodeBrix.Audio.ModestSynth;
+using CodeBrix.Audio.Synth;
+
+GeneralMidiInstrumentLibrary.Register();     // once, at start-up; "ModestSynthGm"
+
+var synth = new GeneralMidiSynthesizer(44100);   // or resolve the library by name
+SoundFontRenderer.RenderToFile(synth, new MidiSequence("tune.mid"), "tune.wav",
+                               TimeSpan.FromSeconds(2));
+
+// "Make the celesta darker" - the supported way to change how a program sounds.
+synth.Adjustments.Program(GeneralMidiProgram.Celesta).Brightness = -0.8;
+
+// One part of a voiced arrangement: pinned to its program, on any channel.
+var flute = GeneralMidiSynthesizer.CreateForProgram((int)GeneralMidiProgram.Flute, 44100);
+var kit = GeneralMidiSynthesizer.CreateForPercussion(44100);
+```
+
+The file's own program changes choose the instruments and channel 10 is the drum kit, so a
+standard MIDI file needs nothing set up. Registering the library is what lets the rest of
+CodeBrix.Audio — a routing synthesizer, an offline render, a rendition — ask for these
+instruments by name; `CodeBrix.Audio` registers nothing itself.
 
 ### Turn it on for Decent Sampler instruments
 

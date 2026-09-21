@@ -496,6 +496,350 @@ public static class SoundFontRenderer
         WriteWav(Render(synthesizer, sequence, tail), output, synthesizer.SampleRate, leaveOpen);
     }
 
+    /// <summary>
+    /// Renders a whole sequence to a file, in whatever format the file's extension names.
+    /// </summary>
+    /// <param name="soundFont">The SoundFont to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="outputPath">
+    /// Path of the file to write, overwritten if it exists. Its EXTENSION chooses the writer
+    /// through <see cref="AudioFileWriterRegistry"/>: <c>.wav</c> and <c>.aif</c> / <c>.aiff</c>
+    /// out of the box, and any other format a consumer has registered.
+    /// </param>
+    /// <param name="sampleRate">Output sample rate in Hz.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive, or <paramref name="tail"/> is negative.</exception>
+    /// <exception cref="NotSupportedException">
+    /// No writer is registered for the file's extension. The message names it and lists what IS
+    /// registered.
+    /// </exception>
+    public static void RenderToFile(
+        SoundFont soundFont,
+        MidiSequence sequence,
+        string outputPath,
+        int sampleRate = DefaultSampleRate,
+        TimeSpan tail = default)
+    {
+        CheckOutputPath(outputPath);
+
+        var factory = ResolveWriterFactory(outputPath);
+
+        RenderToFile(soundFont, sequence, outputPath, factory.DefaultFormat(sampleRate, 2), tail);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence to a file in a format of your choosing - 16-bit PCM WAV, for
+    /// instance, instead of the 32-bit float a <c>.wav</c> is written as by default.
+    /// </summary>
+    /// <param name="soundFont">The SoundFont to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="outputPath">Path of the file to write; its extension chooses the writer.</param>
+    /// <param name="format">
+    /// The format to store. Its <see cref="WaveFormat.SampleRate"/> is what the render is produced
+    /// at, and its <see cref="WaveFormat.Channels"/> must be 2, because a render is stereo.
+    /// </param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentException">The format is not stereo, or the writer refuses it.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="tail"/> is negative.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the file's extension.</exception>
+    public static void RenderToFile(
+        SoundFont soundFont,
+        MidiSequence sequence,
+        string outputPath,
+        WaveFormat format,
+        TimeSpan tail = default)
+    {
+        CheckOutputPath(outputPath);
+        CheckStereo(format);
+
+        var samples = Render(soundFont, sequence, format.SampleRate, tail);
+
+        WriteThroughRegistry(samples, outputPath, outputPath, format);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through a synthesizer of your own to a file, in whatever format the
+    /// file's extension names.
+    /// </summary>
+    /// <param name="synthesizer">The synthesizer to render with, at its own sample rate.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="outputPath">Path of the file to write; its extension chooses the writer.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The synthesizer's sample rate is not positive, or <paramref name="tail"/> is negative.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the file's extension.</exception>
+    public static void RenderToFile(
+        IMidiSynthesizer synthesizer,
+        MidiSequence sequence,
+        string outputPath,
+        TimeSpan tail = default)
+    {
+        if (synthesizer == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizer));
+        }
+
+        CheckOutputPath(outputPath);
+
+        var factory = ResolveWriterFactory(outputPath);
+
+        RenderToFile(synthesizer, sequence, outputPath, factory.DefaultFormat(synthesizer.SampleRate, 2), tail);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through a synthesizer of your own to a file, in a format of your
+    /// choosing.
+    /// </summary>
+    /// <param name="synthesizer">The synthesizer to render with, at its own sample rate.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="outputPath">Path of the file to write; its extension chooses the writer.</param>
+    /// <param name="format">
+    /// The format to store. It must be stereo, and its sample rate must be the synthesizer's -
+    /// this method does not resample.
+    /// </param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentException">The format is not stereo, or its sample rate is not the synthesizer's.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The synthesizer's sample rate is not positive, or <paramref name="tail"/> is negative.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the file's extension.</exception>
+    public static void RenderToFile(
+        IMidiSynthesizer synthesizer,
+        MidiSequence sequence,
+        string outputPath,
+        WaveFormat format,
+        TimeSpan tail = default)
+    {
+        if (synthesizer == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizer));
+        }
+
+        CheckOutputPath(outputPath);
+        CheckStereo(format);
+        CheckSampleRateMatches(format, synthesizer.SampleRate);
+
+        var samples = Render(synthesizer, sequence, tail);
+
+        WriteThroughRegistry(samples, outputPath, outputPath, format);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence to a stream, in whatever format an extension names.
+    /// </summary>
+    /// <param name="soundFont">The SoundFont to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="output">
+    /// The stream to write to. It is NEVER closed by this method, and it must be seekable when the
+    /// chosen writer says so - WAV and AIFF both do, because they patch their headers.
+    /// </param>
+    /// <param name="fileNameOrExtension">The format to write, as ".wav", "wav" or "tune.wav".</param>
+    /// <param name="sampleRate">Output sample rate in Hz.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentException">The stream cannot be written to, or cannot seek and the format needs it to.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="sampleRate"/> is not positive, or <paramref name="tail"/> is negative.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the extension.</exception>
+    public static void RenderToStream(
+        SoundFont soundFont,
+        MidiSequence sequence,
+        Stream output,
+        string fileNameOrExtension,
+        int sampleRate = DefaultSampleRate,
+        TimeSpan tail = default)
+    {
+        var factory = ResolveWriterFactory(fileNameOrExtension);
+
+        RenderToStream(
+            soundFont, sequence, output, fileNameOrExtension, factory.DefaultFormat(sampleRate, 2), tail);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence to a stream, in a format of your choosing.
+    /// </summary>
+    /// <param name="soundFont">The SoundFont to render with.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="output">The stream to write to. It is never closed by this method.</param>
+    /// <param name="fileNameOrExtension">The format to write, as ".wav", "wav" or "tune.wav".</param>
+    /// <param name="format">The format to store. Its sample rate is what the render is produced at, and it must be stereo.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentException">The format is not stereo, or the stream is unusable for it.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="tail"/> is negative.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the extension.</exception>
+    public static void RenderToStream(
+        SoundFont soundFont,
+        MidiSequence sequence,
+        Stream output,
+        string fileNameOrExtension,
+        WaveFormat format,
+        TimeSpan tail = default)
+    {
+        if (output == null)
+        {
+            throw new ArgumentNullException(nameof(output));
+        }
+
+        CheckStereo(format);
+
+        var samples = Render(soundFont, sequence, format.SampleRate, tail);
+
+        WriteThroughRegistry(samples, output, fileNameOrExtension, format);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through a synthesizer of your own to a stream, in whatever format
+    /// an extension names.
+    /// </summary>
+    /// <param name="synthesizer">The synthesizer to render with, at its own sample rate.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="output">The stream to write to. It is never closed by this method.</param>
+    /// <param name="fileNameOrExtension">The format to write, as ".wav", "wav" or "tune.wav".</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentException">The stream cannot be written to, or cannot seek and the format needs it to.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The synthesizer's sample rate is not positive, or <paramref name="tail"/> is negative.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the extension.</exception>
+    public static void RenderToStream(
+        IMidiSynthesizer synthesizer,
+        MidiSequence sequence,
+        Stream output,
+        string fileNameOrExtension,
+        TimeSpan tail = default)
+    {
+        if (synthesizer == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizer));
+        }
+
+        var factory = ResolveWriterFactory(fileNameOrExtension);
+
+        RenderToStream(
+            synthesizer,
+            sequence,
+            output,
+            fileNameOrExtension,
+            factory.DefaultFormat(synthesizer.SampleRate, 2),
+            tail);
+    }
+
+    /// <summary>
+    /// Renders a whole sequence through a synthesizer of your own to a stream, in a format of your
+    /// choosing.
+    /// </summary>
+    /// <param name="synthesizer">The synthesizer to render with, at its own sample rate.</param>
+    /// <param name="sequence">The sequence to render.</param>
+    /// <param name="output">The stream to write to. It is never closed by this method.</param>
+    /// <param name="fileNameOrExtension">The format to write, as ".wav", "wav" or "tune.wav".</param>
+    /// <param name="format">The format to store. It must be stereo at the synthesizer's sample rate.</param>
+    /// <param name="tail">Extra time rendered after the sequence ends, so tails are not cut off.</param>
+    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <exception cref="ArgumentException">The format is not stereo, its sample rate is not the synthesizer's, or the stream is unusable for it.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The synthesizer's sample rate is not positive, or <paramref name="tail"/> is negative.</exception>
+    /// <exception cref="NotSupportedException">No writer is registered for the extension.</exception>
+    public static void RenderToStream(
+        IMidiSynthesizer synthesizer,
+        MidiSequence sequence,
+        Stream output,
+        string fileNameOrExtension,
+        WaveFormat format,
+        TimeSpan tail = default)
+    {
+        if (synthesizer == null)
+        {
+            throw new ArgumentNullException(nameof(synthesizer));
+        }
+
+        if (output == null)
+        {
+            throw new ArgumentNullException(nameof(output));
+        }
+
+        CheckStereo(format);
+        CheckSampleRateMatches(format, synthesizer.SampleRate);
+
+        var samples = Render(synthesizer, sequence, tail);
+
+        WriteThroughRegistry(samples, output, fileNameOrExtension, format);
+    }
+
+    private static IAudioFileWriterFactory ResolveWriterFactory(string fileNameOrExtension)
+    {
+        if (fileNameOrExtension == null)
+        {
+            throw new ArgumentNullException(nameof(fileNameOrExtension));
+        }
+
+        return AudioFileWriterRegistry.Resolve(fileNameOrExtension);
+    }
+
+    private static void CheckOutputPath(string outputPath)
+    {
+        if (outputPath == null)
+        {
+            throw new ArgumentNullException(nameof(outputPath));
+        }
+    }
+
+    private static void CheckStereo(WaveFormat format)
+    {
+        if (format == null)
+        {
+            throw new ArgumentNullException(nameof(format));
+        }
+
+        if (format.Channels != 2)
+        {
+            throw new ArgumentException(
+                $"An offline render is stereo, so the output format must have 2 channels; this one " +
+                $"has {format.Channels}.",
+                nameof(format));
+        }
+    }
+
+    private static void CheckSampleRateMatches(WaveFormat format, int sampleRate)
+    {
+        if (format.SampleRate != sampleRate)
+        {
+            throw new ArgumentException(
+                $"The synthesizer renders at {sampleRate} Hz and the output format is " +
+                $"{format.SampleRate} Hz. Rendering does not resample; ask for the synthesizer's own rate.",
+                nameof(format));
+        }
+    }
+
+    private static void WriteThroughRegistry(
+        float[] samples, string outputPath, string fileNameOrExtension, WaveFormat format)
+    {
+        // Resolve the writer BEFORE creating the file, so an unregistered extension does not leave
+        // an empty file behind.
+        var factory = AudioFileWriterRegistry.Resolve(fileNameOrExtension);
+
+        using (var stream = File.Create(outputPath))
+        {
+            WriteThroughFactory(samples, factory, stream, format);
+        }
+    }
+
+    private static void WriteThroughRegistry(
+        float[] samples, Stream output, string fileNameOrExtension, WaveFormat format)
+    {
+        var factory = AudioFileWriterRegistry.Resolve(fileNameOrExtension);
+
+        WriteThroughFactory(samples, factory, output, format);
+    }
+
+    private static void WriteThroughFactory(
+        float[] samples, IAudioFileWriterFactory factory, Stream output, WaveFormat format)
+    {
+        using (var writer = factory.Create(output, format))
+        {
+            writer.Write(samples, 0, samples.Length);
+            writer.Finish();
+        }
+    }
+
     private static void WriteWav(float[] samples, Stream output, int sampleRate, bool leaveOpen)
     {
         var format = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, 2);

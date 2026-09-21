@@ -39,6 +39,9 @@ XML documentation (IntelliSense) ships alongside both assemblies.
 * Playing Decent Sampler instruments (`.dspreset`, `.dslibrary`, `.dsbundle`, or the folder holding one): the whole documented format, measured against the reference player rather than guessed at, and verified over a corpus of real libraries at **zero unsupported features**. The sampler (every trigger mode, round robins, tags with polyphony and voice muting, legato and glide, loops with crossfades, envelopes with curves, CC filters, release triggers, note delays and retriggers); the parameter and binding model behind a preset's knobs, so `instrument.GetControl("ATTACK").SetValue(0.4)` drives the sound exactly as a user turning it would; effect chains at instrument, bus and per-voice group level with sixteen buses and sixteen auxiliary stereo pairs; the seven modulator types with four behaviours and two scopes; the `<midi>` element with key switches, note sequences and the arpeggiator; and MPE read out of a MIDI file. Samples stream from disk under a memory budget, so a multi-gigabyte library plays inside a few hundred megabytes, and an archive is read in place rather than unpacked. Anything not honoured is reported per instrument (`Problems`, `UnsupportedFeatures`) and never thrown, and everything the engine does not implement is grouped and explained in `DecentSamplerResidualTable`. Oscillators and creative effects come from the add-on package below. "Decent Sampler" is Decidedly LLC's name for the format and its player, and is used here only to say what the files are.
 * Playing audio that arrives as **codec packets** rather than as a file (`PacketAudioPlayer`) — the shape a media container's demultiplexer hands out. The player pulls packets from your `IAudioPacketSource` on the audio thread, owns the playback clock, seeks by contract (you move your source, then tell it where it now is), trims the encoder padding off the end of a track, and turns a reported gap into audio of exactly the length that was lost. Ogg Vorbis packets are built in; other codecs plug into the same packet codec seam.
 * Playing a **multi-track song** on one transport (`MultiTrackPlayer`): one track per part, where a part can be a recording, a MIDI performance through a SoundFont, SFZ or Decent Sampler instrument, or **both at once** — switching between the two is a crossfade rather than a restart, because both are always rendered in step. Per-track gain, pan, mute, solo and signed offsets; a percussion rule for the zero-length notes drum parts are written with; optional level matching that makes a synthesized part sit where the recording sat in the mix; offline rendering with no audio device; and an export that merges every MIDI part into one General MIDI file. A Suno stems download loads straight into one (`SunoStemsLoader`) — the zip or the extracted folder, tolerant MIDI reading that reports what it could not honour rather than throwing, note counts and coverage so a near-empty transcription can be spotted, and a measurement of how far each transcription sits from its own recording, exposed and overridable so the synthesized parts line up with the recorded ones.
+* Naming the instruments an application plays with (`IInstrumentLibrary`, `InstrumentLibraryRegistry`): an **instrument library** is a named set of instruments addressed the way MIDI addresses them — by program number, and by note number on the percussion channel — so the whole sound of an application changes by naming a different one. A library offers its instruments one part at a time (one synthesizer per voice, pinned to it, which is what a per-part gain or a layered second instrument needs) or as a single multi-timbral synthesizer that honours a file's own program changes, and reports exactly which programs, which drums and which part of the keyboard it really covers. Any `.sf2` becomes a named library in one line (`SoundFontInstrumentLibrary`), sharing one loaded copy behind every synthesizer it creates. A `MappedInstrumentLibrary` starts from a library you already have and lets you replace voices **one at a time** — a Decent Sampler pack, an SFZ file, one program of another library, or a synthesizer of your own — leaving every voice you have not replaced exactly where it was. This package ships the seam and no instruments: registering is the application's decision, and with nothing registered the error says so.
+* Playing a voiced arrangement as one synthesizer (`RoutingSynthesizer`): a child instrument per MIDI channel, each with its own gain and an optional layered second instrument, built eagerly or on first use. Every sequencer, player and offline renderer drives it as a single synthesizer, so the same arrangement plays live, follows a timeline that is still being written, and renders to a file through one code path.
+* Writing rendered audio by file name (`AudioFileWriterRegistry`), the mirror of the reader registry: `.wav` (32-bit IEEE float by default, 16- and 24-bit PCM on request) and `.aif` / `.aiff` are built in, and an add-on package adds its own format from the same `Register()` call it already uses for reading. `SoundFontRenderer.RenderToFile` and `RenderToStream` pick the writer from the file name, so bouncing a MIDI file or an ABC tune to another format is a change of extension. A writer never closes the stream it was handed, and says for itself whether it needs one that can seek.
 * Audio analysis building blocks: fast Fourier transform, biquad filters, envelope follower, and voice-activity detection.
 
 ## CodeBrix.Audio.Engine (bundled audio engine)
@@ -50,6 +53,8 @@ The Engine has a **native dependency**: a bundled native backend, with an Ogg Vo
 ## CodeBrix.Audio.ModestSynth (add-on synthesis package)
 
 Sound that is generated rather than played back — band-limited saw, square and triangle waveforms, a sine, seeded white noise, a plucked string built as a digital waveguide, a multi-frame wavetable player, a 64-partial additive oscillator and a six-operator FM engine, together with the creative effects a synth is expected to have — ships as a separate package, `CodeBrix.Audio.ModestSynth.MitLicenseForever`, built from this repository and published alongside `CodeBrix.Audio` at the same version. It is MIT like the core, depends on nothing but the core, and is separate because synthesis is not something every application that reads a WAV file needs to carry. Use it directly; play a whole patch from MIDI through its own polyphonic synthesizer, which every player and offline renderer here accepts; or let one call at start-up hand its oscillators and effects to the Decent Sampler engine, through a parameter model that mirrors a sampler preset's oscillator settings one for one. That call is `ModestSynth.Register()`, and it belongs before an instrument is loaded: without it a preset whose group holds an oscillator, or whose chain names one of the creative effects, still loads and plays every sampled group, with one line in `Problems` naming the package.
+
+That package also carries **the instruments**. `GeneralMidiSynthesizer` plays a `.mid` with no configuration at all, and `GeneralMidiInstrumentLibrary.Register()` — one line — puts the complete General MIDI sound set, all 128 programs and the 47-note percussion kit, into the instrument registry described above under the name `ModestSynthGm`. It is synthesis throughout, with no recorded sample anywhere in it, so it sounds like a good synthesizer rather than like sampled instruments; for recorded instruments, name a SoundFont library or swap voices into a mapped library instead. `CodeBrix.Audio` registers nothing itself, so this is the call that makes the instrument seam sound.
 
 ## Formats not included
 
@@ -210,6 +215,38 @@ SoundFontRenderer.RenderToWavFile(
 ```
 
 > **Two SoundFont paths, on purpose.** `CodeBrix.Audio.Synth` is the renderer of record for playing a `.sf2`. The bundled Engine's `CodeBrix.Audio.Engine.Synthesis` is a general-purpose synthesis architecture — oscillators, custom banks, MPE, arpeggiators — that can sample-play SF2 presets but has no modulators, per-voice LFO or per-voice filter. Use the first to reproduce somebody's SoundFont, the second to build an instrument. `AGENT-README.txt` covers the split in detail.
+
+### Play a MIDI file with no SoundFont to find, and swap one voice for your own
+
+```csharp
+using CodeBrix.Audio.Instruments;
+using CodeBrix.Audio.Midi;
+using CodeBrix.Audio.ModestSynth;               // the synthesis add-on
+using CodeBrix.Audio.Synth;
+
+GeneralMidiInstrumentLibrary.Register();        // registers as "ModestSynthGm"
+
+var voices = new MappedInstrumentLibrary(
+    "MyVoices", "ModestSynthGm, with a few voices of my own", "ModestSynthGm");
+
+var piece = new MidiSequence("piece.mid");
+
+// Every voice is ModestSynthGm's, and the file's own program changes choose them.
+SoundFontRenderer.RenderToFile(
+    voices.CreateMultiTimbralSynthesizer(44100), piece, "take-1.wav",
+    TimeSpan.FromSeconds(2));
+
+// Replace ONE voice with a pack of your own; everything else is unchanged.
+voices.SetInstrument(GeneralMidiProgram.ChoirAahs, "Whisper Choir.dspreset");
+
+SoundFontRenderer.RenderToFile(
+    voices.CreateMultiTimbralSynthesizer(44100), piece, "take-2.wav",
+    TimeSpan.FromSeconds(2));
+```
+
+> `RenderToFile` picks the writer from the extension, so `"take-2.aiff"` writes AIFF and a format
+> registered by an add-on package is reached the same way. Nothing registers an instrument library
+> for you — with an empty registry the exception names `GeneralMidiInstrumentLibrary.Register()`.
 
 ### Play audio that arrives as codec packets
 

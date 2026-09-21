@@ -1,0 +1,55 @@
+==============================================================================
+tests/Assets/generated-music - four pieces of model-generated music
+==============================================================================
+
+These files are NOT third-party recordings or transcriptions. Every one is the
+OUTPUT of a model that was run locally by the owner of this repository, from
+models published under the Apache-2.0 license. Nothing of the models themselves
+is here: the files are a few kilobytes of notes. See THIRD-PARTY-NOTICES.txt.
+
+They exist because a fixture phrase proves a voicing makes a sound, and only a
+piece of music proves the bank can carry one. These four were picked from a
+listening session in which they were RATED, so the listening tests audition the
+General MIDI bank on material whose musical worth was already settled.
+
+WHAT EACH PIECE IS
+------------------------------------------------------------------------------
+  skytnt-fp32-ordinary.mid   SkyTNT midi-model-tv2o-medium, full precision.
+                             About a minute long, three parts: piano, violin
+                             and flute. Rated 8/10 - "very ambient ...
+                             ethereal". It carries its own program changes and
+                             is played EXACTLY as written, with no
+                             configuration at all, because "plays any .mid"
+                             is the promise the multi-timbral synthesizer
+                             makes.
+
+  skytnt-fp32-dense.mid      The same model, a denser piece of about
+                             thirty-five seconds: violin, nylon guitar and a
+                             string ensemble over a drum part on channel 10.
+                             Rated 8/10. Also played exactly as written - and
+                             see the note below, because what it asks for on
+                             channel 10 is worth knowing about.
+
+  mupt-q8_0-duet-Am-waltz-seed29.abc
+                             MuPT-v1-8192-190M, quantized to q8_0. A two-voice
+                             waltz in A minor, and the highest-rated piece of
+                             either audition at 9.7/10 - heard then as celesta
+                             over a mixed chorus, which is how it is voiced
+                             here: celesta on the upper voice, choir aahs on
+                             the lower one, one distinct voice per part.
+
+  mupt-q8_0-air-Dmix-seed11.abc
+                             The same model: a slow single-voice air in D
+                             mixolydian, rated 8.5/10. ABC carries no
+                             instrument unless the transcriber writes a
+                             %%MIDI program directive, and this one does not,
+                             so the listening tests choose a voice for it.
+
+A NOTE ON THE DENSE PIECE AND CHANNEL 10
+------------------------------------------------------------------------------
+skytnt-fp32-dense.mid sends a program change to program 0 on channel 10 before
+its drum part, which is what a General MIDI writer normally does: on channel 10
+a program change chooses a drum KIT, and program 0 is the standard kit. It is
+the only fixture in this repository that exercises that message, so it is also
+the one that would catch a synthesizer reading it as "put a piano on channel
+10" and losing the drums.

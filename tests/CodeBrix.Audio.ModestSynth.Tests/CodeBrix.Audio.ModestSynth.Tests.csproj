@@ -22,4 +22,18 @@
     <ProjectReference Include="..\..\src\CodeBrix.Audio.ModestSynth\CodeBrix.Audio.ModestSynth.csproj" />
   </ItemGroup>
 
+  <!--
+    The four pieces of generated music the listening tests audition the General MIDI bank on.
+    They are the OUTPUT of two Apache-2.0 models, generated locally - no third-party recording or
+    score is bundled; see THIRD-PARTY-NOTICES.txt and Assets/generated-music/GENERATED-MUSIC.txt.
+    They exist as files rather than as inline fixtures because they ARE the material: a phrase
+    written in code proves a voicing sounds, and only music proves the bank can carry a piece.
+  -->
+  <ItemGroup>
+    <Content Include="..\Assets\generated-music\*.mid;..\Assets\generated-music\*.abc">
+      <Link>Assets\generated-music\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

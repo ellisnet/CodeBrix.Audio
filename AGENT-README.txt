@@ -18,6 +18,12 @@ and all SYNTHESIS is managed code with no
 platform-specific interop, so it behaves the same way on Windows, macOS, and
 Linux; PLAYBACK goes through the bundled engine and its native backend.
 
+It also carries two naming seams. INSTRUMENT LIBRARIES let an application say
+what its music sounds like by NAME, so the whole sound changes by naming a
+different library; this package ships the seam and NO instruments, so a consumer
+registers what it wants to hear. The AUDIO-FILE WRITER registry does the same
+for output, so an offline render goes to whatever format the file name asks for.
+
 NOTE: the CodeBrix.Audio.MitLicenseForever package ALSO bundles a second
 assembly, CodeBrix.Audio.Engine — a full audio engine WITH a bundled native
 backend — documented in its own section below ("CODEBRIX.AUDIO.ENGINE"). Unless a
@@ -87,7 +93,15 @@ ADD-ON PACKAGES IN THE FAMILY
       for when a group holds an <oscillator> rather than a <sample> or a chain
       names an effect the core does not carry. One call -
       ModestSynth.Register() - before an instrument is loaded hands both sets
-      over. Built and published from THIS repository at the same version as
+      over.
+      IT ALSO CARRIES THE INSTRUMENTS. GeneralMidiSynthesizer plays any .mid
+      with no configuration at all, and GeneralMidiInstrumentLibrary.Register()
+      puts the complete General MIDI sound set - all 128 programs and the
+      47-note percussion kit, synthesized - into the instrument registry
+      described under "INSTRUMENT LIBRARIES" below, under the name
+      "ModestSynthGm". CodeBrix.Audio ships no instruments of its own, so with
+      nothing registered nothing sounds; this is the one line that fixes that.
+      Built and published from THIS repository at the same version as
       CodeBrix.Audio, so the two always match. Its guide is at
       https://github.com/ellisnet/CodeBrix.Audio/blob/main/src/CodeBrix.Audio.ModestSynth/AGENT-README.txt
 
@@ -99,6 +113,9 @@ KEY NAMESPACES / USINGS
 =======================
   using CodeBrix.Audio.Wave;       // readers/writers, WaveFormat, MP3 frames, ID3,
                                    //   playback (WaveOutEvent, SharedAudioOutput)
+                                   //   and the audio-file WRITER seam
+                                   //   (AudioFileWriterRegistry) — see "WRITING A
+                                   //   RENDER TO A FILE"
   using CodeBrix.Audio.Playback;   // media player (AudioFilePlayer), one-shot
                                    //   sound effects (SoundEffectClip), the
                                    //   multi-track song player
@@ -108,6 +125,9 @@ KEY NAMESPACES / USINGS
                                        //   the multi-track player plays
   using CodeBrix.Audio.Midi;       // MIDI file read/write + event hierarchy,
                                    //   and the General MIDI sound-set names
+  using CodeBrix.Audio.Instruments;// instrument libraries, their coverage and
+                                   //   the registry that names them — see
+                                   //   "INSTRUMENT LIBRARIES"
   using CodeBrix.Audio.Abc;        // reads abc notation (.abc) and converts a
                                    //   tune to the MIDI model — see "READING ABC
                                    //   NOTATION"; on its own it is a complete
@@ -115,7 +135,9 @@ KEY NAMESPACES / USINGS
                                    //   "CONVERTING ABC TO A MIDI FILE"
   using CodeBrix.Audio.Dsp;        // FFT, biquad filters, analysis primitives
   using CodeBrix.Audio.Synth;      // SoundFont (.sf2) rendering + MIDI music
-                                   //   playback — see "TWO SOUNDFONT PATHS"
+                                   //   playback — see "TWO SOUNDFONT PATHS";
+                                   //   also RoutingSynthesizer, and the Reverb
+                                   //   and Chorus send effects
   using CodeBrix.Audio.Synth.Sfz;  // SFZ instruments (.sfz)
   using CodeBrix.Audio.Synth.DecentSampler;   // Decent Sampler instruments
                                    //   (.dspreset / .dslibrary / .dsbundle) —
@@ -586,6 +608,362 @@ NO MIDI DEVICE INPUT. This is about MIDI FILES. Record the performance in a
 sequencer, export the clip, and play the file.
 
 
+INSTRUMENT LIBRARIES
+====================
+An INSTRUMENT LIBRARY is a NAMED set of instruments, addressed the way MIDI
+addresses them - by General MIDI program number, and by note number on the
+percussion channel - that hands back an IMidiSynthesizer on demand. It keeps
+"what this music sounds like" apart from "what notes it plays", so an
+application changes its whole sound by naming a different library rather than by
+rewriting the code that plays the notes.
+
+CODEBRIX.AUDIO SHIPS NO INSTRUMENTS AND REGISTERS NOTHING. The registry starts
+EMPTY, and until a consumer fills it nothing can be played or rendered through
+this seam. That is deliberate - which instruments an application uses is the
+application's decision, never a library's - and one line settles it:
+
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.ModestSynth;        // the add-on package
+
+    GeneralMidiInstrumentLibrary.Register();      // registers as "ModestSynthGm"
+
+That gives the whole General MIDI Level 1 sound set - all 128 programs and the
+47-note percussion kit, synthesized - with no SoundFont to find and nothing to
+download. Ask the registry for anything while it is still empty and you get an
+InvalidOperationException whose message names that very call:
+
+    No instrument library is registered, so no music can be played or rendered.
+    Register the General MIDI library provided by CodeBrix.Audio.ModestSynth -
+    call GeneralMidiInstrumentLibrary.Register() - or register another
+    instrument library with InstrumentLibraryRegistry.Register.
+
+TWO SHAPES, AND A LIBRARY MAY OFFER EITHER OR BOTH. It says which with
+SupportsPerPart and SupportsMultiTimbral; asking for a shape it does not offer
+throws NotSupportedException, naming the library and the shape it does have.
+
+  PER-PART        CreateSynthesizer(program, sampleRate) and
+                  CreatePercussionSynthesizer(sampleRate) hand back ONE
+                  synthesizer per voice. This is what a voiced arrangement
+                  needs, because a per-part gain and a layered second instrument
+                  both require separate synthesizers - one multi-timbral
+                  synthesizer mixes internally, at one level. The parts are then
+                  played together through a RoutingSynthesizer (next section).
+                  A per-part synthesizer is PINNED: it ignores program change
+                  and bank select, because the CALLER decided what this part
+                  sounds like and a program change in the music must not quietly
+                  undo that. It sounds on ANY channel it is given, so a router
+                  may put it wherever the music put the part.
+
+  MULTI-TIMBRAL   CreateMultiTimbralSynthesizer(sampleRate) hands back ONE
+                  synthesizer that honours the program changes the music carries
+                  and treats channel 10 as percussion. This is the "play this
+                  .mid with no configuration" case.
+
+COVERAGE SAYS WHAT IS REALLY THERE, which matters most for sampled libraries: an
+instrument recorded from C3 up plays nothing below it, and that is silence in
+the middle of an arrangement rather than an exception. A synthesized bank
+usually covers everything; a library built out of sample packs usually does not,
+so ask before you voice a part with one.
+
+    if (!library.Coverage.CoversNote(73, 48))      // flute, a low C
+    {
+        // nothing down there - voice that part differently, or transpose it
+    }
+
+  coverage.Programs / .PercussionNotes   what is covered, ascending
+  coverage.CoversProgram(program)        is that program there at all
+  coverage.CoversPercussionNote(note)    is that kit piece there
+  coverage.KeyRangeOf(program)           an InstrumentKeyRange - LowestKey,
+                                         HighestKey, KeyCount, IsEmpty,
+                                         Contains(key), UnionWith(other), and
+                                         "35-81" or "(none)" from ToString
+  coverage.CoversNote(program, note)     both questions at once
+  InstrumentCoverage.General             all 128 programs over the whole
+                                         keyboard plus percussion 35-81 - what a
+                                         complete General MIDI library reports
+  InstrumentCoverage.None                nothing at all
+
+A library that does not track key ranges reports the whole keyboard for every
+program it covers, which is the right answer for a synthesized bank.
+
+THE REGISTRY, AND ITS RULES. InstrumentLibraryRegistry is static and
+process-wide, exactly as AudioFileReaderRegistry is.
+
+  - Every library registers under a UNIQUE NAME, matched case-insensitively.
+  - Registering the SAME library instance again is a NO-OP. That is what makes a
+    package's Register() safe to call on every start-up path.
+  - A DIFFERENT library under a name already taken is an error.
+  - THE FIRST LIBRARY REGISTERED IS THE DEFAULT. There is no priority and no
+    other ordering.
+  - SetDefault(name) makes any registered library the default instead.
+  - Resolve(name) asks for a particular one. A name that is not registered is an
+    error listing what IS registered.
+
+      InstrumentLibraryRegistry.Register(library)
+      InstrumentLibraryRegistry.Registered        every library, in registration
+                                                  order
+      InstrumentLibraryRegistry.RegisteredNames   their names, same order
+      InstrumentLibraryRegistry.IsRegistered(name)  asks without throwing
+      InstrumentLibraryRegistry.Resolve(name)
+      InstrumentLibraryRegistry.Default           the first registered, unless
+                                                  SetDefault moved it
+      InstrumentLibraryRegistry.DefaultName       null when empty; NEVER throws
+      InstrumentLibraryRegistry.SetDefault(name)
+
+  THE DEFAULT DEPENDS ON REGISTRATION ORDER, so in an application that registers
+  more than one it depends on which start-up path ran first. Code that cares
+  which library it gets NAMES it:
+
+      var library = InstrumentLibraryRegistry.Resolve("ModestSynthGm");
+
+  Every registry member is safe to call from several threads at once. The
+  SYNTHESIZERS a library hands back are not: IMidiSynthesizer is single-threaded
+  by contract, here as everywhere else in this package.
+
+BRING YOUR OWN SOUNDFONT - SoundFontInstrumentLibrary
+  A .sf2 becomes a named library in one line. It is code, not content: this
+  package ships no .sf2 of its own.
+
+      new SoundFontInstrumentLibrary("MyBank", "The bank my game ships with",
+                                     "bank.sf2").Register();
+
+  It takes a path, a Stream or an already-loaded SoundFont, offers BOTH shapes,
+  and holds ONE SoundFont that every synthesizer it creates shares - five parts
+  never mean five copies of a large file in memory. Its .SoundFont property is
+  that shared instance. Coverage is read from the file's own presets and
+  instrument regions, so the key ranges it reports are the ranges that really
+  sound; melodic programs come from bank 0 and percussion from the drum bank.
+
+SWAPPING VOICES ONE AT A TIME - MappedInstrumentLibrary
+  This is the shape of an ordinary working session, and this library exists for
+  it. START from a General MIDI library you already have - "ModestSynthGm", or a
+  SoundFont library of your own. LISTEN to the piece. Then REPLACE ONE VOICE
+  with an instrument of your own - a Decent Sampler pack, an .sfz, one program
+  of another library, or a synthesizer you wrote - and listen again. Everything
+  you have not replaced keeps coming from where it came from.
+
+    using System;
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.Midi;
+    using CodeBrix.Audio.ModestSynth;
+    using CodeBrix.Audio.Synth;
+
+    // 1. START FROM A GENERAL MIDI LIBRARY.
+    GeneralMidiInstrumentLibrary.Register();          // "ModestSynthGm"
+
+    var voices = new MappedInstrumentLibrary(
+        "MyVoices",
+        "ModestSynthGm, with a few voices of my own",
+        "ModestSynthGm");                             // resolved on first use
+    voices.Register();                                // "MyVoices" resolves too
+
+    var piece = new MidiSequence("piece.mid");
+
+    // Hear it as it stands: every voice is ModestSynthGm's.
+    SoundFontRenderer.RenderToFile(
+        voices.CreateMultiTimbralSynthesizer(44100), piece, "take-1.wav",
+        TimeSpan.FromSeconds(2));
+
+    // 2. SWAP ONE VOICE, AND LISTEN AGAIN.
+    voices.SetInstrument(
+        GeneralMidiProgram.ChoirAahs,                 // program 52
+        "/home/me/packs/Whisper Choir/Whisper Choir.dspreset");
+
+    SoundFontRenderer.RenderToFile(
+        voices.CreateMultiTimbralSynthesizer(44100), piece, "take-2.wav",
+        TimeSpan.FromSeconds(2));
+
+    // Everything except Choir Aahs is what take 1 was. Only program 52 moved.
+
+    // 3. SWAP ANOTHER ONE.
+    voices.SetInstrument(GeneralMidiProgram.AcousticBass, "/home/me/sfz/upright.sfz");
+
+    // 4. CHANGE YOUR MIND, OR GO FURTHER.
+    voices.ClearInstrument(GeneralMidiProgram.AcousticBass);   // back to the base
+
+    voices.SetInstrumentFromSoundFont(GeneralMidiProgram.Flute, "my-bank.sf2",
+                                      soundFontProgram: 73);
+    voices.SetInstrumentFromLibrary(GeneralMidiProgram.Celesta, "FluidR3Gm",
+                                    libraryProgram: 8);
+    voices.SetPercussion("/home/me/packs/My Kit/kit.dspreset");
+
+    // 5. AND IT KNOWS WHAT IT CAN PLAY.
+    if (!voices.Coverage.CoversNote((int)GeneralMidiProgram.ChoirAahs, 36))
+    {
+        // That choir is sampled from C3 up. This is how you find out without
+        // listening for a hole in the arrangement.
+    }
+
+  WHAT IT IS MADE OF. The BASE LIBRARY is what plays the voices you have not set
+  yourself - a starting point, not a consolation prize - given as an instance or
+  as a registry NAME that is resolved on FIRST USE, so you may name a library
+  that is registered later. The other side of that: reading Coverage,
+  SupportsPerPart or SupportsMultiTimbral on a library whose named base is still
+  not registered throws the registry's own error, exactly as creating a
+  synthesizer would. With no base at all, only what you set will play:
+  CreateSynthesizer for an unset program then throws a message that says what to
+  do, while the multi-timbral shape leaves that channel silent rather than
+  stopping the music.
+
+    voices.BaseLibraryName / .HasBaseLibrary      null and false when there is none
+    voices.SubstitutedPrograms                    what you have replaced, ascending
+    voices.HasSubstitute(program) / .HasPercussionSubstitute
+
+  FOUR WAYS TO SET A VOICE, each taking an int program or a GeneralMidiProgram,
+  and each with an optional InstrumentKeyRange when you want to state the range
+  rather than let the file say:
+
+    SetInstrument(program, sampleRate => new MySynthesizer(sampleRate))
+    SetInstrument(program, "path")   .dspreset / .dslibrary / .dsbundle / a
+                                     Decent Sampler library FOLDER / .sfz / .sf2
+    SetInstrumentFromSoundFont(program, "bank.sf2", soundFontProgram)
+    SetInstrumentFromLibrary(program, library or "LibraryName", libraryProgram)
+
+  and the same four for the whole kit - SetPercussion, SetPercussionFromSoundFont,
+  SetPercussionFromLibrary - plus ClearInstrument(program) and ClearPercussion().
+  A file type it cannot load is refused ON THE LINE THAT NAMED IT:
+
+    '.wav' is not an instrument file this library knows how to load. It
+    understands .dspreset, .dslibrary and .dsbundle (Decent Sampler), a Decent
+    Sampler library folder, .sfz (SFZ) and .sf2 (SoundFont). Anything else is
+    one line of your own: SetInstrument(program, sampleRate => new
+    MySynthesizer(sampleRate)).
+
+  FOUR THINGS TO KNOW.
+    - A CHANGE TAKES EFFECT FOR SYNTHESIZERS BUILT AFTERWARDS. The multi-timbral
+      shape takes a snapshot when it is created, so swapping a voice while a
+      piece is already sounding is safe and changes the NEXT render, not this
+      one.
+    - IT SUBSTITUTES BY PROGRAM - "everything that plays Choir Aahs". Replacing
+      ONE PART when two parts share a program is a per-CHANNEL question, and
+      that is RoutingSynthesizer.SetChannel's job (next section).
+    - EVERY SUBSTITUTE IS PINNED, so a sampled instrument that answers to
+      program change of its own cannot re-voice itself out from under you. The
+      synthesizer you get back is therefore not necessarily the type your
+      factory built: a cast to DecentSamplerSynthesizer will not succeed, and
+      the MPE and multi-output surfaces those types implement are not reachable
+      through it. Keep hold of what your own factory built if you need them.
+    - THE PERCUSSION CHANNEL FOLLOWS THE KIT you set here, whatever program is
+      selected on it. With a kit substitution in place, a melodic part written
+      onto channel 10 sounds as drums.
+
+  A file is loaded WHERE YOU WROTE THE PATH, not lazily at play time, so a typo
+  is an error on that line. One loaded instrument serves every program taken
+  from it, and a loaded instrument is held for the life of the library.
+
+
+ROUTING THE PARTS OF AN ARRANGEMENT
+===================================
+RoutingSynthesizer is an IMidiSynthesizer that is really SIXTEEN of them: each
+MIDI channel gets its own child synthesizer, its own gain, and optionally a
+second child LAYERED on top of it. Everything that drives one synthesizer drives
+a router - MidiSequencer, MidiStreamSequencer, MidiMusicPlayer and
+SoundFontRenderer - so one voiced arrangement plays live, follows a MidiStream
+that is still being written, and renders offline through exactly the same code.
+
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.Midi;
+    using CodeBrix.Audio.Synth;
+
+    var library = InstrumentLibraryRegistry.Resolve("ModestSynthGm");
+
+    var router = new RoutingSynthesizer(44100);
+    router.SetChannel(1, library.CreateSynthesizer(8, 44100), gain: 0.8F);   // celesta
+    router.SetChannel(2, () => library.CreateSynthesizer(89, 44100), 0.5F);  // lazy
+    router.SetLayer(2, () => library.CreateSynthesizer(52, 44100), 0.3F);    // doubled
+    router.SetChannel(GeneralMidi.PercussionChannel,
+                      library.CreatePercussionSynthesizer(44100));
+    router.MasterVolume = 0.9F;
+
+    // Play it now - the sequencer drives it as ONE synthesizer, so it follows a
+    // stream that is still being written:
+    var sequencer = new MidiStreamSequencer(router);
+
+    // Or render it offline - the same router, no device:
+    var samples = SoundFontRenderer.Render(router, sequence, TimeSpan.FromSeconds(2));
+
+THE CHANNEL NUMBERING PITFALL, and it is the one to remember here. The ROUTING
+TABLE is addressed 1-16 - SetChannel, SetLayer, ClearChannel, ClearLayer,
+IsRouted, HasLayer and the gain accessors - the way MidiEvent.Channel and
+GeneralMidi.PercussionChannel (which is 10) count. ProcessMidiMessage's channel
+is the WIRE number, 0-15, because that is what every sequencer hands every
+IMidiSynthesizer. PERCUSSION IS CHANNEL 10 IN THE TABLE AND WIRE CHANNEL 9 IN A
+MESSAGE. A channel outside 1-16 in the table throws:
+
+    A MIDI channel is 1 to 16, the way MidiEvent counts them.
+
+Messages are forwarded to the child UNRENUMBERED, so a child keeps its
+per-channel controller state where the music put it, and a SoundFont child still
+reads wire channel 9 as its drum bank.
+
+  router.SetChannel(channel, synthesizer[, gain])   a child, built now
+  router.SetChannel(channel, factory[, gain])       a child, built on first use
+  router.SetLayer(channel, synthesizer or factory[, gain])
+  router.ClearChannel(channel)        drops the channel AND its layer
+  router.ClearLayer(channel)
+  router.IsRouted / .HasLayer(channel)
+  router.GetChannelGain / .SetChannelGain / .GetLayerGain / .SetLayerGain
+  router.MasterVolume                 1.0 by default - unity, so an arrangement
+                                      is not quietly re-balanced
+  router.ActiveVoiceCount             summed over the children that exist
+  router.Synthesizers                 only the children already built
+  router.UnroutedMessageCount         how many messages arrived for a channel
+                                      with no instrument on it
+  RoutingSynthesizer.ChannelCount (16) / .DefaultBlockSize (64)
+
+FIVE RULES IT ENFORCES OR RELIES ON:
+
+  - EVERY CHILD SHARES THE ROUTER'S SAMPLE RATE. One that does not is refused by
+    the setter with an ArgumentException:
+        This router renders at 44100 Hz and the synthesizer renders at 48000 Hz.
+        Every child of a router must share its sample rate.
+    A lazy factory that builds one at the wrong rate says the same thing when it
+    is first called, as an InvalidOperationException - as does a factory that
+    returns null.
+  - ONE SYNTHESIZER INSTANCE FILLS ONE SLOT. A child is rendered once per block
+    at one gain, so an instance in two slots has no single answer to either:
+        That synthesizer is already routed to another channel or layer. A router
+        renders each child once per block at one gain, so an instance may fill
+        only one slot; create a second synthesizer for the second part.
+  - A MESSAGE FOR A CHANNEL WITH NO INSTRUMENT IS DROPPED SILENTLY and counted
+    in UnroutedMessageCount. A piece carrying a part nobody voiced must not stop
+    the music; the counter is how a diagnostic notices.
+  - A LAZY CHILD IS BUILT WHEN THE MUSIC FIRST PLAYS ON ITS CHANNEL, not when it
+    is routed and not when the router renders - so a large sampled library pays
+    only for the parts the music actually uses.
+  - BlockSize IS FIXED AT CONSTRUCTION (64 unless you say otherwise) and does
+    not follow the children. Children with any block size mix correctly.
+    Reset() clears the unrouted count and every child's state but NOT the
+    routing table: routing is configuration, not state.
+
+
+REVERB AND CHORUS
+=================
+Reverb and Chorus (CodeBrix.Audio.Synth) are the two SEND effects the SoundFont
+renderer uses, and they are public so a synthesizer of your own can use the same
+ones rather than carrying a second reverb.
+
+    var reverb = new Reverb(44100);           // RoomSize, Damp, Wet, Width
+    var chorus = new Chorus(44100, 0.002, 0.0019, 0.4);   // delay, depth, rate
+
+BOTH ARE SENDS, NOT INSERTS. You give them the send bus - everything you want
+wet, summed and scaled - and they write the WET SIGNAL ALONE, OVERWRITING the
+output buffers you pass. Adding the wet back to the dry is the caller's job.
+
+    reverb.Process(sendBus, wetLeft, wetRight);           // or (..., count)
+    chorus.Process(sendLeft, sendRight, wetLeft, wetRight);
+
+Reverb takes a MONO send and writes stereo; Chorus takes a stereo send and
+writes stereo. Reverb.InputGain is the scale every source should be multiplied
+by on its way into the bus, which is how the reverb stays at a sane level
+however many voices feed it. Mute() clears the tails - use it when a transport
+stops, so the next piece does not start inside the last one's room.
+
+SoundFontSynthesizer drives both from CC 91 and CC 93, and ModestSynth's General
+MIDI synthesizer drives the same two classes the same way, which is why a piece
+sounds like it is in one room whichever of them plays it.
+
+
 CORE API REFERENCE
 ==================
 Reading audio (WAV, MP3, Ogg Vorbis, FLAC):
@@ -619,6 +997,22 @@ Reading audio (WAV, MP3, Ogg Vorbis, FLAC):
 
 Writing audio:
   - WaveFileWriter        : writes PCM/IEEE-float samples to a .wav file.
+  - AudioFileWriterRegistry : writing BY FILE NAME, the mirror of
+                            AudioFileReaderRegistry. Register / Supports /
+                            SupportedExtensions / Resolve / Create. .wav
+                            (32-bit float by default) and .aif / .aiff (16-bit
+                            PCM) are built in; another package adds its own
+                            format from its own Register() call. See "WRITING A
+                            RENDER TO A FILE".
+  - IAudioFileWriter      : what a format writes through - Write(float[],
+                            offset, count), Write(ReadOnlySpan<float>),
+                            SamplesWritten, WaveFormat, Finish(). It NEVER
+                            closes the stream it was handed.
+  - IAudioFileWriterFactory : what a format registers - Extensions,
+                            RequiresSeekableStream, DefaultFormat(rate,
+                            channels), Create(stream, format).
+  - WavAudioFileWriterFactory / AiffAudioFileWriterFactory : the two built in,
+                            each taking a default bit depth in its constructor.
 
 Playback (cross-platform, via the bundled engine):
   - WaveOutEvent          : plays an IWaveProvider/ISampleProvider to the default
@@ -682,6 +1076,32 @@ MIDI:
                             FamilyOf(program) and PercussionChannel (10, in this
                             library's 1-based channel numbering; a status byte on
                             the wire carries the same channel as 9).
+
+Instrument libraries (CodeBrix.Audio.Instruments) — see "INSTRUMENT LIBRARIES"
+above. This package ships the seam and registers NOTHING:
+  - IInstrumentLibrary    : a named set of instruments - Name, Description,
+                            Coverage, SupportsPerPart, SupportsMultiTimbral,
+                            CreateSynthesizer(program, rate),
+                            CreatePercussionSynthesizer(rate),
+                            CreateMultiTimbralSynthesizer(rate).
+  - InstrumentLibraryRegistry : the process-wide map from name to library.
+                            Register, Registered, RegisteredNames, IsRegistered,
+                            Resolve, Default, DefaultName, SetDefault. THE FIRST
+                            LIBRARY REGISTERED IS THE DEFAULT; ask by name when
+                            it matters.
+  - InstrumentCoverage / InstrumentKeyRange : which programs, which percussion
+                            notes, and over which part of the keyboard.
+                            InstrumentCoverage.General is a complete General
+                            MIDI library's answer.
+  - SoundFontInstrumentLibrary : any .sf2 as a named library, in one line, with
+                            ONE SoundFont shared by every synthesizer it makes.
+  - MappedInstrumentLibrary : a base library plus voices of your own, set and
+                            cleared ONE AT A TIME - a Decent Sampler pack, an
+                            .sfz, one program of another library, or a factory
+                            of your own. SetInstrument / SetInstrumentFromSoundFont
+                            / SetInstrumentFromLibrary / ClearInstrument and the
+                            same for the kit, plus BaseLibraryName,
+                            SubstitutedPrograms, HasSubstitute and Register.
 
 ABC:
   - AbcReader             : reads abc notation - Parse(text), Read(path),
@@ -988,9 +1408,32 @@ PATHS" above first:
                             Seek, Position, PositionTicks, Length (the horizon,
                             which grows), IsStarved, EndOfStream, Speed,
                             BeatsPerBar. MidiMusicPlayer uses it for you.
+  - RoutingSynthesizer    : ONE IMidiSynthesizer that is really sixteen - a
+                            child synthesizer per channel, each with its own
+                            gain and an optional layered second child, built
+                            eagerly or on first use. Every sequencer, player and
+                            renderer drives it as one synthesizer, so a voiced
+                            arrangement plays live, follows a MidiStream still
+                            being written, and renders offline through one code
+                            path. THE ROUTING TABLE COUNTS 1-16 while
+                            ProcessMidiMessage takes the wire's 0-15 - see
+                            "ROUTING THE PARTS OF AN ARRANGEMENT".
+  - Reverb / Chorus       : the two SEND effects SoundFontSynthesizer uses,
+                            public so a synthesizer of your own can use the same
+                            ones. They take the send bus and OVERWRITE the
+                            output buffers with the wet signal alone; adding it
+                            to the dry is yours. Reverb.InputGain is the scale
+                            every source goes into the bus with, and Mute()
+                            clears the tails.
   - SoundFontRenderer     : offline rendering - Render(...) to a float buffer, or
                             RenderToWavFile(...) / RenderToWavStream(...). No
                             audio device involved, and faster than real time.
+                            RenderToFile(...) / RenderToStream(...) write ANY
+                            registered format, chosen by the path's extension or
+                            by an extension you name, in the writer's default
+                            format or a WaveFormat of your own - see "WRITING A
+                            RENDER TO A FILE". Both take a SoundFont with a
+                            sample rate, or any IMidiSynthesizer.
   - MidiMusicPlayer       : (CodeBrix.Audio.Playback) the transport-style player.
                             Load / Play / Pause / Stop / Seek / Volume /
                             IsLooping / Position / Duration / PlaybackEnded,
@@ -1353,6 +1796,142 @@ anywhere below 0 - use -10 to match, or lower to defer to the built-ins.
 A THIRD SEAM exists for audio that never arrives as a file at all - codec
 packets out of a media container - with its own factory interface and its own
 player. See PLAYING AUDIO THAT ARRIVES AS PACKETS below.
+
+
+WRITING A RENDER TO A FILE, AND ADDING A FORMAT FROM ANOTHER PACKAGE
+====================================================================
+Reading dispatches on extension through AudioFileReaderRegistry. WRITING has the
+matching seam, AudioFileWriterRegistry, and everything that renders audio
+offline goes through it - so "render this to a .wav" and "render this to a
+.opus" are the same call with a different file name.
+
+    using CodeBrix.Audio.Synth;
+
+    SoundFontRenderer.RenderToFile(synthesizer, sequence, "tune.wav");
+    SoundFontRenderer.RenderToFile(synthesizer, sequence, "tune.aiff");
+
+    // 16-bit PCM instead of the 32-bit float a .wav is written as by default
+    SoundFontRenderer.RenderToFile(synthesizer, sequence, "tune.wav",
+                                   new WaveFormat(44100, 16, 2));
+
+    // Straight to a stream; the extension names the format, and the stream is
+    // NEVER closed for you
+    using var stream = File.Create("tune.wav");
+    SoundFontRenderer.RenderToStream(synthesizer, sequence, stream, ".wav");
+
+RenderToFile and RenderToStream take either a SoundFont (with a sample rate) or
+any IMidiSynthesizer - a SoundFont, SFZ or Decent Sampler synthesizer, ModestSynth's
+General MIDI synthesizer, a RoutingSynthesizer carrying a whole voiced
+arrangement, or one of your own. The render is always STEREO; a format whose
+Channels is not 2 is refused, and the IMidiSynthesizer overloads refuse a format
+whose sample rate is not the synthesizer's, because nothing here resamples.
+
+MIDI TO A FILE, AND ABC TO A FILE, ARE A FEW LINES EACH - no audio device, no
+player, nothing native:
+
+    using CodeBrix.Audio.Abc;
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.ModestSynth;
+    using CodeBrix.Audio.Synth;
+
+    GeneralMidiInstrumentLibrary.Register();
+    var library = InstrumentLibraryRegistry.Resolve("ModestSynthGm");
+
+    // a .mid, honouring the file's own program changes
+    SoundFontRenderer.RenderToFile(
+        library.CreateMultiTimbralSynthesizer(44100),
+        new MidiSequence("tune.mid"), "tune.wav", TimeSpan.FromSeconds(2));
+
+    // an .abc, through the same road
+    var tune = AbcReader.Read("session.abc").Tunes[0];
+    SoundFontRenderer.RenderToFile(
+        library.CreateMultiTimbralSynthesizer(44100),
+        MidiSequence.FromEvents(AbcToMidi.Convert(tune)), "tune.aiff",
+        TimeSpan.FromSeconds(2));
+
+WHAT IS BUILT IN:
+
+  .wav            WavAudioFileWriterFactory, 32-BIT IEEE FLOAT by default, which
+                  is what RenderToWavFile has always written. 16- and 24-bit PCM
+                  on request, either per call through a WaveFormat or as an
+                  application-wide default:
+                      AudioFileWriterRegistry.Register(
+                          new WavAudioFileWriterFactory(16));
+  .aif / .aiff    AiffAudioFileWriterFactory, 16-BIT PCM by default, 24-bit on
+                  request. AIFF refuses IEEE float: the container carries no
+                  AIFF-C compression type, so a float AIFF would read back as
+                  noise.
+
+BOTH NEED A SEEKABLE STREAM, because both patch their header once the length of
+the audio is known. Handing either one a forward-only stream throws:
+
+    A .wav file needs a stream that can seek: the length is written into the
+    header once the audio is known, which means going back to the start of the
+    file. Write to a FileStream or a MemoryStream, or choose a format that is
+    written strictly forwards.
+
+A format nobody has registered is refused by name, with the alternatives:
+
+    No audio writer is registered for '.opus'. Registered formats: .aif, .aiff,
+    .wav. Add one with AudioFileWriterRegistry.Register.
+
+DRIVING THE SEAM BY HAND, when you have samples rather than a sequence:
+
+    using CodeBrix.Audio.Wave;
+
+    using var writer = AudioFileWriterRegistry.Create("tune.wav", stream, 44100, 2);
+    writer.Write(samples, 0, samples.Length);   // interleaved floats
+    writer.Finish();                            // idempotent; Dispose calls it
+
+  AudioFileWriterRegistry.Register(factory)            all of its extensions
+  AudioFileWriterRegistry.Register(extension, factory) one of them
+  AudioFileWriterRegistry.Supports(fileNameOrExtension)
+  AudioFileWriterRegistry.SupportedExtensions
+  AudioFileWriterRegistry.Resolve(fileNameOrExtension) the factory
+  AudioFileWriterRegistry.Create(fileNameOrExtension, stream, format)
+  AudioFileWriterRegistry.Create(fileNameOrExtension, stream, rate, channels)
+
+  writer.WaveFormat / .SamplesWritten
+  writer.Write(float[] samples, int offset, int count) / .Write(ReadOnlySpan<float>)
+  writer.Finish()
+
+AN IAudioFileWriter NEVER CLOSES THE STREAM IT WAS HANDED. Finishing the FILE -
+flushing, patching the header - and closing the STREAM are separate jobs, and
+the caller owns the stream throughout. That is why there is no leaveOpen
+parameter anywhere in this seam, and why RenderToStream has none where the older
+RenderToWavStream does.
+
+ADDING A FORMAT FROM ANOTHER PACKAGE is the writing side of ADDING A CODEC FROM
+ANOTHER PACKAGE above, and it works the same way. Implement
+IAudioFileWriterFactory - the extensions it answers to, whether it needs a
+seekable stream, its default WaveFormat for a rate and channel count, and a
+Create that wraps a stream - and register it from your package's static
+Register() entry point:
+
+    public sealed class MyFormatWriterFactory : IAudioFileWriterFactory
+    {
+        public IReadOnlyList<string> Extensions => new[] { ".myf" };
+        public bool RequiresSeekableStream => false;     // written strictly forwards
+        public WaveFormat DefaultFormat(int sampleRate, int channels) =>
+            WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channels);
+        public IAudioFileWriter Create(Stream stream, WaveFormat format) =>
+            new MyFormatWriter(stream, format);
+    }
+
+    AudioFileWriterRegistry.Register(new MyFormatWriterFactory());
+
+Extensions are lower case with a leading dot, and are matched that way whether a
+caller writes ".myf", "myf" or "tune.myf". Register from a static Register()
+call, as the reader seam does - not from a module initializer, which only runs
+once something in the assembly is touched.
+
+A package that already registers its READER from one call adds its WRITER to the
+same call, so a consumer who was calling it gets both. That is what
+CodeBrixAudioOpus.Register() does for .opus: one call, and .opus reaches every
+extension-driven road in this package - AudioFileReader and the reader registry
+for reading, AudioFileWriterRegistry and SoundFontRenderer.RenderToFile for
+writing. Opus needs no seeking, so it writes to a network stream or a pipe that
+WAV and AIFF would refuse.
 
 
 PLAYING AUDIO THAT ARRIVES AS PACKETS
@@ -2961,6 +3540,52 @@ Render MIDI music to a WAV file with no audio device (bounce / offline export):
     SoundFontRenderer.RenderToWavFile(soundFont, sequence, "level1.wav", 44100,
                                      tail: TimeSpan.FromSeconds(2));  // let reverb decay
     // Or SoundFontRenderer.Render(...) for interleaved stereo floats in memory.
+    // Or RenderToFile(...), which picks the writer from the path's extension:
+    // SoundFontRenderer.RenderToFile(soundFont, sequence, "level1.aiff");
+
+Play a .mid with no SoundFont, no configuration and nothing to download:
+
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.ModestSynth;     // the add-on package
+    using CodeBrix.Audio.Synth;
+
+    GeneralMidiInstrumentLibrary.Register();          // registers "ModestSynthGm"
+
+    var library = InstrumentLibraryRegistry.Resolve("ModestSynthGm");
+    var synthesizer = library.CreateMultiTimbralSynthesizer(44100);
+
+    SoundFontRenderer.RenderToFile(synthesizer, new MidiSequence("level1.mid"),
+                                   "level1.wav", TimeSpan.FromSeconds(2));
+    // The file's own program changes choose the instruments, and channel 10 is
+    // the drum kit. To play it instead, hand the same synthesizer - or the
+    // factory form - to MidiMusicPlayer.
+
+Voice an arrangement part by part, and play or render it either way:
+
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.Midi;
+    using CodeBrix.Audio.Playback;
+    using CodeBrix.Audio.Synth;
+
+    var library = InstrumentLibraryRegistry.Resolve("ModestSynthGm");
+
+    RoutingSynthesizer BuildArrangement(int rate)     // the table counts 1-16
+    {
+        var router = new RoutingSynthesizer(rate);
+        router.SetChannel(1, library.CreateSynthesizer(8, rate), gain: 0.8F);
+        router.SetChannel(2, () => library.CreateSynthesizer(52, rate), 0.5F);
+        router.SetChannel(GeneralMidi.PercussionChannel,
+                          library.CreatePercussionSynthesizer(rate));
+        return router;
+    }
+
+    using var music = new MidiMusicPlayer();          // live, at the device's rate
+    music.Load(rate => BuildArrangement(rate), sequence);
+    music.Play();
+
+    // ...or offline, through exactly the same arrangement:
+    // SoundFontRenderer.RenderToFile(BuildArrangement(44100), sequence,
+    //                                "arrangement.wav");
 
 Play MIDI music through a Decent Sampler instrument (same transport again):
 
@@ -3141,6 +3766,21 @@ And for offline rendering there is no player and no device at all:
         new MidiSequence("level1.mid"),
         "level1.wav");
 
+With no SoundFont to find at all, add the ModestSynth package and register its
+instruments - one line, and the whole General MIDI sound set is there:
+
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.ModestSynth;
+    using CodeBrix.Audio.Synth;
+
+    GeneralMidiInstrumentLibrary.Register();
+
+    SoundFontRenderer.RenderToFile(
+        InstrumentLibraryRegistry.Resolve("ModestSynthGm")
+            .CreateMultiTimbralSynthesizer(44100),
+        new MidiSequence("level1.mid"),
+        "level1.wav");
+
 
 PERFORMANCE TIPS
 ================
@@ -3165,7 +3805,16 @@ PERFORMANCE TIPS
     library decodes all of its samples eagerly at load. SoundFontCache and
     SfzInstrumentCache exist precisely so one copy serves every player - hold
     one cache for the application, and call .Get(path) rather than constructing
-    SoundFont / SfzInstrument yourself.
+    SoundFont / SfzInstrument yourself. An INSTRUMENT LIBRARY does the same job
+    for you: SoundFontInstrumentLibrary holds ONE SoundFont behind every
+    synthesizer it creates, and MappedInstrumentLibrary holds one loaded copy of
+    each instrument file however many programs are taken from it.
+
+  - LET THE ROUTER BUILD ITS PARTS LAZILY. RoutingSynthesizer.SetChannel takes a
+    Func<IMidiSynthesizer> as well as a synthesizer, and a factory is not called
+    until the music first plays on that channel. Over a large sampled library
+    that is the difference between loading the parts a piece uses and loading
+    all sixteen.
 
   - PIN THE OUTPUT FORMAT ONCE, AT START-UP. SharedAudioOutput.Configure(
     sampleRate[, channels]) before the first sound avoids both the rejection
@@ -3196,8 +3845,10 @@ PERFORMANCE TIPS
     kilobytes; this costs nothing and is the intended pattern.
 
   - RENDERING OFFLINE BEATS RENDERING LIVE. SoundFontRenderer runs faster than
-    real time with no device involved, so bouncing a sequence to a .wav once and
-    playing the .wav is cheaper than synthesising it on every playthrough.
+    real time with no device involved, so bouncing a sequence to a file once and
+    playing the file is cheaper than synthesising it on every playthrough.
+    RenderToFile picks the format from the path's extension, so the bounce can
+    go straight to a compressed format when one is registered.
 
 
 COMMON PITFALLS TO AVOID
@@ -3346,6 +3997,58 @@ COMMON PITFALLS TO AVOID
   - IsLooping does nothing to a stream. It neither throws nor turns itself off -
     it is a player property and applies to the next sequence loaded. Loop
     stream.ToSequence() instead.
+  - NOTHING SOUNDS UNTIL AN INSTRUMENT LIBRARY IS REGISTERED. CodeBrix.Audio
+    ships no instruments, so InstrumentLibraryRegistry starts empty and Default,
+    Resolve and SetDefault all throw InvalidOperationException until a consumer
+    registers something. The message names
+    GeneralMidiInstrumentLibrary.Register(), from the ModestSynth add-on, which
+    is one line and covers the whole General MIDI sound set. DefaultName is the
+    one member that answers on an empty registry, returning null.
+  - THE DEFAULT INSTRUMENT LIBRARY IS WHICHEVER REGISTERED FIRST, so in an
+    application that registers more than one it depends on which start-up path
+    ran first. Name the one you mean -
+    InstrumentLibraryRegistry.Resolve("ModestSynthGm") - or call SetDefault
+    explicitly. Registering the same library twice is a no-op; a DIFFERENT
+    library under a name already taken throws.
+  - A PER-PART SYNTHESIZER IGNORES PROGRAM CHANGE, on purpose.
+    IInstrumentLibrary.CreateSynthesizer hands back a synthesizer pinned to the
+    program you asked for, on every channel, so a program change in the music
+    cannot re-voice a part you voiced deliberately. Use
+    CreateMultiTimbralSynthesizer when you WANT the music's own program changes.
+    The same pinning means the object you get back from
+    MappedInstrumentLibrary is not necessarily the type your factory built - a
+    cast to DecentSamplerSynthesizer will not succeed, and its MPE and
+    multi-output surfaces are not reachable through the wrapper.
+  - A ROUTER'S TABLE IS 1-16; ITS MESSAGES ARE 0-15. RoutingSynthesizer.
+    SetChannel, SetLayer, ClearChannel, IsRouted and the gain accessors count
+    channels the way MidiEvent does, 1 to 16, so percussion is 10.
+    ProcessMidiMessage takes the WIRE channel, 0 to 15, so the same percussion
+    part arrives as 9. Routing a drum part to "channel 9" puts it where a
+    sequencer will never send it.
+  - One synthesizer instance may fill only ONE router slot. A child is rendered
+    once per block at one gain, so an instance in two slots has no single answer
+    to either and is refused. Create a second synthesizer for the second part -
+    a library hands one out per call anyway.
+  - A router drops messages for a channel with no instrument, SILENTLY, and
+    counts them in UnroutedMessageCount. That is what stops a piece carrying an
+    unvoiced part from stopping the music; read the counter if you want to know.
+  - AN IAudioFileWriter NEVER CLOSES THE STREAM IT WAS HANDED, and neither does
+    SoundFontRenderer.RenderToStream. Finish() completes the FILE - flushing and
+    patching the header - and the caller still owns and closes the stream. There
+    is no leaveOpen parameter anywhere in the writer seam. The older
+    RenderToWavStream keeps its own flag and is untouched.
+  - .wav AND .aiff NEED A SEEKABLE STREAM, because both write their length into
+    a header they go back and patch. A forward-only stream is refused with a
+    message saying so; a format written strictly forwards is not affected, and
+    an IAudioFileWriterFactory declares which it is with RequiresSeekableStream.
+  - AIFF DOES NOT TAKE IEEE FLOAT. The container this package writes carries no
+    AIFF-C compression type, so a float AIFF would be read back as PCM and come
+    out as noise. AIFF is 16- or 24-bit PCM; .wav is where 32-bit float lives,
+    and is what a .wav gets by default.
+  - A RENDER IS ALWAYS STEREO, and RenderToFile / RenderToStream refuse a
+    WaveFormat whose Channels is not 2. The IMidiSynthesizer overloads also
+    refuse a format whose sample rate is not the synthesizer's own: nothing here
+    resamples, and rendering at the wrong rate would transpose the music.
   - Decent Sampler: REGISTER THE ADD-ON BEFORE YOU LOAD. A preset whose group
     holds an <oscillator>, or whose chain names phaser, pitch_shift, wave_folder,
     wave_shaper, stereo_simulator, bit_crusher or gate, needs the
@@ -3419,9 +4122,18 @@ WHAT THIS PACKAGE DOES NOT DO
     managed decoders plus the bundled native backend, and nothing else.
 
   - No lossy or lossless ENCODING of compressed formats. This package reads MP3,
-    Ogg Vorbis and FLAC but writes only .wav (WaveFileWriter), .aiff
-    (AiffFileWriter) and Standard MIDI Files (MidiFile.Export). For .opus
-    writing, take the CodeBrix.Audio.Opus add-on package.
+    Ogg Vorbis and FLAC but writes only .wav, .aif / .aiff and Standard MIDI
+    Files (MidiFile.Export). A compressed format comes from an add-on package
+    that registers its writer with AudioFileWriterRegistry - for .opus, take the
+    CodeBrix.Audio.Opus add-on package. See "WRITING A RENDER TO A FILE".
+
+  - NO INSTRUMENTS, AND NO INSTRUMENT LIBRARY REGISTERED. This package ships the
+    ENGINES that play a .sf2, a .sfz or a Decent Sampler preset, the instrument
+    library seam and a generic library over any .sf2 - and no sound of its own.
+    With an empty registry nothing can be played or rendered through that seam,
+    and the exception says so. The complete General MIDI sound set is one
+    Register() call away, in the CodeBrix.Audio.ModestSynth add-on package; a
+    recorded one is a .sf2 of your choosing behind a SoundFontInstrumentLibrary.
 
   - No editing of tags in place. Id3v2Tag reads a tag from a stream, and
     Id3v2Tag.Create builds one from key/value pairs, but there is no
@@ -3594,8 +4306,40 @@ file that exercises it.
     StreamingTestProducer.cs           the producer those tests drive: the motif
                                        a bar at a time, on demand, with no timer
                                        and no real time anywhere.
-    Synth/SoundFontRendererTests.cs    offline Render / RenderToWavFile.
+    Synth/SoundFontRendererTests.cs    offline Render / RenderToWavFile, and
+                                       RenderToFile / RenderToStream through the
+                                       writer registry.
     Synth/SoundFontCacheTests.cs       sharing one .sf2.
+    Synth/RoutingSynthesizerTests.cs   a child per channel with its own gain and
+                                       an optional layer, lazy children, the
+                                       1-16 table against the wire's 0-15, and
+                                       an offline render through the router
+                                       compared with the same parts mixed by
+                                       hand.
+    Synth/ReverbTests.cs, Synth/ChorusTests.cs   the two send effects.
+
+  INSTRUMENT LIBRARIES AND THE WRITER SEAM
+    Instruments/InstrumentLibraryRegistryTests.cs   registering and resolving by
+                                       name, the no-op, the taken name, and what
+                                       each error says.
+    Instruments/InstrumentLibraryRegistryDefaultTests.cs   the default and
+                                       registration order - gated, because they
+                                       change process-wide state.
+    Instruments/InstrumentCoverageTests.cs   coverage and key ranges.
+    Instruments/SoundFontInstrumentLibraryTests.cs   any .sf2 as a library, both
+                                       shapes, ONE shared SoundFont, and a
+                                       per-part synthesizer staying pinned.
+    Instruments/MappedInstrumentLibraryTests.cs   the swap-one-voice workflow:
+                                       one program changing and nothing else,
+                                       clearing it again, where an instrument
+                                       may come from, the coverage arithmetic,
+                                       and a channel changing hands without a
+                                       stuck note.
+    AudioFileWriterRegistryTests.cs    what is registered out of the box, WAV in
+                                       float and in PCM, AIFF round trips, both
+                                       refusing a forward-only stream, and a
+                                       format of the test's own reaching the
+                                       registry by extension.
     Synth/Sfz/SfzInstrumentTests.cs, Synth/Sfz/SfzInstrumentCacheTests.cs,
     Synth/Sfz/SfzSynthesizerTests.cs, Synth/Sfz/SfzRenderingTests.cs,
     Synth/Sfz/SfzRegionTests.cs, Synth/Sfz/SfzModulatorTests.cs,
@@ -3685,6 +4429,33 @@ QUICK REFERENCE CARD
                                           MidiFile.Export(path, collection)
   play a .mid through a .sf2, .sfz or a   new MidiMusicPlayer()
     Decent Sampler preset
+  get instruments at all                  GeneralMidiInstrumentLibrary.Register()
+                                          // CodeBrix.Audio.ModestSynth;
+                                          // registers as "ModestSynthGm"
+  make any .sf2 a named library           new SoundFontInstrumentLibrary(
+                                              "MyBank", "...", "bank.sf2")
+                                              .Register()
+  ask for a library by name               InstrumentLibraryRegistry
+                                              .Resolve("ModestSynthGm")
+  choose which library is the default     InstrumentLibraryRegistry
+                                              .SetDefault("ModestSynthGm")
+  play a whole .mid with one synthesizer  library.CreateMultiTimbralSynthesizer(44100)
+  voice one part of an arrangement        library.CreateSynthesizer(program, 44100)
+                                          library.CreatePercussionSynthesizer(44100)
+  find out what a library can play        library.Coverage.CoversNote(program, note)
+                                          library.Coverage.KeyRangeOf(program)
+  swap ONE voice for an instrument of     var voices = new MappedInstrumentLibrary(
+    your own, and keep the rest               "MyVoices", "...", "ModestSynthGm");
+                                          voices.SetInstrument(
+                                              GeneralMidiProgram.ChoirAahs,
+                                              "Whisper Choir.dspreset")
+  put that voice back                     voices.ClearInstrument(
+                                              GeneralMidiProgram.ChoirAahs)
+  play the parts together, each at its    var router = new RoutingSynthesizer(44100);
+    own gain                              router.SetChannel(1, synth, gain: 0.8F)
+  double a part with a second instrument   router.SetLayer(2, factory, 0.3F)
+  build a part only when the music         router.SetChannel(2, () => ..., 0.5F)
+    reaches it
   play music that is still being written  var stream = new MidiStream(480);
                                           music.Load(soundFont, stream)
   say the music is finished               stream.Complete()
@@ -3739,6 +4510,17 @@ QUICK REFERENCE CARD
   merge a stems set into one .mid         song.ExportMergedMidi(path)
   bounce a multi-track song to a file     player.RenderToWav(path, 44100)
   bounce a .mid to .wav, no device        SoundFontRenderer.RenderToWavFile(...)
+  bounce to whatever the extension says   SoundFontRenderer.RenderToFile(
+                                              synthesizer, sequence, "tune.aiff")
+  bounce as 16-bit PCM instead of float   SoundFontRenderer.RenderToFile(...,
+                                              new WaveFormat(44100, 16, 2))
+  bounce straight into a stream           SoundFontRenderer.RenderToStream(
+                                              synth, sequence, stream, ".wav")
+  write float samples as a file yourself  AudioFileWriterRegistry.Create(
+                                              "tune.wav", stream, 44100, 2)
+  add a writable format from a package    AudioFileWriterRegistry.Register(factory)
+  ask what can be written                 AudioFileWriterRegistry.Supports(".opus")
+                                          AudioFileWriterRegistry.SupportedExtensions
   share a big instrument                  SoundFontCache / SfzInstrumentCache
   analyse audio                           FastFourierTransform / BiQuadFilter /
                                           EnvelopeFollower / VoiceActivityDetector
@@ -3820,6 +4602,91 @@ QUICK REFERENCE CARD
     SoundFontRenderer.RenderToWavFile(SoundFont, MidiSequence, string outputPath,
                              int sampleRate = 44100, TimeSpan tail = default)
     SoundFontRenderer.RenderToWavStream(...)            // same, to a Stream
+    SoundFontRenderer.RenderToFile(SoundFont, MidiSequence, string outputPath,
+                             int sampleRate = 44100, TimeSpan tail = default)
+    SoundFontRenderer.RenderToFile(SoundFont, MidiSequence, string outputPath,
+                             WaveFormat format, TimeSpan tail = default)
+    SoundFontRenderer.RenderToFile(IMidiSynthesizer, MidiSequence,
+                             string outputPath, TimeSpan tail = default)
+    SoundFontRenderer.RenderToFile(IMidiSynthesizer, MidiSequence,
+                             string outputPath, WaveFormat format,
+                             TimeSpan tail = default)
+    SoundFontRenderer.RenderToStream(SoundFont, MidiSequence, Stream output,
+                             string fileNameOrExtension,
+                             int sampleRate = 44100, TimeSpan tail = default)
+    SoundFontRenderer.RenderToStream(SoundFont, MidiSequence, Stream output,
+                             string fileNameOrExtension, WaveFormat format,
+                             TimeSpan tail = default)
+    SoundFontRenderer.RenderToStream(IMidiSynthesizer, MidiSequence,
+                             Stream output, string fileNameOrExtension,
+                             TimeSpan tail = default)
+    SoundFontRenderer.RenderToStream(IMidiSynthesizer, MidiSequence,
+                             Stream output, string fileNameOrExtension,
+                             WaveFormat format, TimeSpan tail = default)
+    AudioFileWriterRegistry.Register(IAudioFileWriterFactory factory)
+    AudioFileWriterRegistry.Register(string extension,
+                                     IAudioFileWriterFactory factory)
+    AudioFileWriterRegistry.Supports(string fileNameOrExtension)
+    AudioFileWriterRegistry.SupportedExtensions
+    AudioFileWriterRegistry.Resolve(string fileNameOrExtension)
+    AudioFileWriterRegistry.Create(string fileNameOrExtension, Stream stream,
+                                   WaveFormat format)
+    AudioFileWriterRegistry.Create(string fileNameOrExtension, Stream stream,
+                                   int sampleRate, int channels)
+    writer.Write(float[] samples, int offset, int count)   // IAudioFileWriter
+    writer.Write(ReadOnlySpan<float> samples)
+    writer.Finish() / writer.SamplesWritten / writer.WaveFormat
+    new WavAudioFileWriterFactory(int defaultBitsPerSample)    // 16, 24 or 32
+    new AiffAudioFileWriterFactory(int defaultBitsPerSample)   // 16 or 24
+    InstrumentLibraryRegistry.Register(IInstrumentLibrary library)
+    InstrumentLibraryRegistry.Resolve(string name)
+    InstrumentLibraryRegistry.SetDefault(string name)
+    InstrumentLibraryRegistry.Default / .DefaultName / .Registered
+    InstrumentLibraryRegistry.RegisteredNames / .IsRegistered(string name)
+    library.CreateSynthesizer(int program, int sampleRate)   // IInstrumentLibrary
+    library.CreatePercussionSynthesizer(int sampleRate)
+    library.CreateMultiTimbralSynthesizer(int sampleRate)
+    library.Coverage.CoversProgram(int program)
+    library.Coverage.CoversPercussionNote(int noteNumber)
+    library.Coverage.CoversNote(int program, int noteNumber)
+    library.Coverage.KeyRangeOf(int program)    // an InstrumentKeyRange
+    new SoundFontInstrumentLibrary(string name, string description,
+                                   string soundFontPath)   // also Stream, SoundFont
+    new MappedInstrumentLibrary(string name, string description,
+                                string baseLibraryName)  // also IInstrumentLibrary,
+                                                         //   or no base at all
+    voices.SetInstrument(program, Func<int, IMidiSynthesizer> factory,
+                         InstrumentKeyRange keyRange = default)
+    voices.SetInstrument(program, string instrumentPath,
+                         InstrumentKeyRange keyRange = default)
+    voices.SetInstrumentFromSoundFont(program, string soundFontPath,
+                                      int soundFontProgram,
+                                      InstrumentKeyRange keyRange = default)
+    voices.SetInstrumentFromLibrary(program, string libraryName,
+                                    int libraryProgram,
+                                    InstrumentKeyRange keyRange = default)
+    voices.ClearInstrument(program) / voices.ClearPercussion()
+    voices.SetPercussion(...) / .SetPercussionFromSoundFont(...)
+                              / .SetPercussionFromLibrary(...)
+    voices.BaseLibraryName / .HasBaseLibrary / .SubstitutedPrograms
+    voices.HasSubstitute(program) / .HasPercussionSubstitute / .Register()
+    new RoutingSynthesizer(int sampleRate)      // also (sampleRate, blockSize)
+    router.SetChannel(int channel, IMidiSynthesizer synthesizer, float gain)
+    router.SetChannel(int channel, Func<IMidiSynthesizer> factory,
+                      float gain = 1.0F)
+    router.SetLayer(int channel, IMidiSynthesizer synthesizer, float gain = 1.0F)
+    router.SetLayer(int channel, Func<IMidiSynthesizer> factory, float gain = 1.0F)
+    router.ClearChannel(int channel) / router.ClearLayer(int channel)
+    router.IsRouted(int channel) / router.HasLayer(int channel)
+    router.GetChannelGain / .SetChannelGain / .GetLayerGain / .SetLayerGain
+    router.MasterVolume / .ActiveVoiceCount / .Synthesizers
+    router.UnroutedMessageCount
+    new Reverb(int sampleRate)                          // CodeBrix.Audio.Synth
+    reverb.Process(float[] input, float[] left, float[] right)   // also (..., count)
+    reverb.InputGain / .RoomSize / .Damp / .Wet / .Width / .Mute()
+    new Chorus(int sampleRate, double delay, double depth, double frequency)
+    chorus.Process(float[] inputLeft, float[] inputRight,
+                   float[] outputLeft, float[] outputRight)      // also Mute()
     cache.Get(string path)                  // SoundFontCache / SfzInstrumentCache
                                             //   / DecentSamplerInstrumentCache
     DecentSamplerInstrument.Load(string path)           // also (path, options)
@@ -3943,4 +4810,15 @@ QUICK REFERENCE CARD
        LAGS the MIDI, so the MIDI is what gets delayed - through
        MidiSourceOffset, which moves the rendition and leaves the recording where
        the mix put it.
+   14. This package ships NO instruments and registers NO instrument library, so
+       nothing sounds through that seam until a consumer registers one.
+       GeneralMidiInstrumentLibrary.Register() - from the ModestSynth add-on -
+       is the one line that covers all of General MIDI.
+   15. The first instrument library registered is the default. Name the one you
+       mean with Resolve, or say SetDefault, rather than relying on the order
+       two start-up paths happened to run in.
+   16. A RoutingSynthesizer's table counts channels 1-16; ProcessMidiMessage
+       takes the wire's 0-15. Percussion is 10 in the table and 9 in a message.
+   17. An IAudioFileWriter never closes the stream it was handed, and .wav and
+       .aiff both need one that can seek.
 ================================================================================

@@ -7,32 +7,46 @@ CodeBrix.Audio.ModestSynth.MitLicenseForever NuGet package
 OVERVIEW
 ========
 CodeBrix.Audio.ModestSynth adds SYNTHESIS to CodeBrix.Audio: oscillators that
-generate sound from a description instead of playing back a recording, and the
+generate sound from a description instead of playing back a recording, the
 creative effects a synth is expected to have - a phaser, a pitch shifter, two
-distortion curves, a stereo widener, a bit crusher and a stutter gate. It
-targets .NET 10 or later.
+distortion curves, a stereo widener, a bit crusher and a stutter gate - and the
+complete General MIDI sound set built out of them. It targets .NET 10 or later.
 
 It is a pure managed library with NO native code: no P/Invoke, no runtimes/
 folder, nothing to rebuild when a platform is added. It works everywhere
 CodeBrix.Audio works.
 
-There are three ways to use it, and they are independent of one another:
+There are four ways to use it, and they are independent of one another:
 
-  1. ONE OSCILLATOR OR ONE EFFECT. Create an oscillator, tell it the sample rate
+  1. THE COMPLETE GENERAL MIDI SOUND SET. ONE LINE -
+
+         GeneralMidiInstrumentLibrary.Register();
+
+     - and every road in CodeBrix.Audio can make General MIDI sound: all 128
+     programs and the 47-note percussion kit, synthesized here, with no
+     SoundFont to find and nothing to download. It registers under the name
+     "ModestSynthGm". NOTHING REGISTERS IT FOR YOU: CodeBrix.Audio ships no
+     instruments and registers nothing, so with an empty registry nothing plays
+     and nothing renders. GeneralMidiSynthesizer also stands on its own and
+     plays a .mid with no configuration at all. See THE GENERAL MIDI SOUND SET
+     below.
+
+  2. ONE OSCILLATOR OR ONE EFFECT. Create an oscillator, tell it the sample rate
      and the pitch, and ask it for blocks of samples; or create an effect,
      prepare it at your sample rate and push blocks through it. Nothing needs
      registering, nothing needs a file, and CodeBrix.Audio's players and writers
      take the samples from there.
 
-  2. THE STANDALONE SYNTHESIZER. ModestSynthesizer plays a ModestPatch from MIDI
+  3. THE STANDALONE SYNTHESIZER. ModestSynthesizer plays a ModestPatch from MIDI
      events - sixteen channels, velocity, the sustain pedal, pitch bend, voice
      stealing and an amplitude envelope - and implements the same
      IMidiSynthesizer contract as the SoundFont, SFZ and Decent Sampler engines,
      so MidiMusicPlayer, MidiSequencer, SoundFontRenderer and MultiTrackPlayer
      all play it. ModestSynthPresets holds six worked example patches. No preset
-     file and no registration are involved.
+     file and no registration are involved. It is the synthesizer for designing
+     ONE sound; the General MIDI one above is for playing music.
 
-  3. INSIDE A DECENT SAMPLER INSTRUMENT. A Decent Sampler group can hold an
+  4. INSIDE A DECENT SAMPLER INSTRUMENT. A Decent Sampler group can hold an
      <oscillator> element instead of (or as well as) samples, and an <effects>
      chain can name an effect type the core does not carry. CodeBrix.Audio
      plays the sampled side and runs the mixing and room effects on its own;
@@ -167,7 +181,14 @@ engines that this package's output joins.
 
 KEY NAMESPACES / USINGS
 =======================
-  using CodeBrix.Audio.ModestSynth;              // ModestSynth.Register()
+  using CodeBrix.Audio.ModestSynth;              // ModestSynth.Register(), and
+                                                 //   the General MIDI
+                                                 //   synthesizer, library and
+                                                 //   adjustments
+  using CodeBrix.Audio.Instruments;              // (in CodeBrix.Audio)
+                                                 //   InstrumentLibraryRegistry,
+                                                 //   when you resolve a library
+                                                 //   by name
   using CodeBrix.Audio.ModestSynth.Oscillators;  // the oscillators themselves
   using CodeBrix.Audio.ModestSynth.Fm;           // the six-operator FM engine
   using CodeBrix.Audio.ModestSynth.Patch;        // ModestPatch, the FM operator model
@@ -187,6 +208,311 @@ That is legal and it resolves the way you would want - "ModestSynth.Register()"
 in a file that has the using directive above is the static class - but if a
 compiler ever disagrees with you about it, write CodeBrix.Audio.ModestSynth
 .ModestSynth.Register() and move on.
+
+
+THE GENERAL MIDI SOUND SET
+==========================
+    using CodeBrix.Audio.ModestSynth;
+
+    GeneralMidiInstrumentLibrary.Register();      // once, at application start-up
+
+ONE LINE, AND EVERY ROAD IN CodeBrix.Audio CAN MAKE GENERAL MIDI SOUND. It puts
+the complete General MIDI Level 1 sound set - all 128 programs and the 47-note
+percussion kit - into CodeBrix.Audio's InstrumentLibraryRegistry under the name
+"ModestSynthGm", and from there a player, a sequencer, a routing synthesizer or
+an offline render asks for it by name.
+
+NOTHING REGISTERS IT FOR YOU. CodeBrix.Audio ships no instruments and registers
+nothing, so until a consumer calls this - or registers a library of its own -
+that registry is empty and nothing can be played or rendered through it. The
+exception you get names this very call. The call is idempotent, safe from any
+thread, and deliberately NOT a module initializer.
+
+    using CodeBrix.Audio.Instruments;
+    using CodeBrix.Audio.Midi;
+    using CodeBrix.Audio.ModestSynth;
+
+    GeneralMidiInstrumentLibrary.Register();
+
+    var library = InstrumentLibraryRegistry.Resolve("ModestSynthGm");
+
+    // the whole piece through one synthesizer, honouring its own program changes
+    var whole = library.CreateMultiTimbralSynthesizer(44100);
+
+    // or one part at a time, for a voiced arrangement through a RoutingSynthesizer
+    var flute = library.CreateSynthesizer((int)GeneralMidiProgram.Flute, 44100);
+    var kit = library.CreatePercussionSynthesizer(44100);
+
+GeneralMidiInstrumentLibrary.LibraryName is that name as a constant,
+.Instance is the one shared library object, and .IsRegistered says whether the
+call has run. CodeBrix.Audio's own AGENT-README documents the registry, its
+rules and the coverage model under "INSTRUMENT LIBRARIES"; the one rule to carry
+here is that THE FIRST LIBRARY REGISTERED IS THE DEFAULT, so an application with
+more than one should ask for the one it means by name.
+
+GeneralMidiSynthesizer  (CodeBrix.Audio.ModestSynth)
+-----------------------------------------------------
+PLAYS A .mid WITH NO CONFIGURATION AT ALL. It is multi-timbral: sixteen
+channels, each on one of the 128 programs, the percussion kit on channel 10, and
+the file's own program changes choosing the instruments.
+
+    using CodeBrix.Audio.ModestSynth;
+    using CodeBrix.Audio.Synth;
+
+    var synthesizer = new GeneralMidiSynthesizer(44100);
+
+    SoundFontRenderer.RenderToFile(synthesizer, new MidiSequence("tune.mid"),
+                                   "tune.wav", TimeSpan.FromSeconds(2));
+
+    // Live, letting the player build it at the device's own rate - the overload
+    // to prefer, because a synthesizer built at the wrong rate is transposed:
+    //   player.Load(rate => new GeneralMidiSynthesizer(
+    //       new GeneralMidiSynthesizerSettings(rate)), sequence);
+
+  new GeneralMidiSynthesizer(sampleRate)
+  new GeneralMidiSynthesizer(settings)
+  GeneralMidiSynthesizer.CreateForProgram(program, sampleRate or settings)
+  GeneralMidiSynthesizer.CreateForPercussion(sampleRate or settings)
+
+  int  SampleRate / BlockSize / MaximumPolyphony / Channels (16)
+  int  ActiveVoiceCount
+  bool ReverbAndChorusEnabled
+  bool IsPinned ; int PinnedProgram    0-127, NotPinned (-1) or
+                                       PinnedToPercussion (-2)
+  GeneralMidiAdjustments Adjustments   the seven per-program knobs, below
+  float MasterVolume                   0.5 by default, as the whole family uses
+  int  GetProgram(channel)             channel 1-16
+  void SetProgram(channel, program)
+  bool IsPercussionChannel(channel) ; void SetPercussionChannel(channel, bool)
+  void NoteOn(channel, key, velocity) / NoteOff(channel, key)
+  void NoteOffAll(channel, immediate) / NoteOffAll(immediate)
+  void ProcessMidiMessage(channel, command, data1, data2)      WIRE channel 0-15
+  void Reset()
+  void Render(Span<float> left, Span<float> right)
+
+  WHAT IT ANSWERS. Note on and note off with velocity; program change; pitch
+  bend, over a range RPN 0 (CC 101/100 then CC 6/38) can widen; and the
+  controllers General MIDI files actually send - CC 1 modulation, CC 7 channel
+  volume, CC 10 pan, CC 11 expression, CC 64 sustain, CC 91 reverb send, CC 93
+  chorus send, CC 120 all sound off, CC 121 reset all controllers and CC 123 all
+  notes off. Bank select (CC 0 and CC 32) is accepted and ignored: General MIDI
+  Level 1 has one bank.
+
+  THE PERCUSSION KIT is on channel 10. A note number there does not mean a
+  pitch - it CHOOSES A KIT PIECE, each with its own voicing, pan, level and
+  tuning. A kit piece is a ONE-SHOT: it ignores note-off and runs to its natural
+  end. Pieces that cannot physically sound together cut each other off, so a
+  closed or pedal hi-hat silences an open one.
+
+  A PROGRAM CHANGE ARRIVING ON THE WIRE FOR CHANNEL 10 DOES NOT TAKE THAT
+  CHANNEL OFF THE KIT. It is remembered and the kit keeps playing, which is what
+  makes "play any .mid with no configuration" true - General MIDI writers
+  routinely send a program change on the drum channel. The API call
+  SetProgram(10, program) DOES take it off the kit, because a caller asking for
+  a melodic program on channel 10 means it; SetPercussionChannel(10, true) puts
+  it back.
+
+  PINNED SYNTHESIZERS. CreateForProgram and CreateForPercussion - and the
+  library's per-part CreateSynthesizer and CreatePercussionSynthesizer, which
+  are built on them - hand back a synthesizer PINNED to one voicing: it plays it
+  on EVERY one of the sixteen channels and ignores program change and bank
+  select, because the caller decided what this part sounds like. That is what
+  lets a router put a part on whichever channel the music used. SetProgram and
+  SetPercussionChannel on a pinned synthesizer throw:
+
+      This synthesizer is pinned to one voicing and plays it on every channel,
+      so its program cannot be changed. Build a multi-timbral
+      GeneralMidiSynthesizer when the program has to move.
+
+  THE CHANNEL NUMBERING PITFALL. Every member here that takes a channel counts
+  1 to 16, the way MidiEvent.Channel and GeneralMidi.PercussionChannel do -
+  EXCEPT ProcessMidiMessage, whose channel is the WIRE number 0 to 15, because
+  that is what MidiSequencer and MidiStreamSequencer hand every synthesizer.
+  PERCUSSION IS CHANNEL 10 HERE AND WIRE CHANNEL 9 THERE. A channel outside
+  1-16 throws "A MIDI channel is 1 to 16, the way MidiEvent counts them."
+
+  IT IS NOT ModestSynthesizer, and does not replace it. ModestSynthesizer plays
+  ONE ModestPatch on every channel and ignores program change, which is exactly
+  what you want while you are DESIGNING a sound. This one is for playing music.
+
+GeneralMidiSynthesizerSettings  (same namespace)
+-------------------------------------------------
+  SampleRate              8,000..192,000      (44,100)
+  BlockSize               8..1,024 frames     (64)
+  MaximumPolyphony        1..512 voices       (64)
+  MasterVolume            clamped 0..4        (0.5)
+  EnableReverbAndChorus                       (true)
+  EnableInsertEffects                         (true)
+  RandomSeed                                  (12345)
+  Clone()
+
+  SampleRate, BlockSize and MaximumPolyphony are structural and throw outside
+  their range; MasterVolume clamps. The settings are COPIED by the constructor,
+  so changing them afterwards has no effect. The constants are on the type -
+  DefaultSampleRate, DefaultBlockSize, DefaultMaximumPolyphony,
+  DefaultMasterVolume, DefaultRandomSeed.
+
+THE BANK, AND WHAT IT HONESTLY SOUNDS LIKE
+-------------------------------------------
+THE BANK IS COMPLETE. Every one of the 128 programs and every percussion note
+from 35 to 81 is a deliberate voicing. Nothing is a placeholder and nothing
+falls back to another program.
+
+IT IS ALL SYNTHESIS. There is not one recorded sample anywhere in it: every
+sound is oscillators, FM, additive stacks, wavetables and noise, shaped by
+filters, envelopes, an LFO and a pitch envelope, which is why the whole sound
+set costs tens of kilobytes rather than tens of megabytes.
+
+SO IT SOUNDS LIKE A GOOD SYNTHESIZER, NOT LIKE SAMPLED INSTRUMENTS, AND THAT IS
+THE POINT. Where synthesis is strong it is very good: pads, bells, celesta,
+vibraphone, the electric pianos, the organs, plucked strings, choir textures,
+string ensembles, and the synth leads and basses. Where synthesis is weakest it
+is an honest best rather than an imitation: a concert piano and a solo bowed
+string are convincing as a synthesizer's piano and a synthesizer's violin, and
+not as the instruments themselves.
+
+IF YOU WANT RECORDED INSTRUMENTS, CHANGE ONE LINE. The instrument-library seam
+in CodeBrix.Audio takes a SoundFont, and a MappedInstrumentLibrary takes Decent
+Sampler packs and SFZ files one voice at a time over whatever base you start
+from - including this one, which is exactly the workflow that seam is for: start
+here, listen, and swap the voices you want to swap.
+
+THE SEVEN PER-PROGRAM ADJUSTMENTS
+----------------------------------
+These are the SUPPORTED way to change how a program sounds. The bank's own rows
+are internal and may be retuned in a later release without any API change, so
+anything written against them would break; these do not.
+
+    var synthesizer = new GeneralMidiSynthesizer(44100);
+
+    // "Make the celesta darker."
+    synthesizer.Adjustments.Program(GeneralMidiProgram.Celesta).Brightness = -0.8;
+
+    // "Give the choir a longer release."
+    synthesizer.Adjustments.Program(GeneralMidiProgram.ChoirAahs).Release = 2.0;
+
+    // Move the whole kit slightly right - its layout is KEPT - and dry out just
+    // the snare.
+    synthesizer.Adjustments.Percussion.Pan = 0.15;
+    synthesizer.Adjustments
+        .PercussionNote(GeneralMidiPercussion.AcousticSnare).ReverbSend = 0.05;
+
+  GeneralMidiAdjustment
+    Level          MULTIPLIER, 0..4          (1)   how loud
+    Brightness     OCTAVES on the filter, -4..4  (0)   darker or brighter
+    Attack         MULTIPLIER, 0.05..20      (1)   slower or faster to start
+    Release        MULTIPLIER, 0.05..20      (1)   longer or shorter tail
+    VibratoDepth   MULTIPLIER, 0..4          (1)
+    ReverbSend     REPLACES, 0..1, or null   (null = the program's own)
+    Pan            OFFSET, -1..1             (0)
+    IsDefault / Reset() / CopyFrom(other) / Clone()
+
+  GeneralMidiAdjustments
+    Program(0..127) or Program(GeneralMidiProgram)
+    PercussionNote(35..81) or PercussionNote(GeneralMidiPercussion)
+    Percussion              the whole kit at once
+    HasAny / Reset() / CopyFrom(other) / Clone()
+
+  THEY BELONG TO THE PROGRAM, not to the channel, so they survive a program
+  change, and they are read when a NOTE STARTS. Pan is an OFFSET rather than a
+  position, which is what lets "slide the whole kit right" keep the kit's own
+  layout instead of collapsing the toms, the hi-hat and the cymbals into one
+  place; ReverbSend is the one knob that REPLACES rather than scales, because
+  "make the snare dry" has an obvious answer and "multiply the snare's send by
+  0.2" does not. A kit-wide adjustment and a per-note one both apply -
+  multipliers multiply, offsets add, and a per-note ReverbSend wins.
+
+  THEY LIVE IN TWO PLACES. GeneralMidiSynthesizer.Adjustments is the live set
+  for that synthesizer. GeneralMidiInstrumentLibrary.Instance.Adjustments is a
+  TEMPLATE, COPIED into every synthesizer the library creates FROM THEN ON - so
+  "make the celesta darker everywhere" is set once. It is deliberately not a
+  live link: changing it does not reach a synthesizer that already exists.
+
+REVERB AND CHORUS SENDS
+------------------------
+The synthesizer owns one Reverb and one Chorus - CodeBrix.Audio's own, the same
+two the SoundFont renderer uses - and every voice feeds them. CC 91 sets a
+channel's reverb send and CC 93 its chorus send, and a channel resets to General
+MIDI's own defaults: reverb 40, chorus 0.
+
+    var settings = new GeneralMidiSynthesizerSettings(44100)
+    {
+        EnableReverbAndChorus = false,   // the host has its own reverb
+    };
+
+  SWITCH THEM OFF when the music is going into a mix that has its own room, or
+  into a game audio engine with its own reverb bus. Off costs nothing at all -
+  the whole stage is skipped - and ReverbAndChorusEnabled reports which it is.
+
+  THE SEND IS SETTLED PER VOICE, WHEN A NOTE STARTS. Each voice takes its send
+  at note-on, in this order: a CC 91 or CC 93 the music has actually sent wins;
+  failing that the consumer's GeneralMidiAdjustment.ReverbSend; failing that the
+  voicing's own. CC 121 clears the "the music said so" flags and hands the
+  channel back to the bank.
+
+  THE CONSEQUENCE TO KNOW: a CC 91 sent UNDER A HELD NOTE does not re-wet that
+  note - it affects the next one. A General MIDI file that automates the send
+  beneath a sustained chord will not hear it move. This is deliberate, and it is
+  what makes a kit sound placed rather than pasted: every kit piece states its
+  own send, so a dry kick sits beside a wet snare in one drum part, which a
+  per-channel send could not express.
+
+  The sends are taken BEFORE a program's insert effect - an aux feed off the dry
+  signal - so the reverb hears the guitar rather than the guitar's distortion.
+
+HEADROOM
+---------
+The bank is calibrated so that ONE NOTE AT FULL VELOCITY FITS inside full scale
+at the default MasterVolume of 0.5, and so that the programs are comparably
+loud as a General MIDI file expects them to be. THIRTY NOTES AT ONCE DO NOT, the
+way thirty notes at once on a hardware module do not.
+
+NOTHING LIMITS OR COMPRESSES. A synthesizer that quietly changed its own level
+would make an arrangement impossible to balance. MasterVolume is the control,
+exactly as it is on a hardware module: turn it down for a deliberately dense
+arrangement, or mix the result with headroom of your own.
+
+REAL MUSIC DOES NOT COME CLOSE TO CLIPPING at the default master volume. Four
+generated pieces measured here - two multi-part MIDI files and two two-voice ABC
+tunes - peak between about an eighth and about half of full scale, which leaves
+between roughly 6 and 17 dB of headroom. What clips is a synthetic worst case
+written to fill the voice pool: eight simultaneous four-note chords plus a
+sixteenth-note kit. If your material looks like that, lower MasterVolume.
+
+CPU, AND SHARING A MACHINE
+---------------------------
+This synthesizer is built to run beside other work - a game's own rendering, or
+a model generating the music it is playing - so the cost is kept where it can be
+seen and lowered.
+
+  ORDINARY MUSIC RENDERS TENS TO HUNDREDS OF TIMES FASTER THAN REAL TIME on a
+  laptop, one thread, in Release. A deliberately worst-case passage of thirty-odd
+  voices - held chords across eight families plus a busy kit, written to fill
+  the voice pool - still renders several times faster than real time. Streaming
+  is comfortable for normal material.
+
+  MaximumPolyphony IS THE LEVER. Halving it roughly doubles the speed of a dense
+  passage, and halving it again does much more than that, because that is where
+  the stacked voices stop fitting. On a slow device, lower it before anything
+  else.
+
+  WHAT COSTS MOST. A voicing that does not use a feature does not pay for it: no
+  filter is a skipped stage, no LFO is a skipped update, a single oscillator is
+  one oscillator, and a program naming no insert effect builds none. What is
+  dear is what stacks - a stereo unison, an extra layer, a six-operator FM pair,
+  and above all CHOIR AAHS, the one program built on a summed vowel spectrum,
+  which is the dearest voice in the bank at several times what a pad costs.
+  Stacking three choir notes under a melody is the most expensive thing you can
+  ask this bank for; everything else is cheap beside it.
+
+  RENDERING ALLOCATES NOTHING. The first few notes of a program build that
+  program's oscillators, which are then recycled for ever, and a program change
+  may build an insert effect; after that neither the MIDI path nor the render
+  path allocates. One voice pool serves all sixteen channels, so sixteen parts
+  do not mean sixteen allocators and the polyphony limit means what it says.
+
+  Nothing here is thread-safe: MIDI events and rendering must not overlap, which
+  is the contract every synthesizer in this family follows.
 
 
 REGISTERING WITH THE DECENT SAMPLER ENGINE
@@ -487,6 +813,12 @@ nothing to register and nothing to resolve: a patch, some settings, and the same
 IMidiSynthesizer contract the SoundFont, SFZ and Decent Sampler engines
 implement, so every player and renderer in CodeBrix.Audio takes it.
 
+IT IS THE SYNTHESIZER FOR DESIGNING ONE SOUND. It plays that one patch across
+the whole keyboard on every channel and ignores program change, which is exactly
+right while you are working on a patch and exactly wrong for playing a .mid that
+carries its own instruments. That is GeneralMidiSynthesizer's job - see THE
+GENERAL MIDI SOUND SET above.
+
 A COMPLETE EXAMPLE - render an electric piano phrase to a WAV file
 ------------------------------------------------------------------
     using CodeBrix.Audio.Midi;
@@ -553,7 +885,10 @@ ModestSynthesizer  (CodeBrix.Audio.ModestSynth)
   WHAT IT DOES NOT. There are no filters, no modulators, no layers and no key or
   velocity zones - those belong to an instrument format. This plays ONE patch
   across the whole keyboard. When you want the rest, a Decent Sampler preset
-  played through DecentSamplerSynthesizer is where it lives.
+  played through DecentSamplerSynthesizer is where it lives - and
+  GeneralMidiSynthesizer, in this same package, has a voice with all of it
+  (filter, filter envelope, up to three layers, a pitch envelope, a delayed LFO,
+  velocity and key scaling and a stereo unison) driving the General MIDI bank.
 
   THE PATCH IS READ WHEN THE SYNTHESIZER IS BUILT. Every voice gets its own
   oscillator, configured then; changing the patch afterwards changes nothing.
@@ -1443,6 +1778,61 @@ gate  -  GateEffect
 
 COMMON PITFALLS
 ===============
+  * NOTHING SOUNDS THROUGH THE INSTRUMENT SEAM UNTIL YOU REGISTER A LIBRARY.
+    CodeBrix.Audio ships no instruments and registers nothing, so
+    InstrumentLibraryRegistry starts empty and Resolve, Default and SetDefault
+    all throw until a consumer fills it. GeneralMidiInstrumentLibrary.Register()
+    is the line, and the exception's own message names it. This does NOT apply
+    to GeneralMidiSynthesizer used directly - "new GeneralMidiSynthesizer(44100)"
+    needs no registration at all.
+
+  * THE CHANNEL NUMBERING PITFALL. Every GeneralMidiSynthesizer member that
+    takes a channel counts 1 to 16 - GetProgram, SetProgram,
+    IsPercussionChannel, SetPercussionChannel, NoteOn, NoteOff, NoteOffAll -
+    EXCEPT ProcessMidiMessage, whose channel is the wire's 0 to 15, because that
+    is what every sequencer hands a synthesizer. Percussion is channel 10 in the
+    first group and wire channel 9 in the second.
+
+  * A PROGRAM CHANGE ON THE WIRE DOES NOT TAKE CHANNEL 10 OFF THE KIT. General
+    MIDI files routinely send one on the drum channel; it is remembered and the
+    kit keeps playing, which is what makes "play any .mid with no configuration"
+    true. The API call SetProgram(10, program) is the one that moves that
+    channel to a melodic program, and SetPercussionChannel(10, true) puts the
+    kit back.
+
+  * A PINNED SYNTHESIZER REFUSES SetProgram. CreateForProgram,
+    CreateForPercussion and the library's per-part creators all hand back a
+    synthesizer pinned to one voicing on every channel; changing its program
+    throws rather than silently doing nothing. Check IsPinned, or build a plain
+    multi-timbral GeneralMidiSynthesizer when the program has to move.
+
+  * A CC 91 SENT UNDER A HELD NOTE DOES NOT RE-WET THAT NOTE. The reverb and
+    chorus sends are settled PER VOICE when a note STARTS, which is what lets
+    one drum part have a dry kick beside a wet snare. A file that automates its
+    send beneath a sustained chord will not hear it move; the next note takes
+    the new value.
+
+  * DENSE MATERIAL NEEDS THE MASTER VOLUME DOWN. One note at full velocity fits
+    inside full scale at the default MasterVolume of 0.5 and real music stays
+    well clear of it, but a deliberately dense arrangement can exceed it and
+    NOTHING here limits or compresses. MasterVolume is the control.
+
+  * THE ADJUSTMENTS ON THE LIBRARY ARE A TEMPLATE, NOT A LIVE LINK.
+    GeneralMidiInstrumentLibrary.Instance.Adjustments is COPIED into every
+    synthesizer the library creates FROM THEN ON; changing it does not reach one
+    that already exists. Use that synthesizer's own .Adjustments for those. Both
+    sets are read when a NOTE STARTS, so a change lands on the next note.
+
+  * THE BANK'S ROWS ARE INTERNAL, AND WILL BE RETUNED. The seven per-program
+    adjustments are the supported way to change how a program sounds; a later
+    release may revoice the bank without any API change, and anything written
+    against the internal voicing tables would break.
+
+  * A GeneralMidiSynthesizer BUILT AT THE WRONG RATE IS TRANSPOSED, exactly as
+    ModestSynthesizer is. Prefer player.Load(rate => new GeneralMidiSynthesizer(
+    new GeneralMidiSynthesizerSettings(rate)), sequence) over handing the player
+    a synthesizer it cannot re-rate.
+
   * REGISTER BEFORE LOADING. Waveforms and effect types are resolved while an
     instrument is BUILT INTO A SYNTHESIZER, not while its file is parsed.
     ModestSynth.Register() after the fact does not retrofit an instrument that is
@@ -1599,6 +1989,49 @@ COMMON PITFALLS
 
 QUICK REFERENCE
 ===============
+  GET GENERAL MIDI          GeneralMidiInstrumentLibrary.Register()
+                            // once, at start-up; registers as "ModestSynthGm".
+                            // Nothing registers it for you.
+  Ask for it by name        InstrumentLibraryRegistry.Resolve("ModestSynthGm")
+                            GeneralMidiInstrumentLibrary.LibraryName / .Instance
+                                                                    / .IsRegistered
+  Play a whole .mid         new GeneralMidiSynthesizer(44100)
+                            // honours the file's program changes; kit on 10
+  Play it live at the       player.Load(rate => new GeneralMidiSynthesizer(
+    device's own rate           new GeneralMidiSynthesizerSettings(rate)), sequence)
+  Render it offline         SoundFontRenderer.RenderToFile(synthesizer,
+                                sequence, "tune.wav", tail)
+  One part of an            library.CreateSynthesizer(program, 44100)
+    arrangement             library.CreatePercussionSynthesizer(44100)
+                            GeneralMidiSynthesizer.CreateForProgram(program, 44100)
+                            GeneralMidiSynthesizer.CreateForPercussion(44100)
+                            // all pinned: they ignore program change
+  The whole piece, one      library.CreateMultiTimbralSynthesizer(44100)
+    synthesizer
+  Voice a channel yourself  synthesizer.SetProgram(channel, program)   // 1-16
+                            synthesizer.SetPercussionChannel(channel, true)
+  Change how a program      synthesizer.Adjustments.Program(
+    sounds                      GeneralMidiProgram.Celesta).Brightness = -0.8
+                            Level, Brightness, Attack, Release, VibratoDepth,
+                            ReverbSend, Pan - read when a note STARTS
+  Change it everywhere      GeneralMidiInstrumentLibrary.Instance.Adjustments
+                            // a TEMPLATE, copied into what it creates next
+  Move or dry the kit       synthesizer.Adjustments.Percussion.Pan = 0.15
+                            synthesizer.Adjustments.PercussionNote(
+                                GeneralMidiPercussion.AcousticSnare)
+                                .ReverbSend = 0.05
+  Switch the room off       new GeneralMidiSynthesizerSettings(44100)
+                                { EnableReverbAndChorus = false }
+  Make it cheaper           settings.MaximumPolyphony = 32
+  Dense arrangement clips   synthesizer.MasterVolume = 0.25
+
+  GM settings               SampleRate (44100), BlockSize (64),
+                            MaximumPolyphony (64), MasterVolume (0.5),
+                            EnableReverbAndChorus (true),
+                            EnableInsertEffects (true), RandomSeed (12345)
+  GM channels               1-16 everywhere EXCEPT ProcessMidiMessage, which
+                            takes the wire's 0-15. Percussion is 10 / wire 9.
+
   Turn it on for presets   ModestSynth.Register()             (once, before loading)
                            ModestSynth.Register(registry)      (your own registry)
   Did it run?              ModestSynth.IsRegistered

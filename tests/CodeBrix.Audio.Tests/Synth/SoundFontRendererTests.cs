@@ -5,6 +5,10 @@ using CodeBrix.Audio.Midi;
 using CodeBrix.Audio.Synth;
 using CodeBrix.Audio.Wave;
 using SilverAssertions;
+using SilverAssertions.Collections;
+using SilverAssertions.Numeric;
+using SilverAssertions.Primitives;
+using SilverAssertions.Specialized;
 using Xunit;
 
 namespace CodeBrix.Audio.Tests.Synth;
@@ -175,5 +179,236 @@ public class SoundFontRendererTests
 
         //Assert
         act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    // ----- rendering through the writer registry -----
+
+    [Fact]
+    public void render_to_file_picks_the_writer_by_extension()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var sequence = BuildSingleNoteSequence();
+        var path = Path.Combine(Path.GetTempPath(), $"codebrix-render-{Guid.NewGuid():N}.aiff");
+
+        try
+        {
+            //Act
+            SoundFontRenderer.RenderToFile(soundFont, sequence, path, 22050);
+
+            //Assert
+            // Nothing named AIFF anywhere in the call: the extension found the writer.
+            using var reader = new AiffFileReader(path);
+            reader.WaveFormat.SampleRate.Should().Be(22050);
+            reader.WaveFormat.Channels.Should().Be(2);
+            reader.WaveFormat.BitsPerSample.Should().Be(16);
+            reader.SampleCount.Should().BeGreaterThan(0);
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public void render_to_file_writes_the_same_float_wav_the_wav_specific_method_does()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var sequence = BuildSingleNoteSequence();
+        var throughTheRegistry = Path.Combine(Path.GetTempPath(), $"codebrix-render-{Guid.NewGuid():N}.wav");
+        var throughTheOldWay = Path.Combine(Path.GetTempPath(), $"codebrix-render-{Guid.NewGuid():N}.wav");
+
+        try
+        {
+            //Act
+            SoundFontRenderer.RenderToFile(soundFont, sequence, throughTheRegistry, 22050);
+            SoundFontRenderer.RenderToWavFile(soundFont, sequence, throughTheOldWay, 22050);
+
+            //Assert
+            // The existing RenderToWav* family keeps working and keeps writing exactly this, so
+            // the new road is additive rather than a change of behaviour.
+            File.ReadAllBytes(throughTheRegistry).Should().Equal(File.ReadAllBytes(throughTheOldWay));
+        }
+        finally
+        {
+            foreach (var path in new[] { throughTheRegistry, throughTheOldWay })
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void render_to_file_writes_sixteen_bit_pcm_when_the_format_asks_for_it()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var sequence = BuildSingleNoteSequence();
+        var path = Path.Combine(Path.GetTempPath(), $"codebrix-render-{Guid.NewGuid():N}.wav");
+
+        try
+        {
+            //Act
+            SoundFontRenderer.RenderToFile(
+                soundFont, sequence, path, new WaveFormat(22050, 16, 2));
+
+            //Assert
+            using var reader = new WaveFileReader(path);
+            reader.WaveFormat.Encoding.Should().Be(WaveFormatEncoding.Pcm);
+            reader.WaveFormat.BitsPerSample.Should().Be(16);
+            reader.SampleCount.Should().BeGreaterThan(0);
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public void render_to_file_through_a_synthesizer_picks_the_writer_by_extension()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var synthesizer = new SoundFontSynthesizer(soundFont, 22050);
+        var sequence = BuildSingleNoteSequence();
+        var path = Path.Combine(Path.GetTempPath(), $"codebrix-render-{Guid.NewGuid():N}.wav");
+
+        try
+        {
+            //Act
+            SoundFontRenderer.RenderToFile(synthesizer, sequence, path);
+
+            //Assert
+            using var reader = new WaveFileReader(path);
+            reader.WaveFormat.SampleRate.Should().Be(22050);
+            reader.WaveFormat.Encoding.Should().Be(WaveFormatEncoding.IeeeFloat);
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public void render_to_file_rejects_an_extension_nothing_is_registered_for()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var sequence = BuildSingleNoteSequence();
+        var path = Path.Combine(Path.GetTempPath(), $"codebrix-render-{Guid.NewGuid():N}.xyz");
+
+        //Act
+        var act = () => SoundFontRenderer.RenderToFile(soundFont, sequence, path, 22050);
+
+        //Assert
+        act.Should().Throw<NotSupportedException>().WithMessage("*'.xyz'*");
+
+        // And it says so before creating anything, so there is no empty file to clean up.
+        File.Exists(path).Should().BeFalse();
+    }
+
+    [Fact]
+    public void render_to_stream_writes_through_the_registry_and_leaves_the_stream_open()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var sequence = BuildSingleNoteSequence();
+        using var stream = new MemoryStream();
+
+        //Act
+        SoundFontRenderer.RenderToStream(soundFont, sequence, stream, ".wav", 22050);
+
+        //Assert
+        stream.CanRead.Should().BeTrue();
+        stream.Position = 0;
+        using var reader = new WaveFileReader(stream);
+        reader.WaveFormat.SampleRate.Should().Be(22050);
+        reader.SampleCount.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public void render_to_stream_through_a_synthesizer_takes_the_format_from_an_extension()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var synthesizer = new SoundFontSynthesizer(soundFont, 22050);
+        var sequence = BuildSingleNoteSequence();
+        using var stream = new MemoryStream();
+
+        //Act
+        SoundFontRenderer.RenderToStream(synthesizer, sequence, stream, "anything.aif");
+
+        //Assert
+        stream.Position = 0;
+        using var reader = new AiffFileReader(stream);
+        reader.WaveFormat.SampleRate.Should().Be(22050);
+        reader.SampleCount.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public void rendering_to_a_file_refuses_a_format_that_is_not_stereo()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var sequence = BuildSingleNoteSequence();
+        var path = Path.Combine(Path.GetTempPath(), $"codebrix-render-{Guid.NewGuid():N}.wav");
+
+        //Act
+        var act = () => SoundFontRenderer.RenderToFile(
+            soundFont, sequence, path, WaveFormat.CreateIeeeFloatWaveFormat(22050, 1));
+
+        //Assert
+        act.Should().Throw<ArgumentException>().WithMessage("*2 channels*");
+    }
+
+    [Fact]
+    public void rendering_a_synthesizer_refuses_a_format_at_another_sample_rate()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var synthesizer = new SoundFontSynthesizer(soundFont, 22050);
+        var sequence = BuildSingleNoteSequence();
+        using var stream = new MemoryStream();
+
+        //Act
+        var act = () => SoundFontRenderer.RenderToStream(
+            synthesizer, sequence, stream, ".wav", WaveFormat.CreateIeeeFloatWaveFormat(44100, 2));
+
+        //Assert
+        // Rendering does not resample, and a file whose header says one rate while its samples
+        // were made at another plays at the wrong pitch.
+        act.Should().Throw<ArgumentException>().WithMessage("*does not resample*");
+    }
+
+    [Fact]
+    public void rendering_to_a_file_rejects_the_usual_null_arguments()
+    {
+        //Arrange
+        var soundFont = SynthTestAssets.LoadSoundFont(SynthTestAssets.TestSoundFontName);
+        var sequence = BuildSingleNoteSequence();
+
+        //Act
+        var nullPath = () => SoundFontRenderer.RenderToFile(soundFont, sequence, (string)null);
+        var nullSynthesizer = () => SoundFontRenderer.RenderToFile(
+            (IMidiSynthesizer)null, sequence, "tune.wav");
+        var nullStream = () => SoundFontRenderer.RenderToStream(soundFont, sequence, null, ".wav");
+
+        //Assert
+        nullPath.Should().Throw<ArgumentNullException>();
+        nullSynthesizer.Should().Throw<ArgumentNullException>();
+        nullStream.Should().Throw<ArgumentNullException>();
     }
 }

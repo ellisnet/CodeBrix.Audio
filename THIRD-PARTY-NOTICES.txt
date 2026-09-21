@@ -576,6 +576,13 @@ CodeBrix.Audio's own MIT license:
     from sine tones by tools/make_test_fixtures/make_soundfont.py. It is not a
     third-party SoundFont, and no third-party SoundFont is bundled: real GM
     SoundFonts run to tens of megabytes and are variously licensed.
+  * The four pieces of music under tests/Assets/generated-music/ are the OUTPUT
+    of two models, generated locally by this repository's owner: the two .mid
+    files by SkyTNT midi-model-tv2o-medium (Apache-2.0) and the two .abc files
+    by MuPT-v1-8192-190M (Apache-2.0). They are a few kilobytes of notes. No
+    third-party recording, score or transcription is included, and neither
+    model - nor any part of one - is bundled here or in either package.
+    tests/Assets/generated-music/GENERATED-MUSIC.txt says what each file is.
   * The SFZ engine (src/CodeBrix.Audio/Synth/Sfz/) is original code written from
     the published SFZ format documentation. No other player's source was used or
     adapted.

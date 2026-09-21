@@ -33,6 +33,7 @@ public class RenderAllocationTests
     [InlineData(ModestWaveform.Fm6Op)]
     [InlineData(ModestWaveform.Wavetable)]
     [InlineData(ModestWaveform.Harmonic)]
+    [InlineData(ModestWaveform.Formant)]
     public void Render_allocates_nothing_once_it_is_warm(ModestWaveform waveform)
     {
         //Arrange
@@ -71,6 +72,7 @@ public class RenderAllocationTests
     [InlineData(ModestWaveform.Fm6Op)]
     [InlineData(ModestWaveform.Wavetable)]
     [InlineData(ModestWaveform.Harmonic)]
+    [InlineData(ModestWaveform.Formant)]
     public void Reset_and_SetFrequency_allocate_nothing_either(ModestWaveform waveform)
     {
         //Arrange

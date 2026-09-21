@@ -106,6 +106,27 @@ holds a MeltySynth-derived SF2 parser, object model and voice engine, of which
 only the SoundFont object model and a small playback facade are public. See
 AGENT-README.txt, "TWO SOUNDFONT PATHS", before touching any of it.
 
+THE TWO NAMING SEAMS follow the shape AudioFileReaderRegistry already set - a
+public contract, a static process-wide registry, and nothing registered by this
+library itself. CodeBrix.Audio.Instruments holds IInstrumentLibrary,
+InstrumentLibraryRegistry, the coverage model, the generic
+SoundFontInstrumentLibrary and MappedInstrumentLibrary, with the wrappers that
+pin a per-part synthesizer to its instrument, and the mapped library's
+multi-timbral shape, internal under Instruments/Internal. The writer seam is
+IAudioFileWriter, IAudioFileWriterFactory and AudioFileWriterRegistry in
+CodeBrix.Audio.Wave, with the WAV and AIFF factories public and the two adapters
+over the long-established WaveFileWriter and AiffFileWriter internal under
+Wave/WaveOutputs/Internal - only the FACTORIES need to be public, and keeping the
+adapters internal avoids a public WavAudioFileWriter standing one letter from
+WaveFileWriter. THIS LIBRARY SHIPS NO INSTRUMENTS AND REGISTERS NO LIBRARY, by
+decision and not by omission: what an application plays with is the
+application's choice, the General MIDI set lives in the add-on package, and the
+empty-registry exception NAMES that package and its Register() call, because
+prose is not a dependency. RoutingSynthesizer (CodeBrix.Audio.Synth) is the
+other half of the per-part road - one IMidiSynthesizer over sixteen children -
+and Reverb and Chorus in the same namespace are public so the add-on's General
+MIDI synthesizer uses THESE rather than carrying a second reverb to maintain.
+
 The multi-track player and the stems loader follow the same shape again:
 CodeBrix.Audio.Playback holds MultiTrackPlayer, its two track types and the
 alignment estimator, with the renderers, the mix and the merged-MIDI builder
@@ -124,7 +145,12 @@ the classic generators, Fm/ for the six-operator engine, Wavetable/ and
 Harmonic/ for the other two, Effects/ for the seven creative processors, Patch/
 for the parameter model, Integration/ for the sampler-side voice adapter, and
 Internal/ for the band-limiting maths, the seeded noise source and the
-registration list. Its docs are
+registration list. THE GENERAL MIDI SIDE sits beside them on the same rule: its
+public types stay at the project root - GeneralMidiSynthesizer,
+GeneralMidiSynthesizerSettings, GeneralMidiInstrumentLibrary and the adjustment
+types - while the whole voice architecture and the bank itself are internal
+under Internal/Gm/. See THE GENERAL MIDI BANK, AND HOW TO RETUNE IT,
+under TESTING, for why that boundary is where it is. Its docs are
 its own: src/CodeBrix.Audio.ModestSynth/README.md and AGENT-README.txt are what
 its package carries, and the repo-root pair stay CodeBrix.Audio's. The two things
 its oscillators were calibrated against, rather than guessed at, are recorded in
@@ -353,6 +379,151 @@ undo by accident:
 
 The tests that merely need the device open (WaveOutEvent, AudioFilePlayer) play silence,
 and should stay that way.
+
+THE ENVIRONMENT GATES, AND WHAT EACH ONE IS FOR
+-----------------------------------------------
+Anything that makes a sound, needs a device, writes files or takes real time is
+gated on an environment variable, all in the same shape: Assert.SkipUnless with a
+skip reason that names the variable, so an ungated run reports them as SKIPPED
+rather than quietly not running them.
+
+  CODEBRIX_AUDIO_RUN_PLAYBACK_TESTS            opens a device and makes a sound
+                                               (CodeBrix.Audio.Tests and
+                                               CodeBrix.Audio.ModestSynth.Tests)
+  CODEBRIX_AUDIO_ENGINE_RUN_PLAYBACK_TESTS     the same, for the Engine tests
+  CODEBRIX_AUDIO_RUN_DEFAULT_INSTRUMENT_TESTS  the instrument registry's DEFAULT
+                                               and its registration order.
+                                               RUN THESE BY THEMSELVES - see below
+  CODEBRIX_AUDIO_WRITE_GM_RENDERS              writes the General MIDI listening
+                                               renders to disk
+  CODEBRIX_AUDIO_RUN_GM_MEASUREMENTS           the General MIDI render-speed,
+                                               headroom and loudness measurements
+
+(CODEBRIX_AUDIO_DS_CORPUS, CODEBRIX_AUDIO_SUNO_CORPUS and
+CODEBRIX_AUDIO_GM_SOUNDFONT are not gates of this kind - they point at material
+that never enters the repository. See CORPORA NEVER ENTER THE REPOSITORY below.)
+
+RUN THE DEFAULT-INSTRUMENT TESTS BY THEMSELVES, AND HERE IS WHY.
+InstrumentLibraryRegistry is static and process-wide, and "the first library
+registered is the default" cannot be tested at all without emptying it. Those
+tests therefore call the internal ResetForTesting(), which clears the registry
+for the whole process. Set that variable for a solution-wide run and a reset
+landing between another test's Register and its Resolve fails that test, for no
+reason anyone would enjoy tracking down. Run them on their own:
+
+    CODEBRIX_AUDIO_RUN_DEFAULT_INSTRUMENT_TESTS=1 \
+      dotnet tests/CodeBrix.Audio.Tests/bin/Debug/net10.0/CodeBrix.Audio.Tests.dll \
+      -filter "/*/*/InstrumentLibraryRegistryDefaultTests/*"
+
+THE RULE THAT KEEPS EVERY OTHER TEST SAFE: AN UNGATED TEST RESOLVES AN INSTRUMENT
+LIBRARY BY NAME AND NEVER READS OR ASSERTS ON THE DEFAULT. Every ungated test
+that registers one uses a name unique to itself - a Guid suffix is the habit -
+and asks for it back with Resolve(name). Registration is idempotent and
+lock-guarded, so tests registering under their own names in parallel are safe;
+the DEFAULT is the one piece of shared state that is not, which is exactly why it
+is gated. Keep it that way: a new test that reads
+InstrumentLibraryRegistry.Default belongs behind that variable, or nowhere.
+ResetForTesting() is internal to CodeBrix.Audio and visible only to
+CodeBrix.Audio.Tests, so CodeBrix.Audio.ModestSynth.Tests cannot empty the
+registry even by accident - which is the right answer.
+
+CODEBRIX_AUDIO_WRITE_GM_RENDERS WRITES FILES, AND HERE IS WHERE. Under
+TestResults/GmRenders/ at the repository root - git-ignored, and rewritten
+wholesale every run:
+
+  - one .wav per General MIDI family, each program in turn with a phrase that
+    suits that family;
+  - the percussion kit twice, once as a roll call of every piece in order and
+    once as a groove that exercises the choke groups;
+  - the real pieces from tests/Assets/generated-music/, each voiced as the
+    audible tests voice it;
+  - INDEX.txt, which for every file says what it is, how long it is and what it
+    peaked at, and then gives a line per sound with its start time, its General
+    MIDI number and its official name. That is what stands in for the live
+    announcement when somebody listens to the files later.
+
+Everything is 16-bit PCM stereo at 44,100 Hz, at the synthesizer's default master
+volume, with nothing limited or compressed; a file that came out above full scale
+would be turned down to fit and the index would say by how much. Rewrite them
+after any voicing change - it takes seconds in Release:
+
+    CODEBRIX_AUDIO_WRITE_GM_RENDERS=1 dotnet test CodeBrix.Audio.slnx
+
+CODEBRIX_AUDIO_RUN_GM_MEASUREMENTS renders tens of minutes of audio to measure
+render speed at several polyphony limits, headroom on the real pieces, and
+loudness across the whole bank. It writes no files, which is why it is not folded
+into the renders gate - one variable, one meaning. NOTHING IN THOSE TESTS ASSERTS
+ON A CLOCK: they measure, print, and assert only that a render happened and came
+out as audio. Take the figures in Release, on an otherwise idle machine:
+
+    dotnet build CodeBrix.Audio.slnx -c Release
+    M=tests/CodeBrix.Audio.ModestSynth.Tests/bin/Release/net10.0
+    CODEBRIX_AUDIO_RUN_GM_MEASUREMENTS=1 \
+      dotnet $M/CodeBrix.Audio.ModestSynth.Tests.dll \
+      -class "*GeneralMidiMeasurementTests*" -parallelMode none
+
+THE AUDIBLE GENERAL MIDI TESTS, AND HOW TO RUN A LISTENING SITTING
+-------------------------------------------------------------------
+tests/CodeBrix.Audio.ModestSynth.Tests/Integration/GeneralMidiAudibleTests.cs
+joins Integration/ModestSynthAudibleTests.cs behind
+CODEBRIX_AUDIO_RUN_PLAYBACK_TESTS and takes the same AudibleTestScope, so it does
+not play over anything else. It deliberately does NOT play the Close Encounters
+motif: those tests prove a path works, and these exist to be LISTENED to, so each
+one plays real material and ANNOUNCES what is sounding as it sounds.
+
+RUN THEM FROM THE TEST ASSEMBLY, NOT THROUGH dotnet test. `dotnet test` with a
+filter reports "Zero tests ran" on this SDK; the built assembly runs perfectly
+and prints live. Release is worth it for the long ones.
+
+    dotnet build CodeBrix.Audio.slnx -c Release
+    M=tests/CodeBrix.Audio.ModestSynth.Tests/bin/Release/net10.0
+    T=$M/CodeBrix.Audio.ModestSynth.Tests.dll
+    export CODEBRIX_AUDIO_RUN_PLAYBACK_TESTS=1     # for this sitting
+
+    # every program in turn, a phrase each
+    dotnet $T -method "*plays_a_tour_of_all_128_programs*"
+
+    # ONE FAMILY at a time, with room to hear an attack, a body and a release
+    dotnet $T -method "*plays_the_ensemble_family*"
+    #   swap the name for any of: piano, chromatic_percussion, organ, guitar,
+    #   bass, strings, ensemble, brass, reed, pipe, synth_lead, synth_pad,
+    #   synth_effects, ethnic, percussive, sound_effects - always
+    #   *plays_the_<name>_family*. Several -method arguments on one line is fine.
+
+    # THE KIT: every piece named in turn, then a groove
+    dotnet $T -method "*plays_every_piece_of_the_percussion_kit*"
+    dotnet $T -method "*plays_a_groove_on_the_percussion_kit*"
+
+    # THE REAL PIECES
+    dotnet $T -method "*plays_the_skytnt_ordinary_piece*"
+    dotnet $T -method "*plays_the_skytnt_dense_piece*"
+    dotnet $T -method "*plays_the_mupt_duet_on_celesta_and_choir_aahs*"
+    dotnet $T -method "*plays_the_mupt_air*"
+
+    # the whole sitting, in one go
+    dotnet $T -class "*GeneralMidiAudibleTests*"
+
+The groove is where to listen for the choke groups - a closed hi-hat and then the
+pedal each cutting a sounding open one - and for whether the toms sweep the way
+round you expect. They are laid out from the drummer's point of view; if that is
+backwards for a listener, every Pan in GmPercussionRows.cs flips sign and the
+sweep test flips with it.
+
+ONE PLAN DRIVES BOTH HALVES OF A SITTING. GmAudition builds a GmAuditionPlan -
+the music, plus the CUES that say what is sounding and when - and both the
+audible test and the offline render read the same plan, so an announcement cannot
+drift from the sound it names in one place and not the other. GmRealPieces does
+the same for the four real pieces, including which programs the two ABC tunes are
+voiced with. ANNOUNCEMENTS GO STRAIGHT TO Console.Out AND ARE FLUSHED: the
+runner's own output helper holds a test's output until the test ENDS, which is
+useless for a five-minute tour. The audible test polls MidiMusicPlayer.Position
+every 20 ms and prints each cue as the play head reaches it. Copy that pattern
+for any future listening test.
+
+The player is loaded through the FACTORY overload - Load(rate => new
+GeneralMidiSynthesizer(new GeneralMidiSynthesizerSettings(rate)), sequence) - so
+the device settles on its own sample rate. A synthesizer built at a different
+rate is transposed and time-stretched by the ratio between them.
 
 Test SFZ instruments: none are committed. The SFZ engine tests build theirs on
 the fly - SfzTestInstruments writes synthetic WAV samples (constants, sines,
@@ -863,6 +1034,164 @@ know before touching either reader:
       A running-status byte with nothing to run from is a hard error: Strict
       throws, Tolerant reports it and abandons the rest of that track, because
       there is no way to resynchronise inside one.
+
+
+THE GENERAL MIDI BANK, AND HOW TO RETUNE IT
+-------------------------------------------
+src/CodeBrix.Audio.ModestSynth/Internal/Gm/. EVERYTHING IN THAT FOLDER IS
+INTERNAL, and that is load-bearing rather than tidy: a voicing row references a
+filter spec, an envelope spec, an LFO spec and a layer spec, so if any of them
+were public, a retune that wanted one more field in one of them would be an API
+CHANGE. Keeping them internal is what makes A RETUNE A DATA-ONLY CHANGE - new
+numbers, same public surface, no consumer recompiles. The consumer's surface is
+GeneralMidiSynthesizer, GeneralMidiSynthesizerSettings,
+GeneralMidiInstrumentLibrary and the seven per-program adjustments of
+GeneralMidiAdjustment, and those are what a consumer must be told to write
+against. Do not promote a row type to public to save an afternoon.
+
+WHAT IS WHERE:
+
+  GmProgramRows.cs       THE TABLE - one case per program, grouped by family, in
+                         program order.
+  GmPercussionRows.cs    THE KIT - one row per percussion note, grouped by kind,
+                         with helpers for the families of kit pieces that differ
+                         only in pitch, pan and length.
+  GmFamilyTemplates.cs   the sixteen family spines, plus the kit's. For(family)
+                         returns a FRESH voicing prefilled with everything the
+                         eight programs of that family agree about; Percussion()
+                         is the kit's - a one-shot at a fixed pitch that ignores
+                         note-off.
+  GmTones.cs             recipe -> ModestPatch. The whole sound-design
+                         vocabulary in one file, so "make every bell brighter"
+                         is one edit rather than fourteen.
+  GmBank.cs              row + family template -> a voicing, built once and
+                         cached process-wide.
+  GmVoice.cs             the voice itself: layers, filter, envelopes, pitch
+                         envelope, LFO, unison.
+
+A ROW STATES ONLY ITS DIFFERENCES. Every field is optional - a double left at
+double.NaN, an enum left at its zero and a null layer all mean "keep what the
+family template said" - so a row reads as a list of what makes that program
+itself.
+
+TO RETUNE ONE VOICING:
+  1. Find its case in GmProgramRows.cs or its row in GmPercussionRows.cs.
+  2. Change a number. Nothing else moves and no API changes.
+  3. If the change moved the program's LOUDNESS, move its Level back. The levels
+     were set by MEASUREMENT, not by ear or by guess: every program's loudest
+     hundred milliseconds of a held middle C at velocity 100 was brought onto
+     one figure, and the kit was measured by PEAK onto a designed profile
+     instead - kicks and snares loudest, toms just under, hats and shakers well
+     below - because a listener judges a drum by how hard it hits and a flat kit
+     is not a kit. Both bands are ASSERTED, tighter for the programs than for
+     the kit, so a retune cannot quietly drift out of them.
+  4. Run the suite. The bank tests are data-driven over every program and every
+     percussion note, so a failure names the program rather than saying
+     "something in the bank".
+
+TO RETUNE A WHOLE FAMILY, change its spine in GmFamilyTemplates.cs instead - one
+edit reaches all eight of its programs.
+
+THE ONE NUMBER TO GET RIGHT IN AN FM RECIPE IS THE MODULATOR LEVEL, and
+GmTones.cs says so at the top. The engine turns a modulator level of 1.0 into two
+cycles of phase modulation, which is far past the first Bessel null - where THE
+FUNDAMENTAL DISAPPEARS FROM ITS OWN SPECTRUM. A first pass got this wrong across
+every FM recipe in the bank (a celesta whose loudest partial was its seventh);
+recipes that want a clear pitch keep the modulator well under a quarter, and only
+the deliberately clangorous ones go above it. The test that catches it measures
+that a pitched program really puts its energy on the note it was played.
+
+WHAT THE BANK TESTS FENCE, generically, over every program and every kit piece:
+each one SOUNDS; each renders IDENTICALLY TWICE (two synthesizers, two renders,
+same machine, same run - the PinnedRender rule above, with no digest and no
+committed sample anywhere); none clips at full velocity; no program is
+byte-for-byte the same as its neighbour, which is what "nothing is a placeholder
+and nothing falls back to piano" looks like as a test; the two loudness bands;
+and, for the pitched programs, that the note that sounds is the note that was
+played. The kit has its own: a note number chooses a piece rather than a pitch,
+percussion ignores note-off sample for sample, the hi-hat choke groups cut, and
+the kit is laid out across the stereo field.
+
+THE FORMANT OSCILLATOR'S NAIVE-REFERENCE FENCE
+-----------------------------------------------
+src/CodeBrix.Audio.ModestSynth/Oscillators/FormantOscillator.cs renders its vowel
+spectrum by carrying each partial as a ROTATING VECTOR and turning it by a fixed
+angle per sample - vectorised across partials with the portable
+System.Numerics.Vector<double>, with no intrinsics and no unsafe - instead of
+evaluating a sine per partial per sample. It is an order of magnitude cheaper and
+THE WAVEFORM IS THE SAME WAVEFORM.
+
+WHAT KEEPS THAT TRUE IS tests/CodeBrix.Audio.ModestSynth.Tests/NaiveFormant.cs:
+THE ORIGINAL WAVEFORM WRITTEN OUT IN FULL, deliberately sharing NO CODE with the
+shipped class - its own copy of the measured partial envelope, its own
+interpolation and extrapolation, its own Nyquist cut, its own normalisation, its
+own phases and the original per-sample Math.Sin sum. FormantOscillatorReferenceTests
+then compares the two SAMPLE BY SAMPLE, at every useful pitch, at several sample
+rates, across block sizes that land on and well past the internal refresh,
+through a glide, through a vibrato, while partials fall off the top and come
+back, across a phase reset mid-note, and over a note held long enough to answer
+the drift question directly. They agree to within one step between neighbouring
+floats, and one test states exactly that.
+
+THREE THINGS A MAINTAINER MUST KNOW BEFORE TOUCHING IT:
+
+  - THE SPECTRUM NOW LIVES IN TWO PLACES ON PURPOSE. The partial envelope and the
+    reference gain are in FormantOscillator.cs AND in NaiveFormant.cs. A new
+    measurement is written into BOTH; change only one and all the reference tests
+    fail loudly and name the pitch. THE DUPLICATION IS THE POINT, and the file
+    says so at the top.
+  - THE ROTATION IS RE-DERIVED FROM THE EXACT MASTER PHASE whenever the pitch,
+    the sample rate or the phase moves - and in any case at least every few
+    thousand samples, with Render chunking its own buffer at that boundary so the
+    guarantee holds however long a single call is. That refresh interval is a
+    CORRECTNESS MARGIN, not a tuning knob: raising it saves almost nothing and
+    lowering it to the block size costs about half the gain. The start phases
+    depend on how many partials are active, which depends on the pitch, so every
+    partial's phase steps when one crosses Nyquist; the re-derivation on exactly
+    those blocks is what makes that safe, and there is a test for it.
+  - DO NOT PUT THE SINE TABLE BACK. It was measured here: no faster than
+    Math.Sin on this machine, and its interpolation error is ABOVE this fence's
+    tolerance, so it would change the waveform.
+
+NaiveFormant is the pattern to copy if another oscillator is ever optimised: a
+full, independent restatement of the waveform in the test project, and a fence
+that compares sample by sample rather than spectrally. It is the only way to
+change a render path and be able to say the sound did not move.
+
+THE GENERATED-MUSIC FIXTURES
+-----------------------------
+tests/Assets/generated-music/ holds the real music the General MIDI audible
+tests, the listening renders and the measurements play: two Standard MIDI files
+and two ABC tunes, a few kilobytes each.
+
+HOW THEY WERE PRODUCED. They are MODEL OUTPUT, generated locally on this
+machine by the repository's owner - the MIDI files by SkyTNT's
+midi-model-tv2o-medium and the ABC tunes by MuPT-v1-8192-190M, both Apache-2.0.
+Nothing was transcribed, sampled or downloaded: no third-party recording, score
+or transcription is here, and neither model nor any part of one is bundled in
+this repository or in either package. THIRD-PARTY-NOTICES.txt records that, and
+GENERATED-MUSIC.txt beside the files says what each one is, in the same style as
+AUDIO-FIXTURES.txt and ABC-FIXTURES.txt. A replacement fixture needs the same
+treatment: identified provenance, an identified licence, and an entry in both
+files.
+
+WHAT THEY ARE FOR. They are the only material in the suite that is real music
+rather than a constructed figure, which is what makes them worth having: they
+are what the headroom measurements are taken on, and they are the honest answer
+to "does this bank play a piece". The two MIDI files are played through a plain
+GeneralMidiSynthesizer with NO configuration and NO re-voicing at all - their own
+program changes do the work, which is the "plays any .mid" promise being
+exercised rather than asserted. The two ABC tunes carry no instrument of their
+own, so GmRealPieces voices them and pins their channels through
+AbcToMidiOptions.VoiceChannels rather than leaving the assignment automatic, so
+a program change written afterwards is certain to land on the voice it was meant
+for.
+
+ODDITIES IN THE SOURCE MATERIAL, so nobody hunts for a bug that is not here: one
+MIDI file declares two channels, sends them a program change and then never plays
+a note on either (the announcement marks them), and one ABC tune has one more bar
+in its first voice than in its second, so that voice finishes alone. Both are
+model artefacts and both are in the files as they were generated.
 
 
 THE DECENT SAMPLER ENGINE
