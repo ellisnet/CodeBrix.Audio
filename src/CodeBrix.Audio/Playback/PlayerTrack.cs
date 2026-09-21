@@ -89,6 +89,16 @@ public abstract class PlayerTrack
         set => midiSourceGain = value > 0.0f ? value : 0.0f;
     }
 
+    /// <summary>
+    /// Whether level matching measures this track when it has both audio and MIDI sources. Defaults
+    /// to true. Set to false for a track that will stay on its recording, such as vocals.
+    /// </summary>
+    /// <remarks>
+    /// Applies to automatic and explicit measurements. Skipping a track leaves its
+    /// <see cref="MidiSourceGain"/> alone; it does not remove either source or prevent switching.
+    /// </remarks>
+    public bool MeasureLevel { get; set; } = true;
+
     /// <summary>Whether the track is silenced. Mute wins over <see cref="Solo"/>.</summary>
     public bool Mute { get; set; }
 

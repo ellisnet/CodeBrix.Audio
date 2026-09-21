@@ -45,8 +45,9 @@ public sealed class AbcToMidiOptions
     }
 
     /// <summary>
-    /// The tempo used when the tune carries no <c>Q:</c> field, or one with only a text label. The
-    /// default is 120 quarter notes per minute.
+    /// The initial tempo used when the tune header has no <c>Q:</c> field, or one with only a text
+    /// label. A <c>Q:</c> in the body changes the tempo from its own position. The default is 120
+    /// quarter notes per minute.
     /// </summary>
     /// <exception cref="ArgumentOutOfRangeException">The value is not between 1 and 1000.</exception>
     public double DefaultBeatsPerMinute

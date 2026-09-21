@@ -171,6 +171,7 @@ public static class AbcToMidi
         private readonly MidiEventCollection _collection;
         private readonly int _ticksPerQuarterNote;
         private readonly HashSet<string> _written = [];
+        private readonly Dictionary<long, TempoEvent> _temposAtTick = [];
 
         internal ConductorTrack(MidiEventCollection collection, int ticksPerQuarterNote)
         {
@@ -195,12 +196,17 @@ public static class AbcToMidi
                 microseconds = 1;
             }
 
-            if (!_written.Add(string.Create(CultureInfo.InvariantCulture, $"T{tick}:{microseconds}")))
+            // The header's default and an inline Q: at the start of the body can share tick zero.
+            // A repeated Q: in another voice can share any tick. The last value at that tick wins.
+            if (_temposAtTick.TryGetValue(tick, out var existing))
             {
+                existing.MicrosecondsPerQuarterNote = microseconds;
                 return;
             }
 
-            Add(new TempoEvent(microseconds, tick));
+            var tempo = new TempoEvent(microseconds, tick);
+            _temposAtTick.Add(tick, tempo);
+            Add(tempo);
         }
 
         internal void WriteMeter(AbcMeter meter, long tick, AbcTune tune)

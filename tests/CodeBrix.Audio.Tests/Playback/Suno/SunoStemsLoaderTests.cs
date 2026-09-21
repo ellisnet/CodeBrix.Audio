@@ -226,6 +226,32 @@ public class SunoStemsLoaderTests
         song.TempoMap[0].BeatsPerMinute.Should().BeApproximately(120.0, 0.001);
         song.TempoMap[1].BeatsPerMinute.Should().BeApproximately(125.0, 0.001);
         song.InitialBeatsPerMinute.Should().BeApproximately(120.0, 0.001);
+        song.TempoRange.Count.Should().Be(4);
+        song.TempoRange.LowestBeatsPerMinute.Should().BeApproximately(60_000_000.0 / 520_000.0, 0.001);
+        song.TempoRange.HighestBeatsPerMinute.Should().BeApproximately(125.0, 0.001);
+        song.TempoRange.ToString().Contains("BPM over 4 tempo events").Should().BeTrue();
+    }
+
+    [Fact]
+    public void Load_reports_an_empty_tempo_range_when_no_stem_has_midi()
+    {
+        //Arrange
+        using var temporary = new TemporaryFolder();
+        var folder = FakeSongStems.WriteFolder(temporary.Path);
+        foreach (var midiPath in Directory.GetFiles(folder, "*.mid"))
+        {
+            File.Delete(midiPath);
+        }
+
+        //Act
+        var song = Load(folder);
+
+        //Assert
+        song.TempoRange.Count.Should().Be(0);
+        song.TempoRange.LowestBeatsPerMinute.Should().Be(0);
+        song.TempoRange.HighestBeatsPerMinute.Should().Be(0);
+        song.TempoRange.ToString().Should().Be("No tempo events");
+        song.InitialBeatsPerMinute.Should().Be(120.0);
     }
 
     [Fact]

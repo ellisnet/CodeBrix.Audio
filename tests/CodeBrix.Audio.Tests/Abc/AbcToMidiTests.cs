@@ -912,6 +912,101 @@ public class AbcToMidiTests
         tempos[1].MicrosecondsPerQuarterNote.Should().Be(1000000);
     }
 
+    [Theory]
+    [InlineData(false, 120.0, 500000)]
+    [InlineData(true, 120.0, 500000)]
+    [InlineData(false, 150.0, 400000)]
+    public void a_body_tempo_without_a_header_tempo_starts_at_the_default_then_changes_where_written(
+        bool fieldOnOwnLine, double defaultBpm, int initialMicroseconds)
+    {
+        //Arrange - the first eight eighth notes fill one 4/4 bar, or 1920 ticks
+        string change = fieldOnOwnLine ? "\nQ:1/4=90\n" : " [Q:1/4=90] ";
+        string text = "X:1\nL:1/8\nM:4/4\nK:C\nCDEF GABc |" + change + "defg abc'd' |\n";
+        var options = new AbcToMidiOptions { DefaultBeatsPerMinute = defaultBpm };
+
+        //Act
+        var tempos = Convert(text, options)[0].OfType<TempoEvent>()
+            .OrderBy(t => t.AbsoluteTime).ToArray();
+
+        //Assert
+        tempos.Should().HaveCount(2);
+        tempos[0].AbsoluteTime.Should().Be(0);
+        tempos[0].MicrosecondsPerQuarterNote.Should().Be(initialMicroseconds);
+        tempos[1].AbsoluteTime.Should().Be(Whole);
+        tempos[1].MicrosecondsPerQuarterNote.Should().Be(666667);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("Q:1/4=60\n")]
+    public void a_body_tempo_at_tick_zero_replaces_the_header_or_default_tempo(string headerTempo)
+    {
+        //Arrange
+        string text = "X:1\nL:1/4\n" + headerTempo + "K:C\n[Q:1/4=90]C|\n";
+
+        //Act
+        var tempos = Convert(text)[0].OfType<TempoEvent>().ToArray();
+
+        //Assert - a conductor track needs only the tempo that actually takes effect at tick zero
+        tempos.Should().HaveCount(1);
+        tempos[0].AbsoluteTime.Should().Be(0);
+        tempos[0].MicrosecondsPerQuarterNote.Should().Be(666667);
+    }
+
+    [Fact]
+    public void the_last_of_two_body_tempos_at_one_tick_is_the_one_written()
+    {
+        //Arrange
+        string text = "X:1\nL:1/4\nK:C\nCDEF|[Q:1/4=90][Q:1/4=100]GABc|\n";
+
+        //Act
+        var tempos = Convert(text)[0].OfType<TempoEvent>()
+            .OrderBy(t => t.AbsoluteTime).ToArray();
+
+        //Assert
+        tempos.Should().HaveCount(2);
+        tempos[0].AbsoluteTime.Should().Be(0);
+        tempos[0].MicrosecondsPerQuarterNote.Should().Be(500000);
+        tempos[1].AbsoluteTime.Should().Be(Whole);
+        tempos[1].MicrosecondsPerQuarterNote.Should().Be(600000);
+    }
+
+    [Fact]
+    public void a_body_tempo_with_only_a_label_does_not_change_the_default()
+    {
+        //Arrange
+        string text = "X:1\nL:1/4\nK:C\nCDEF|[Q:\"Andante\"]GABc|\n";
+        var options = new AbcToMidiOptions { DefaultBeatsPerMinute = 90 };
+
+        //Act
+        var tempos = Convert(text, options)[0].OfType<TempoEvent>().ToArray();
+
+        //Assert
+        tempos.Should().HaveCount(1);
+        tempos[0].AbsoluteTime.Should().Be(0);
+        tempos[0].MicrosecondsPerQuarterNote.Should().Be(666667);
+    }
+
+    [Fact]
+    public void the_same_body_tempo_in_two_voices_is_written_once_at_its_tick()
+    {
+        //Arrange
+        string text = "X:1\nL:1/4\nK:C\nV:1\nV:2\n" +
+            "[V:1]CDEF|[Q:1/4=90]GABc|\n" +
+            "[V:2]CDEF|[Q:1/4=90]GABc|\n";
+
+        //Act
+        var tempos = Convert(text)[0].OfType<TempoEvent>()
+            .OrderBy(t => t.AbsoluteTime).ToArray();
+
+        //Assert
+        tempos.Should().HaveCount(2);
+        tempos[0].AbsoluteTime.Should().Be(0);
+        tempos[0].MicrosecondsPerQuarterNote.Should().Be(500000);
+        tempos[1].AbsoluteTime.Should().Be(Whole);
+        tempos[1].MicrosecondsPerQuarterNote.Should().Be(666667);
+    }
+
     [Fact]
     public void an_inline_unit_note_length_change_shortens_what_follows()
     {

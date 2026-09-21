@@ -157,6 +157,25 @@ public class MultiTrackPlayerLevelMatchTests
     }
 
     [Fact]
+    public void Render_auto_level_matching_skips_a_track_with_MeasureLevel_off()
+    {
+        //Arrange - the first part stays on its recording and keeps its hand-set MIDI gain
+        using var song = MultiTrackTestSong.Create();
+        using var player = MatchedPlayer(song, DarkPartials, 0.6f, parts: 2);
+        player["Part 1"].MeasureLevel = false;
+        player["Part 1"].MidiSourceGain = 0.75f;
+        player.AutoSetRelativeTrackLevels = true;
+
+        //Act
+        player.Render(44100, TimeSpan.Zero);
+
+        //Assert - the second part is still measured
+        player["Part 1"].MidiSourceGain.Should().Be(0.75f);
+        player["Part 2"].MidiSourceGain.Should().BeGreaterThan(1.0f);
+        player.LastLevelMatch.MatchedTrackCount.Should().Be(1);
+    }
+
+    [Fact]
     public void Render_does_not_measure_a_second_time_over_a_measurement_already_made()
     {
         //Arrange

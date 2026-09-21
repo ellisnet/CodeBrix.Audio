@@ -82,6 +82,13 @@ public sealed partial class SunoSong
     public IReadOnlyList<SunoTempoChange> TempoMap { get; internal set; } = [];
 
     /// <summary>
+    /// The lowest and highest BPM and the event count in <see cref="TempoMap"/>. An empty map has
+    /// a count of zero and both bounds at zero; <see cref="InitialBeatsPerMinute"/> still falls back
+    /// to 120 BPM for playback.
+    /// </summary>
+    public SunoTempoRange TempoRange => new SunoTempoRange(TempoMap);
+
+    /// <summary>
     /// The tempo the song starts at, or 120 when no stem has MIDI to say otherwise.
     /// </summary>
     public double InitialBeatsPerMinute => TempoMap.Count > 0 ? TempoMap[0].BeatsPerMinute : 120.0;

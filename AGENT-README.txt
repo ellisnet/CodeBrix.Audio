@@ -1219,7 +1219,8 @@ ABC:
   - AbcTuneBook           : the tunes one file or one piece of text held, plus
                             file-level Problems.
   - AbcTune               : one tune as the text wrote it - ReferenceNumber,
-                            Titles, Composer, Meter, UnitNoteLength, Tempo, Key,
+                            Titles, Composer, Meter, UnitNoteLength, Tempo (from
+                            the header), Key,
                             Voices, Problems. Repeats are NOT unrolled here.
   - AbcVoice / AbcBar     : a voice's bars, and what each bar holds: AbcNote,
                             AbcRest, AbcChord, AbcGraceGroup, AbcTupletGroup,
@@ -1315,7 +1316,9 @@ READING ABC NOTATION
             key, with or without "exp". V: voices, by id and name=.
     INLINE  [K:..] [M:..] [L:..] [Q:..] [V:..] inside a line, and the same fields
             on a line of their own inside the body, change the state from that
-            point on.
+            point on. A body Q: leaves the header tempo alone; when the header
+            has no Q:, playback starts at DefaultBeatsPerMinute until the body
+            change's position.
     BODY    notes C D E F G A B c d e f g a b, accidentals ^ ^^ = _ __, octave
             marks ' and , in any number and any order; lengths n, /n, n/m and the
             / and // shorthands; broken rhythm > < >> << >>> <<<; rests z, the
@@ -1443,7 +1446,7 @@ CONVERTING ABC TO A MIDI FILE (NO AUDIO NEEDED)
     var options = new AbcToMidiOptions
     {
         TicksPerQuarterNote   = 960,   // the file's resolution; 480 by default
-        DefaultBeatsPerMinute = 96,    // ONLY for a tune with no Q: field; 120 by default
+        DefaultBeatsPerMinute = 96,    // initial tempo if the header has no Q:; 120 by default
         Velocity              = 90,    // how hard every note is struck; 100 by default
     };
     options.VoiceChannels["T1"] = 4;   // the voice whose id is T1 goes on channel 4
@@ -1454,8 +1457,9 @@ CONVERTING ABC TO A MIDI FILE (NO AUDIO NEEDED)
     TicksPerQuarterNote     the resolution of the file written. Raise it when the
                             tunes carry fast tuplets and the file is going to a
                             notation program; every common tool reads 480.
-    DefaultBeatsPerMinute   a tune's own Q: field always wins; this is what a
-                            tune WITHOUT one is given.
+    DefaultBeatsPerMinute   a numeric Q: in the header wins at tick zero; this is
+                            the initial tempo when the header has none. A body Q:
+                            takes effect where it is written.
     Velocity                abc has no dynamics the reader honours, so every note
                             takes this.
     GraceNoteLength         the length of one grace note, an exact fraction of a
@@ -2414,6 +2418,8 @@ PER-TRACK CONTROLS
   MidiSourceGain  an extra linear gain applied only while the MIDI source is the
                   one being heard, so a synthesized part can be matched to the
                   recording without disturbing Gain.
+  MeasureLevel    true by default. Set false to skip this track during automatic
+                  or explicit level matching; its MidiSourceGain stays as set.
   Mute / Solo     while ANY track is soloed only soloed tracks sound; Mute wins.
   Pan             -1 left .. 0 centre .. +1 right. A BALANCE law: it attenuates
                   the far channel and leaves the near one alone, so a centred
@@ -2480,11 +2486,15 @@ MATCHING THE LEVELS
   writes the ratio into MidiSourceGain. The balance between the parts then follows
   the original recording whichever source each track is playing. Gain is never
   touched, and while the option is off nothing writes a gain you did not set.
-  It costs a full decode and a full synthesis pass per track, and then one render
-  of the matched mix - seconds, not milliseconds - so with the option on, Prepare
-  starts it on a worker and does not wait for it. LevelMeasurement is the task it
+  MeasureLevel is true on each track by default. Set it false to skip matching
+  that track, even when it has both sources; a mix-peak report still includes the
+  track on its active source. Matching costs a full decode and synthesis pass per
+  measured track, then one render of the matched mix. It takes seconds, so with
+  the option on, Prepare starts it on a worker and does not wait for it.
+  LevelMeasurement is the task it
   runs on, and awaiting that is how you know the gains are in:
 
+    player["Vocals"].MeasureLevel = false;      // keep this part on the recording
     player.AutoSetRelativeTrackLevels = true;
     player.Prepare();
     await player.LevelMeasurement;              // the gains are in when this
@@ -2699,8 +2709,12 @@ LOADING
 WHAT YOU GET
   SunoSong    Title (taken from the FILE NAMES, never from the MIDI meta, which
               the exporter mangles), Stems, AudioStems, MidiStems, Duration,
-              TempoMap, InitialBeatsPerMinute, FullMixPath, CacheFolder,
+              TempoMap, TempoRange, InitialBeatsPerMinute, FullMixPath, CacheFolder,
               Problems, Options, song["Drums"] by name, ClearCache().
+              TempoRange has LowestBeatsPerMinute, HighestBeatsPerMinute and
+              Count, and prints a short BPM range with the event count. An empty
+              map has Count 0 and both bounds 0; InitialBeatsPerMinute still
+              defaults to 120 for playback.
   SunoStem    Name, HasWav / HasMp3 / HasAudio / HasMidi, Midi (a MidiSequence),
               GmProgram, Channel, IsPercussion, NoteCount, MidiCoverage,
               UsedNotes / LowestNote / HighestNote, Duration, AudioSampleRate,

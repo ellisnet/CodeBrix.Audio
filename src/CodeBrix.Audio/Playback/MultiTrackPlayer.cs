@@ -1207,7 +1207,7 @@ public sealed partial class MultiTrackPlayer : IDisposable
 
         foreach (var track in snapshot)
         {
-            if (!track.HasAudioSource || !track.HasMidiSource)
+            if (!track.MeasureLevel || !track.HasAudioSource || !track.HasMidiSource)
             {
                 continue;
             }

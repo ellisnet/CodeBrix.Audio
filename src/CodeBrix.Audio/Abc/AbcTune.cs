@@ -34,7 +34,7 @@ public sealed class AbcTune
     /// <param name="composer">The <c>C:</c> composer, or an empty string.</param>
     /// <param name="meter">The meter in force at the start of the body.</param>
     /// <param name="unitNoteLength">The unit note length in force at the start of the body.</param>
-    /// <param name="tempo">The tempo, or <see langword="null"/> when the tune carried no <c>Q:</c>.</param>
+    /// <param name="tempo">The header tempo, or <see langword="null"/> when the header carried no <c>Q:</c>.</param>
     /// <param name="key">The key in force at the start of the body.</param>
     /// <param name="voices">The voices, in the order their ids first appeared.</param>
     /// <param name="problems">What could not be honoured.</param>
@@ -85,8 +85,9 @@ public sealed class AbcTune
     public AbcUnitNoteLength UnitNoteLength { get; }
 
     /// <summary>
-    /// The tempo, or <see langword="null"/> when the tune carried no <c>Q:</c> field. A field that
-    /// carried only a label is a tempo with no value.
+    /// The tempo from the tune header, or <see langword="null"/> when the header carried no
+    /// <c>Q:</c> field. A field that carried only a label is a tempo with no value. Changes in the
+    /// body are <see cref="AbcInlineField"/> elements at the positions where they occur.
     /// </summary>
     public AbcTempo Tempo { get; }
 

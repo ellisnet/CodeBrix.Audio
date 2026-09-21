@@ -24,7 +24,7 @@ internal sealed class AbcTuneParser
     private AbcMeter _meter = AbcMeter.Free;
     private AbcDuration _unitNoteLength = new AbcDuration(1, 8);
     private bool _unitNoteLengthWasSet;
-    private AbcTempo _tempo;
+    private AbcTempo _tempo; // The header tempo; body changes live in the bars where they occur.
     private AbcKey _key = AbcKey.CMajor;
     private AbcVoiceBuilder _currentVoice;
     private int? _headerProgram;
@@ -238,11 +238,6 @@ internal sealed class AbcTuneParser
             case 'Q':
                 {
                     var tempo = AbcFieldParser.ParseTempo(value, CurrentUnitNoteLength(), _context);
-                    if (_tempo == null)
-                    {
-                        _tempo = tempo;
-                    }
-
                     AddInline(new AbcInlineField('Q', value.Trim(), null, null, null, tempo));
                     return;
                 }

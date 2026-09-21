@@ -384,6 +384,25 @@ public class AbcReaderTests
 
     // --- inline fields -------------------------------------------------------------------------
 
+    [Theory]
+    [InlineData("CDEF|[Q:1/4=90]GABc|")]
+    [InlineData("CDEF|\nQ:1/4=90\nGABc|")]
+    public void a_body_tempo_is_an_inline_change_and_not_the_header_tempo(string body)
+    {
+        //Arrange
+        string text = "X:1\nM:4/4\nL:1/4\nK:C\n" + body + "\n";
+
+        //Act
+        var tune = ParseOne(text);
+        var change = OnlyVoice(tune).Bars.SelectMany(bar => bar.Elements)
+            .OfType<AbcInlineField>().Single();
+
+        //Assert
+        tune.Tempo.Should().BeNull();
+        change.Field.Should().Be('Q');
+        change.Tempo.QuarterNotesPerMinute.Should().Be(90.0);
+    }
+
     [Fact]
     public void an_inline_field_changes_the_state_from_that_point()
     {
