@@ -291,7 +291,7 @@ public class MultiTrackPlayerLevelMatchTests
             {
                 var name = parts == 1 ? "Part" : $"Part {i + 1}";
                 var path = song.WriteConstantWav(
-                    $"{name}.wav", recordingLevel, recordingLevel, Frames);
+                    $"{name}-{Guid.NewGuid():N}.wav", recordingLevel, recordingLevel, Frames);
 
                 var track = new AudioTrack(path, name);
                 track.SetMidiSource(
