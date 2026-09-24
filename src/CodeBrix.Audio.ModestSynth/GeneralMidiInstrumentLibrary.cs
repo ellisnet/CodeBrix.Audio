@@ -139,9 +139,19 @@ public sealed class GeneralMidiInstrumentLibrary : IInstrumentLibrary
     /// rate this package can synthesize at.
     /// </exception>
     /// <remarks>
+    /// <para>
     /// The synthesizer is PINNED: it plays that one program on every one of the sixteen channels and
     /// ignores program change and bank select, because the caller - not the music - decided what this
     /// part sounds like.
+    /// </para>
+    /// <para>
+    /// It comes back PREPARED (<see cref="GeneralMidiSynthesizer.Prepare(int)" />): the program's
+    /// oscillators are already built and its code has already run once, HERE, on the thread that
+    /// asked for it - so the first note on the audio thread builds nothing and compiles nothing.
+    /// That is what makes creation, not the first note, the moment that costs; create parts ahead
+    /// of when they have to sound, off the audio thread. The sound is exactly what an unprepared
+    /// synthesizer would have made.
+    /// </para>
     /// </remarks>
     public IMidiSynthesizer CreateSynthesizer(int program, int sampleRate)
     {
@@ -155,6 +165,10 @@ public sealed class GeneralMidiInstrumentLibrary : IInstrumentLibrary
             GeneralMidiSynthesizer.CreateForProgram(program, Settings(sampleRate));
 
         synthesizer.Adjustments.CopyFrom(Adjustments);
+
+        // AFTER the adjustments, because an adjustment's Ensemble chooses which voicing the first
+        // note plays - and that is the one worth preparing.
+        synthesizer.Prepare(program);
         return synthesizer;
     }
 
@@ -163,8 +177,15 @@ public sealed class GeneralMidiInstrumentLibrary : IInstrumentLibrary
     /// <paramref name="sampleRate" /> is not a rate this package can synthesize at.
     /// </exception>
     /// <remarks>
+    /// <para>
     /// The kit sounds on ANY channel this synthesizer is given, not only on channel 10, because a
     /// router forwards whatever channel the music used and a rendition may put the drums elsewhere.
+    /// </para>
+    /// <para>
+    /// It comes back PREPARED (<see cref="GeneralMidiSynthesizer.PreparePercussion()" />): every kit
+    /// piece's oscillators are built and every piece has been struck once on a throwaway, here on the
+    /// calling thread, so the first hit on the audio thread builds nothing and compiles nothing.
+    /// </para>
     /// </remarks>
     public IMidiSynthesizer CreatePercussionSynthesizer(int sampleRate)
     {
@@ -172,6 +193,7 @@ public sealed class GeneralMidiInstrumentLibrary : IInstrumentLibrary
             GeneralMidiSynthesizer.CreateForPercussion(Settings(sampleRate));
 
         synthesizer.Adjustments.CopyFrom(Adjustments);
+        synthesizer.PreparePercussion();
         return synthesizer;
     }
 
@@ -180,8 +202,17 @@ public sealed class GeneralMidiInstrumentLibrary : IInstrumentLibrary
     /// <paramref name="sampleRate" /> is not a rate this package can synthesize at.
     /// </exception>
     /// <remarks>
+    /// <para>
     /// This one honours program change on every channel and plays the kit on
     /// <see cref="GeneralMidi.PercussionChannel" />, which is what a General MIDI file expects.
+    /// </para>
+    /// <para>
+    /// It is NOT prepared, because nothing yet says which programs the music will choose: a program
+    /// is built at its first note, on whatever thread plays it. A host that knows - it has read the
+    /// file's program changes, or is about to send one - calls
+    /// <see cref="GeneralMidiSynthesizer.Prepare(int)" /> and
+    /// <see cref="GeneralMidiSynthesizer.PreparePercussion()" /> itself, off the audio thread.
+    /// </para>
     /// </remarks>
     public IMidiSynthesizer CreateMultiTimbralSynthesizer(int sampleRate)
     {

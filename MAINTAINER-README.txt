@@ -1100,6 +1100,39 @@ WHAT IS WHERE:
                          cached process-wide.
   GmVoice.cs             the voice itself: layers, filter, envelopes, pitch
                          envelope, LFO, unison.
+  GmProgramRuntime.cs    one voicing's oscillator POOL, shared by every voice
+                         that plays it; Prebuild is what Prepare fills it with.
+
+PREPARATION (GeneralMidiSynthesizer.Prepare / PreparePercussion) exists because
+the lazy "first notes build the oscillators" put that building, and the JIT's
+first compilation of every constructor and render method involved, on the
+AUDIO thread of a live host - measured as a four-to-six-millisecond callback at
+the first wavetable-pad note of a session. The library's per-part creators
+prepare; the constructors, CreateForProgram/CreateForPercussion and the
+multi-timbral creator do not. Three rules keep it honest, and each has a test in
+tests/CodeBrix.Audio.ModestSynth.Tests/Gm/GeneralMidiPreparationTests.cs:
+
+  P1. BIT-IDENTICAL. GmProgramRuntime.Prebuild builds whole note-sets in the
+      order GmVoice.Start rents them (layer by layer, copy by copy) from the one
+      seed counter, and stacks them so the pool pops them in that order - below
+      anything returned later. The lazy path only builds when a pool is EMPTY,
+      so it would have built exactly these objects at exactly those moments.
+      Change the rent order in GmVoice.Start or the seed draw in Build and the
+      bit-identity theory (every program and the kit, fully and partly
+      prepared) is what tells you; reversing the stack order fails 49 of them.
+  P2. THE WARM-UP NEVER TOUCHES THE REAL SYNTHESIZER. It plays on a throwaway
+      with the same settings, adjustments and choir reading and a small
+      polyphony, so the real one's voices, counters, seeds, reverb and insert
+      are exactly as new. Compiled code is per process, so a voicing warmed once
+      (keyed by the shared GmVoiceSpec and the two render-path switches) is not
+      warmed again. If a first note ever JIT-compiles something on the audio
+      thread again, extend the warm-up script - do not touch the real instance.
+  P3. PUBLISH, DON'T MUTATE. A runtime is built and prebuilt off to the side and
+      published with Interlocked.CompareExchange; the note-on path reads with
+      Volatile.Read and publishes its own lazy runtime the same way. A runtime
+      that has been published is never prebuilt into, which is what makes
+      Prepare idempotent and safe on a worker thread while the audio thread
+      plays.
 
 A ROW STATES ONLY ITS DIFFERENCES. Every field is optional - a double left at
 double.NaN, an enum left at its zero and a null layer all mean "keep what the

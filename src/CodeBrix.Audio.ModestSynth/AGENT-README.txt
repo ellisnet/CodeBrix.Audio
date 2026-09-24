@@ -289,6 +289,9 @@ the file's own program changes choosing the instruments.
   void ProcessMidiMessage(channel, command, data1, data2)      WIRE channel 0-15
   void Reset()
   void Render(Span<float> left, Span<float> right)
+  void Prepare(program) / Prepare(program, voices)     build + warm, OFF the
+  void PreparePercussion() / PreparePercussion(voicesPerPiece)   audio thread
+  const DefaultPreparedVoices (16) / DefaultPreparedPercussionVoices (4)
 
   WHAT IT ANSWERS. Note on and note off with velocity; program change; pitch
   bend, over a range RPN 0 (CC 101/100 then CC 6/38) can widen; and the
@@ -323,6 +326,54 @@ the file's own program changes choosing the instruments.
       This synthesizer is pinned to one voicing and plays it on every channel,
       so its program cannot be changed. Build a multi-timbral
       GeneralMidiSynthesizer when the program has to move.
+
+  AUDIO-THREAD DISCIPLINE: PREPARE BEFORE YOU PLAY. Left to itself, the FIRST
+  notes of a program build that program's oscillators and run its code for the
+  first time - on whatever thread played them, which in a live host is the
+  AUDIO thread, and "the first time" is when the JIT compiles it. Measured in a
+  live session, the first wavetable-pad note of the process put its oscillators'
+  construction and nineteen first-time compilations into one audio callback and
+  took that callback from under a millisecond to four to six: a tick, once.
+
+    synthesizer.Prepare(program);        // on the thread that CREATES it
+    kit.PreparePercussion();
+
+  Prepare builds DefaultPreparedVoices (16) notes' worth of the program's
+  oscillators and plays a short SILENT warm-up of the program on a THROWAWAY
+  synthesizer with the same settings and adjustments - a note, a chord that
+  steals, the sustain pedal, the release, the panic controllers - so every code
+  path a first note takes is compiled before the audio thread needs it.
+  PreparePercussion does the same for all 47 kit pieces (4 strikes' worth each).
+  Measured: the first callback after preparation allocates nothing and
+  compiles nothing, where an unprepared one compiled well over a hundred
+  methods.
+
+    * THE LIBRARY DOES IT FOR YOU. GeneralMidiInstrumentLibrary's
+      CreateSynthesizer(program, rate) and CreatePercussionSynthesizer(rate)
+      hand back synthesizers ALREADY PREPARED, so creation - not the first
+      note - is the moment that costs. Create parts ahead of when they must
+      sound, off the audio thread. CreateMultiTimbralSynthesizer is NOT
+      prepared (nothing says yet which programs the music will choose), and
+      neither are CreateForProgram, CreateForPercussion and the constructors -
+      call Prepare yourself.
+    * IT CHANGES NO SAMPLE. It builds the very oscillators the first notes would
+      have built, with the same seeds, handed out in the same order, and the
+      warm-up never touches the synthesizer being prepared. A test holds every
+      program and the kit to a bit-identical render.
+    * IDEMPOTENT. A program already prepared, or already played, is left
+      exactly as it is. The warm-up runs once per voicing per process, because
+      compiled code is shared by every instance.
+    * IT PREPARES THE VOICING THE NEXT NOTE WILL USE, so set an adjustment's
+      Ensemble before calling it.
+    * THE ONE CALL THAT MAY OVERLAP RENDERING. A multi-timbral host about to
+      change a channel's program may Prepare the new program on a worker thread
+      while the audio thread keeps playing that synthesizer: it is built off to
+      the side and published in one atomic step, and if the audio thread gets
+      there first the prepared copy is dropped and the sound is unchanged.
+    * A 17th simultaneous note of one program, a 5th overlapping strike of one
+      kit piece, and a program change's insert effect on a multi-timbral
+      synthesizer are still built when they first happen. Prepare(program,
+      voices) builds more when a part needs it.
 
   THE CHANNEL NUMBERING PITFALL. Every member here that takes a channel counts
   1 to 16, the way MidiEvent.Channel and GeneralMidi.PercussionChannel do -
@@ -535,7 +586,9 @@ seen and lowered.
   RENDERING ALLOCATES NOTHING. The first few notes of a program build that
   program's oscillators, which are then recycled for ever, and a program change
   may build an insert effect; after that neither the MIDI path nor the render
-  path allocates. One voice pool serves all sixteen channels, so sixteen parts
+  path allocates. A PREPARED program (see AUDIO-THREAD DISCIPLINE above, and
+  the library's per-part creators, which prepare) has built them already, so
+  even its first note allocates nothing. One voice pool serves all sixteen channels, so sixteen parts
   do not mean sixteen allocators and the polyphony limit means what it says.
 
   Nothing here is thread-safe: MIDI events and rendering must not overlap, which
@@ -1833,6 +1886,12 @@ COMMON PITFALLS
     throws rather than silently doing nothing. Check IsPinned, or build a plain
     multi-timbral GeneralMidiSynthesizer when the program has to move.
 
+  * AN UNPREPARED PROGRAM BUILDS AND COMPILES ON ITS FIRST NOTE - ON THE AUDIO
+    THREAD, IN A LIVE HOST. The library's CreateSynthesizer and
+    CreatePercussionSynthesizer prepare for you; CreateForProgram,
+    CreateForPercussion, the constructors and CreateMultiTimbralSynthesizer do
+    not. Call Prepare(program) / PreparePercussion() on the creating thread.
+
   * A CC 91 SENT UNDER A HELD NOTE DOES NOT RE-WET THAT NOTE. The reverb and
     chorus sends are settled PER VOICE when a note STARTS, which is what lets
     one drum part have a dry kick beside a wet snare. A file that automates its
@@ -2032,7 +2091,10 @@ QUICK REFERENCE
     arrangement             library.CreatePercussionSynthesizer(44100)
                             GeneralMidiSynthesizer.CreateForProgram(program, 44100)
                             GeneralMidiSynthesizer.CreateForPercussion(44100)
-                            // all pinned: they ignore program change
+                            // all pinned: they ignore program change;
+                            // the library's two come back PREPARED
+  Build + warm a program    synthesizer.Prepare(program)
+    off the audio thread    synthesizer.PreparePercussion()
   The whole piece, one      library.CreateMultiTimbralSynthesizer(44100)
     synthesizer
   Voice a channel yourself  synthesizer.SetProgram(channel, program)   // 1-16

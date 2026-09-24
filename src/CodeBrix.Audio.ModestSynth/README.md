@@ -53,6 +53,7 @@ There is nothing else to add - no native-asset package, and no platform-specific
 * `ModestSynthPresets` - six worked example patches with the envelope settings that go with them: a sub sine, a saw lead, a plucked string, an FM electric piano, a wavetable pad on a table built in code, and an additive organ
 * `GeneralMidiSynthesizer` - a multi-timbral General MIDI synthesizer that plays a `.mid` with no configuration at all: sixteen channels each on one of the 128 programs, the percussion kit on channel 10 with its own layout and its choke groups, the file's own program changes choosing the instruments, and the controllers General MIDI files actually send. Its voice has a filter with its own envelope, exponential envelopes, up to three layers, a pitch envelope, a delayed LFO, velocity and key scaling, a stereo unison, per-program insert effects and reverb and chorus send buses on CC 91 and CC 93. Rendering allocates nothing, so it can share a machine with a game's own work
 * `GeneralMidiInstrumentLibrary` - the same sound set offered to CodeBrix.Audio's instrument registry under the name `ModestSynthGm`, in both shapes: one synthesizer per part, pinned to its program so a program change cannot re-voice it, or one multi-timbral synthesizer for a whole piece. Registration is one idempotent call and is always the consumer's, never a module initializer
+* Audio-thread discipline for live hosts: `Prepare(program)` and `PreparePercussion()` build a program's or the kit's oscillators and run its code once on the thread that creates the synthesizer, so the first note on the audio thread builds nothing, allocates nothing and waits on no compiler. The library's per-part creators hand back synthesizers already prepared, and preparing changes no sample of the sound
 * A bank that is complete and honest: every one of the 128 programs and every percussion note is a deliberate voicing, nothing falls back to another program, and there is not one recorded sample in it — so it sounds like a good synthesizer rather than like sampled instruments, strongest on pads, bells, celesta, vibraphone, electric pianos, organs, plucked strings, choir textures, string ensembles and synth leads and basses, and an honest best on a concert piano or a solo bowed string. For recorded instruments, name a SoundFont library or swap voices in one at a time through CodeBrix.Audio's mapped instrument library
 * Seven per-program adjustments — level, brightness, attack, release, vibrato depth, reverb send and pan — as the supported way to change how a program sounds, set per synthesizer or once on the library for everything it creates afterwards, with the kit adjustable as a whole or a drum at a time. The bank's own voicing tables stay internal, so a later revoicing costs no API change
 * Effects that answer to both the attribute names and the `FX_*` binding names the format uses, matched without regard to case or punctuation, so a knob wired either way reaches the same parameter
@@ -250,6 +251,10 @@ synth.Adjustments.Program(GeneralMidiProgram.Celesta).Brightness = -0.8;
 // One part of a voiced arrangement: pinned to its program, on any channel.
 var flute = GeneralMidiSynthesizer.CreateForProgram((int)GeneralMidiProgram.Flute, 44100);
 var kit = GeneralMidiSynthesizer.CreateForPercussion(44100);
+
+// Live: build and warm them here, off the audio thread (the library's creators already do).
+flute.Prepare((int)GeneralMidiProgram.Flute);
+kit.PreparePercussion();
 ```
 
 The file's own program changes choose the instruments and channel 10 is the drum kit, so a

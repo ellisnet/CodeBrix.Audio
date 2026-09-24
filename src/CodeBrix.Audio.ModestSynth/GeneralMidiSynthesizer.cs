@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
 using CodeBrix.Audio.Midi;
 using CodeBrix.Audio.ModestSynth.Effects;
 using CodeBrix.Audio.ModestSynth.Internal.Gm;
@@ -55,10 +57,25 @@ namespace CodeBrix.Audio.ModestSynth;
 /// that quietly changed its own level would make a rendition impossible to balance.
 /// </para>
 /// <para>
-/// Rendering allocates nothing. The first few notes of each program build that program's oscillators,
-/// which are then recycled forever; a program change may build an insert effect. Nothing here is
-/// thread-safe: MIDI events and rendering must not overlap, which is the contract every synthesizer
-/// in this family follows.
+/// Rendering allocates nothing. Left to itself, the first few notes of each program build that
+/// program's oscillators, which are then recycled forever; a program change may build an insert
+/// effect. Nothing here is thread-safe: MIDI events and rendering must not overlap, which is the
+/// contract every synthesizer in this family follows - with the one exception
+/// <see cref="Prepare(int)" /> documents.
+/// </para>
+/// <para>
+/// AUDIO-THREAD DISCIPLINE: PREPARE BEFORE YOU PLAY. "The first notes build the oscillators" means
+/// the first notes of a program build them ON WHATEVER THREAD PLAYED THOSE NOTES - in a live host,
+/// the audio thread - and run every constructor and every render method of that program's
+/// oscillators for the first time there, which is where the JIT compiles them. Measured in a live
+/// session, the first wavetable note of the process put nineteen first-time compilations and the
+/// oscillators' construction into one audio callback and took it from under a millisecond to six.
+/// <see cref="Prepare(int)" /> and <see cref="PreparePercussion()" /> do all of that on the calling
+/// thread instead: they build the program's (or the kit's) oscillators and play a short silent
+/// warm-up on a throwaway synthesizer, so the first real note builds nothing and compiles nothing.
+/// <see cref="GeneralMidiInstrumentLibrary" /> calls them for you when it creates a synthesizer for a
+/// program or for the kit. PREPARING CHANGES NO SAMPLE: it builds the very objects the first notes
+/// would have built, with the same seeds, handed out in the same order.
 /// </para>
 /// </remarks>
 /// <example>
@@ -83,6 +100,30 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
 
     /// <summary><see cref="PinnedProgram" /> when the synthesizer is pinned to the percussion kit.</summary>
     public const int PinnedToPercussion = -2;
+
+    /// <summary>
+    /// How many notes' worth of oscillators <see cref="Prepare(int)" /> builds for a program when it
+    /// is not told: sixteen, or the polyphony if that is lower.
+    /// </summary>
+    /// <remarks>
+    /// Sixteen notes of one program sounding at once - a held pad under a moving part, a sustained
+    /// piano passage - is more than generated music asks of one part, and it costs little: the
+    /// dearest program in the bank builds sixteen notes in well under a millisecond once its code is
+    /// compiled. A seventeenth simultaneous note still works; it builds its own oscillators the way
+    /// every note did before preparation existed.
+    /// </remarks>
+    public const int DefaultPreparedVoices = 16;
+
+    /// <summary>
+    /// How many strikes' worth of oscillators <see cref="PreparePercussion()" /> builds for each kit
+    /// piece when it is not told: four, or the polyphony if that is lower.
+    /// </summary>
+    /// <remarks>
+    /// A kit piece is a one-shot, so how many of one piece overlap is how many strikes land inside
+    /// its decay: a sixteenth-note hi-hat or a snare roll reaches three or four, a crash cymbal's
+    /// long tail two or three.
+    /// </remarks>
+    public const int DefaultPreparedPercussionVoices = 4;
 
     private const int PercussionWireChannel = GeneralMidi.PercussionChannel - 1;
     private const int PercussionRuntimeCount =
@@ -328,6 +369,122 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
             {
                 largerSectionRuntimes[index] = null;
             }
+        }
+    }
+
+    /// <summary>
+    /// Builds everything a program needs to sound, and runs its code once, NOW - on the calling
+    /// thread rather than on the audio thread at its first note.
+    /// </summary>
+    /// <param name="program">The General MIDI program, 0 to 127.</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="program" /> is outside 0 to 127.</exception>
+    /// <remarks>
+    /// <para>
+    /// It builds <see cref="DefaultPreparedVoices" /> notes' worth of the program's oscillators and
+    /// plays a short, silent warm-up of the program on a THROWAWAY synthesizer with the same
+    /// settings, so the program's note-on, voice, oscillator, filter and insert-effect code has all
+    /// been compiled before the audio thread first needs it. This synthesizer's own state is not
+    /// touched by the warm-up: no voice starts, no counter moves, and the render afterwards is
+    /// bit-identical to one from a synthesizer that was never prepared. The warm-up runs once per
+    /// voicing per process, because compiled code is shared by every instance.
+    /// </para>
+    /// <para>
+    /// It prepares the voicing the program's NEXT NOTE would use, so set
+    /// <see cref="GeneralMidiAdjustment.Ensemble" /> in <see cref="Adjustments" /> first if you use
+    /// it. It is idempotent: a program that has already been prepared, or has already played, is
+    /// left exactly as it is.
+    /// </para>
+    /// <para>
+    /// THE ONE THING HERE THAT MAY OVERLAP RENDERING. A multi-timbral host that is about to change a
+    /// channel's program can prepare the new program on a worker thread while the audio thread goes
+    /// on playing this synthesizer: everything is built off to the side and published in one atomic
+    /// step, and if the audio thread gets to the program first, the prepared copy is discarded and
+    /// the program plays exactly as it would have. Everything else still must not overlap rendering.
+    /// </para>
+    /// </remarks>
+    public void Prepare(int program) => Prepare(program, DefaultPreparedVoices);
+
+    /// <summary>
+    /// Builds everything a program needs for a given number of simultaneous notes, and runs its code
+    /// once, now.
+    /// </summary>
+    /// <param name="program">The General MIDI program, 0 to 127.</param>
+    /// <param name="voices">
+    /// How many simultaneous notes of this program to build oscillators for. Capped at
+    /// <see cref="MaximumPolyphony" />; zero builds none and only warms the code.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="program" /> is outside 0 to 127, or <paramref name="voices" /> is negative.
+    /// </exception>
+    /// <remarks>Everything <see cref="Prepare(int)" /> says applies.</remarks>
+    public void Prepare(int program, int voices)
+    {
+        if (program < 0 || program >= GeneralMidi.ProgramCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(program), program,
+                "A General MIDI program is 0 to 127.");
+        }
+
+        if (voices < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(voices), voices,
+                "The number of voices to prepare cannot be negative.");
+        }
+
+        GmProgramRuntime runtime = ProgramRuntime(program, Adjustments.EnsembleFor(program), voices);
+
+        if (NeedsWarmUp(runtime.Spec))
+        {
+            WarmUpProgram(program);
+            MarkWarm(runtime.Spec);
+        }
+    }
+
+    /// <summary>
+    /// Builds everything the percussion kit needs to sound, and runs its code once, NOW - on the
+    /// calling thread rather than on the audio thread at the first drum hit.
+    /// </summary>
+    /// <remarks>
+    /// It builds <see cref="DefaultPreparedPercussionVoices" /> strikes' worth of oscillators for
+    /// EVERY one of the 47 kit pieces, and strikes each piece once on a throwaway synthesizer so
+    /// the whole kit's code is compiled. Everything <see cref="Prepare(int)" /> says about leaving
+    /// the sound unchanged, idempotence and preparing on a worker thread applies here too.
+    /// </remarks>
+    public void PreparePercussion() => PreparePercussion(DefaultPreparedPercussionVoices);
+
+    /// <summary>
+    /// Builds everything the percussion kit needs for a given number of overlapping strikes of each
+    /// piece, and runs its code once, now.
+    /// </summary>
+    /// <param name="voicesPerPiece">
+    /// How many overlapping strikes of each kit piece to build oscillators for. Capped at
+    /// <see cref="MaximumPolyphony" />; zero builds none and only warms the code.
+    /// </param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="voicesPerPiece" /> is negative.</exception>
+    /// <remarks>Everything <see cref="PreparePercussion()" /> says applies.</remarks>
+    public void PreparePercussion(int voicesPerPiece)
+    {
+        if (voicesPerPiece < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(voicesPerPiece), voicesPerPiece,
+                "The number of voices to prepare cannot be negative.");
+        }
+
+        bool cold = false;
+
+        for (int note = GeneralMidi.LowestPercussionNote; note <= GeneralMidi.HighestPercussionNote; note++)
+        {
+            GmProgramRuntime runtime = PercussionRuntime(note, voicesPerPiece);
+            if (NeedsWarmUp(runtime.Spec)) { cold = true; }
+        }
+
+        if (!cold) { return; }
+
+        WarmUpPercussion();
+
+        for (int note = GeneralMidi.LowestPercussionNote; note <= GeneralMidi.HighestPercussionNote; note++)
+        {
+            MarkWarm(PercussionRuntime(note, 0).Spec);
         }
     }
 
@@ -890,7 +1047,13 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
         return quietestReleased ?? oldest;
     }
 
-    private GmProgramRuntime ProgramRuntime(int program, GeneralMidiEnsemble ensemble)
+    private GmProgramRuntime ProgramRuntime(int program, GeneralMidiEnsemble ensemble) =>
+        ProgramRuntime(program, ensemble, 0);
+
+    // The runtime a note of this program plays from, built if nothing has built it yet. prebuild is
+    // how many notes' worth of oscillators to build along with it - zero on the note-on path, which
+    // is exactly the lazy behaviour this synthesizer has always had.
+    private GmProgramRuntime ProgramRuntime(int program, GeneralMidiEnsemble ensemble, int prebuild)
     {
         // A program that has no larger section to offer takes the ordinary path whatever was asked
         // for, so the SAME runtime object is used either way and Full cannot change its sound.
@@ -899,49 +1062,246 @@ public sealed class GeneralMidiSynthesizer : IMidiSynthesizer
             choirVoicing != GmChoirRows.LargerSection)
         {
             int index = GmChoirRows.ChoirIndex(program);
-            GmProgramRuntime larger = largerSectionRuntimes[index];
 
-            if (larger == null)
-            {
-                larger = new GmProgramRuntime(
-                    GmBank.Program(program, GmChoirRows.LargerSection), settings.SampleRate,
-                    voices.Length, Seed(program));
-
-                largerSectionRuntimes[index] = larger;
-            }
-
-            return larger;
+            return Volatile.Read(ref largerSectionRuntimes[index])
+                ?? Publish(ref largerSectionRuntimes[index],
+                    GmBank.Program(program, GmChoirRows.LargerSection), Seed(program), prebuild);
         }
 
-        GmProgramRuntime runtime = programRuntimes[program];
-
-        if (runtime == null)
-        {
-            runtime = new GmProgramRuntime(
-                GmBank.Program(program, choirVoicing), settings.SampleRate, voices.Length,
-                Seed(program));
-
-            programRuntimes[program] = runtime;
-        }
-
-        return runtime;
+        return Volatile.Read(ref programRuntimes[program])
+            ?? Publish(ref programRuntimes[program],
+                GmBank.Program(program, choirVoicing), Seed(program), prebuild);
     }
 
-    private GmProgramRuntime PercussionRuntime(int noteNumber)
+    private GmProgramRuntime PercussionRuntime(int noteNumber) => PercussionRuntime(noteNumber, 0);
+
+    private GmProgramRuntime PercussionRuntime(int noteNumber, int prebuild)
     {
         int index = noteNumber - GeneralMidi.LowestPercussionNote;
-        GmProgramRuntime runtime = percussionRuntimes[index];
 
-        if (runtime == null)
+        return Volatile.Read(ref percussionRuntimes[index])
+            ?? Publish(ref percussionRuntimes[index],
+                GmBank.PercussionNote(noteNumber), Seed(1000 + noteNumber), prebuild);
+    }
+
+    // Builds a runtime OFF TO THE SIDE - prebuilt, when asked - and publishes it in one atomic step.
+    // Whoever publishes first wins and the other copy is simply dropped; both copies are fresh
+    // runtimes of the same voicing with the same seed, so which one wins cannot change the sound.
+    // That is what lets Prepare run on a worker thread while the audio thread plays.
+    private GmProgramRuntime Publish(ref GmProgramRuntime slot, GmVoiceSpec spec, uint seed, int prebuild)
+    {
+        GmProgramRuntime fresh = new GmProgramRuntime(spec, settings.SampleRate, voices.Length, seed);
+        fresh.Prebuild(prebuild);
+
+        return Interlocked.CompareExchange(ref slot, fresh, null) ?? fresh;
+    }
+
+    // ---------------------------------------------------------------------------------- warm-up
+    //
+    // The JIT compiles a method the first time it RUNS, and nothing short of running it does the
+    // whole job (a note-on reaches oscillator types, filter modes and effect paths through interface
+    // calls and data, not through anything a list of methods could name). So the warm-up PLAYS the
+    // voicing - a note, a few blocks, the release, a choke and the silence after it - on a THROWAWAY
+    // synthesizer with this one's settings and adjustments. The real synthesizer is never touched,
+    // which is what keeps its first real note bit-identical; the throwaway's small polyphony keeps
+    // the warm-up cheap. Compiled code belongs to the process, so a voicing warmed once is warm for
+    // every synthesizer after it: the record of what has been warmed is static, keyed by the shared,
+    // immutable voicing and by the two settings that switch whole render paths on and off.
+
+    private const int WarmUpPolyphony = 4;
+    private const int WarmUpHeldBlocks = 8;
+    private const int WarmUpReleaseBlocks = 8;
+    private const int WarmUpMaximumTailBlocks = 256;
+    private const int WarmUpKey = 60;
+    private const int WarmUpVelocity = 100;
+    private static readonly int[] WarmUpChord = [64, 67, 72, 76];
+
+    private static readonly object WarmGate = new object();
+    private static readonly HashSet<GmVoiceSpec>[] WarmSpecs =
+    [
+        new HashSet<GmVoiceSpec>(), new HashSet<GmVoiceSpec>(),
+        new HashSet<GmVoiceSpec>(), new HashSet<GmVoiceSpec>(),
+    ];
+
+    // Tests turn this off to prove that preparation without a warm-up is still bit-identical, and
+    // on to prove it with one. It is internal, per instance, and read only by Prepare.
+    internal bool WarmUpEnabled { get; set; } = true;
+
+    // Tests call it so that a warm-up really runs, rather than being skipped because another test
+    // in the same process already warmed that voicing. Forgetting only costs a repeated warm-up.
+    internal static void ForgetWarmUps()
+    {
+        lock (WarmGate)
         {
-            runtime = new GmProgramRuntime(
-                GmBank.PercussionNote(noteNumber), settings.SampleRate, voices.Length,
-                Seed(1000 + noteNumber));
+            for (int i = 0; i < WarmSpecs.Length; i++) { WarmSpecs[i].Clear(); }
+        }
+    }
 
-            percussionRuntimes[index] = runtime;
+    // Tests read it: whether a program's runtime exists, and how much of it is waiting in its pool.
+    internal GmProgramRuntime PreparedRuntime(int program) =>
+        Volatile.Read(ref programRuntimes[program]);
+
+    internal GmProgramRuntime PreparedPercussionRuntime(int noteNumber) =>
+        Volatile.Read(ref percussionRuntimes[noteNumber - GeneralMidi.LowestPercussionNote]);
+
+    private int WarmIndex =>
+        (settings.EnableReverbAndChorus ? 1 : 0) + (settings.EnableInsertEffects ? 2 : 0);
+
+    private bool NeedsWarmUp(GmVoiceSpec spec)
+    {
+        if (!WarmUpEnabled) { return false; }
+
+        lock (WarmGate) { return !WarmSpecs[WarmIndex].Contains(spec); }
+    }
+
+    private void MarkWarm(GmVoiceSpec spec)
+    {
+        lock (WarmGate) { WarmSpecs[WarmIndex].Add(spec); }
+    }
+
+    // A throwaway with this synthesizer's settings, adjustments and choir reading, so it plays the
+    // very voicing this one will - through the same channel, insert and send code.
+    private GeneralMidiSynthesizer WarmUpSynthesizer(int pinned)
+    {
+        GeneralMidiSynthesizerSettings warmSettings = settings.Clone();
+        warmSettings.MaximumPolyphony =
+            warmSettings.MaximumPolyphony < WarmUpPolyphony ? warmSettings.MaximumPolyphony : WarmUpPolyphony;
+
+        GeneralMidiSynthesizer throwaway = new GeneralMidiSynthesizer(warmSettings, pinned);
+        throwaway.Adjustments.CopyFrom(Adjustments);
+        throwaway.ChoirVoicing = choirVoicing;
+        throwaway.WarmUpEnabled = false;
+        return throwaway;
+    }
+
+    private void WarmUpProgram(int program)
+    {
+        GeneralMidiSynthesizer throwaway = WarmUpSynthesizer(program);
+        float[] left = new float[blockSize];
+        float[] right = new float[blockSize];
+
+        // Everything goes through the wire path a sequencer or a router uses.
+        WarmUpControllers(throwaway, 0);
+
+        throwaway.ProcessMidiMessage(0, 0x90, WarmUpKey, WarmUpVelocity);
+        RenderBlocks(throwaway, left, right, WarmUpHeldBlocks);
+
+        // Now the sends, so the chord takes the other branch; and more notes than the throwaway has
+        // voices, so it runs the voice-stealing path too.
+        WarmUpSends(throwaway, 0);
+
+        for (int i = 0; i < WarmUpChord.Length; i++)
+        {
+            throwaway.ProcessMidiMessage(0, 0x90, WarmUpChord[i], WarmUpVelocity);
         }
 
-        return runtime;
+        RenderBlocks(throwaway, left, right, 2);
+
+        // Key-up under the pedal, then the pedal up: the sustain path and the release.
+        throwaway.ProcessMidiMessage(0, 0xB0, 64, 127);
+        throwaway.ProcessMidiMessage(0, 0x80, WarmUpKey, 0);
+
+        for (int i = 0; i < WarmUpChord.Length; i++)
+        {
+            throwaway.ProcessMidiMessage(0, 0x80, WarmUpChord[i], 0);
+        }
+
+        RenderBlocks(throwaway, left, right, 2);
+        throwaway.ProcessMidiMessage(0, 0xB0, 64, 0);
+        RenderBlocks(throwaway, left, right, WarmUpReleaseBlocks);
+
+        WarmUpEnding(throwaway, 0, left, right);
+    }
+
+    private void WarmUpPercussion()
+    {
+        GeneralMidiSynthesizer throwaway = WarmUpSynthesizer(PinnedToPercussion);
+        float[] left = new float[blockSize];
+        float[] right = new float[blockSize];
+
+        WarmUpControllers(throwaway, PercussionWireChannel);
+
+        // Every piece, one block apart. With only a few voices this steals as it goes, and the
+        // neighbouring hi-hats, whistles, guiros, cuicas and triangles cut each other off, so the
+        // stealing and the exclusive-group paths run as well as every piece's own sound.
+        for (int note = GeneralMidi.LowestPercussionNote; note <= GeneralMidi.HighestPercussionNote; note++)
+        {
+            throwaway.ProcessMidiMessage(PercussionWireChannel, 0x90, note, WarmUpVelocity);
+            RenderBlocks(throwaway, left, right, 1);
+
+            if (note == GeneralMidi.LowestPercussionNote) { WarmUpSends(throwaway, PercussionWireChannel); }
+        }
+
+        // A kit piece ignores note-off, which is a path of its own.
+        for (int note = GeneralMidi.LowestPercussionNote; note <= GeneralMidi.HighestPercussionNote; note++)
+        {
+            throwaway.ProcessMidiMessage(PercussionWireChannel, 0x80, note, 0);
+        }
+
+        RenderBlocks(throwaway, left, right, 2);
+
+        WarmUpEnding(throwaway, PercussionWireChannel, left, right);
+    }
+
+    // The controllers music and routers actually send, so the first CC 7 or pitch bend on the audio
+    // thread is not the first one in the process either. The reverb and chorus sends are NOT among
+    // them: sent before the first note they would take that note down the "the music said so"
+    // branch, and an ordinary first note takes the other one.
+    private static void WarmUpControllers(GeneralMidiSynthesizer throwaway, int channel)
+    {
+        throwaway.ProcessMidiMessage(channel, 0xB0, 0, 0);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 32, 0);
+        throwaway.ProcessMidiMessage(channel, 0xC0, 0, 0);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 7, 100);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 10, 64);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 11, 127);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 1, 0);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 101, 0);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 100, 0);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 6, 2);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 38, 0);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 101, 127);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 100, 127);
+        throwaway.ProcessMidiMessage(channel, 0xE0, 0, 64);
+    }
+
+    private static void WarmUpSends(GeneralMidiSynthesizer throwaway, int channel)
+    {
+        throwaway.ProcessMidiMessage(channel, 0xB0, 91, 40);
+        throwaway.ProcessMidiMessage(channel, 0xB0, 93, 10);
+    }
+
+    // All notes off, the panic controllers, a choke, the silence after it and a controller reset:
+    // what a seam, a stop or a router's own reset sends.
+    private static void WarmUpEnding(GeneralMidiSynthesizer throwaway, int channel, float[] left, float[] right)
+    {
+        throwaway.ProcessMidiMessage(channel, 0xB0, 123, 0);
+        RenderBlocks(throwaway, left, right, 1);
+
+        throwaway.ProcessMidiMessage(channel, 0xB0, 120, 0);
+        throwaway.NoteOffAll(immediate: false);
+        throwaway.NoteOffAll(immediate: true);
+        RenderUntilSilent(throwaway, left, right);
+
+        throwaway.ProcessMidiMessage(channel, 0xB0, 121, 0);
+        throwaway.Reset();
+        RenderBlocks(throwaway, left, right, 1);
+    }
+
+    private static void RenderBlocks(GeneralMidiSynthesizer synthesizer, float[] left, float[] right, int blocks)
+    {
+        for (int i = 0; i < blocks; i++) { synthesizer.Render(left, right); }
+    }
+
+    private static void RenderUntilSilent(GeneralMidiSynthesizer synthesizer, float[] left, float[] right)
+    {
+        // One more block after the last voice stops, so the render of an EMPTY channel is warm too.
+        for (int i = 0; i < WarmUpMaximumTailBlocks && synthesizer.ActiveVoiceCount > 0; i++)
+        {
+            synthesizer.Render(left, right);
+        }
+
+        synthesizer.Render(left, right);
     }
 
     private uint Seed(int salt)

@@ -636,27 +636,15 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
 
         EnsureScratch(frames);
 
-        foreach (var route in AllRoutes())
+        // THE AUDIO THREAD ALLOCATES NOTHING. The routing table is walked by index here rather than
+        // through AllRoutes(): that method is a `yield` iterator, and every call to it allocates an
+        // enumerator object. On this path that was one allocation per audio callback - about 2 MB of
+        // garbage per 45 s of playback - which is a garbage collection waiting to happen in the one
+        // place a collection is audible.
+        for (var channel = 0; channel < ChannelCount; channel++)
         {
-            var synthesizer = route.Synthesizer;
-
-            if (synthesizer == null)
-            {
-                continue;
-            }
-
-            var scratchL = scratchLeft.AsSpan(0, frames);
-            var scratchR = scratchRight.AsSpan(0, frames);
-
-            synthesizer.Render(scratchL, scratchR);
-
-            var gain = route.Gain;
-
-            for (var index = 0; index < frames; index++)
-            {
-                left[index] += gain * scratchL[index];
-                right[index] += gain * scratchR[index];
-            }
+            RenderRoute(routes[channel], left, right, frames);
+            RenderRoute(layers[channel], left, right, frames);
         }
 
         RenderRetired(left, right, frames);
@@ -670,6 +658,37 @@ public sealed class RoutingSynthesizer : IMidiSynthesizer
         {
             left[index] *= masterVolume;
             right[index] *= masterVolume;
+        }
+    }
+
+    // Renders one route (a channel's synthesizer or its layer) into the scratch buffers and mixes it
+    // in at the route's gain. An empty slot, or a route whose synthesizer has not been made yet, is
+    // silent and costs nothing.
+    private void RenderRoute(Route route, Span<float> left, Span<float> right, int frames)
+    {
+        if (route == null)
+        {
+            return;
+        }
+
+        var synthesizer = route.Synthesizer;
+
+        if (synthesizer == null)
+        {
+            return;
+        }
+
+        var scratchL = scratchLeft.AsSpan(0, frames);
+        var scratchR = scratchRight.AsSpan(0, frames);
+
+        synthesizer.Render(scratchL, scratchR);
+
+        var gain = route.Gain;
+
+        for (var index = 0; index < frames; index++)
+        {
+            left[index] += gain * scratchL[index];
+            right[index] += gain * scratchR[index];
         }
     }
 

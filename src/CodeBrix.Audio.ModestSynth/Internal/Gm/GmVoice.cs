@@ -14,7 +14,10 @@ namespace CodeBrix.Audio.ModestSynth.Internal.Gm;
 // A voice belongs to the SHARED pool and plays whichever voicing it was started with, borrowing that
 // voicing's oscillators from its GmProgramRuntime. Everything a render needs is allocated when the
 // voice is built, so rendering allocates nothing; the only thing that ever allocates is the first
-// few notes of a voicing, building the oscillators its pool then recycles forever.
+// few notes of a voicing, building the oscillators its pool then recycles forever - and not even
+// those when the voicing was PREPARED (GeneralMidiSynthesizer.Prepare), which builds them at
+// creation instead. The order this method rents oscillators in is what preparation reproduces to
+// stay bit-identical, so change it only together with GmProgramRuntime.Prebuild.
 internal sealed class GmVoice
 {
     private const double CentsPerSemitone = 100.0;

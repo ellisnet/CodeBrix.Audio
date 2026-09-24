@@ -1107,4 +1107,46 @@ public class RoutingSynthesizerTests
         router.Render(left, right);
         return (left, right);
     }
+
+    // ----- the audio thread allocates nothing -----
+
+    [Fact]
+    public void Render_allocates_nothing_once_it_is_warm()
+    {
+        //Arrange
+        // A managed allocation on the audio thread is a garbage collection waiting to happen. The
+        // routing table used to be walked through a `yield` iterator on this path, which allocated
+        // an enumerator on every callback. Sixteen channels and a layer each make the walk as long
+        // as it gets; the children render a flat level and allocate nothing themselves.
+        var router = new RoutingSynthesizer(Rate);
+        for (var channel = 1; channel <= 16; channel++)
+        {
+            router.SetChannel(channel, new RecordingSynthesizer { Level = 0.1F }, 0.5F);
+            router.SetLayer(channel, new RecordingSynthesizer { Level = 0.1F }, 0.25F);
+        }
+        var left = new float[512];
+        var right = new float[512];
+        for (var i = 0; i < 8; i++)
+        {
+            router.Render(left, right);
+        }
+
+        //Act
+        // Allow a few attempts so a stray background event in one window does not fail an
+        // allocation-free path; a genuine per-call allocation shows up in every window.
+        long allocated = -1;
+        for (var attempt = 0; attempt < 5 && allocated != 0; attempt++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+            {
+                router.Render(left, right);
+            }
+            allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+
+        //Assert
+        allocated.Should().Be(0L);
+        left[0].Should().BeApproximately(16 * (0.5F * 0.1F + 0.25F * 0.1F), 0.0001F);
+    }
 }
