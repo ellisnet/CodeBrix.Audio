@@ -40,7 +40,8 @@ public static class SharedAudioOutput
     private static readonly List<ICodecFactory> ExtraCodecFactories = new List<ICodecFactory>();
     private static readonly List<IPacketCodecFactory> ExtraPacketCodecFactories = new List<IPacketCodecFactory>();
 
-    private static MiniAudioEngine _engine;
+    private static AudioEngine _engine;
+    private static Func<AudioEngine> _engineFactory = () => new MiniAudioEngine();
     private static AudioPlaybackDevice _device;
     private static Timer _sweepTimer;
     private static bool _running;
@@ -56,6 +57,26 @@ public static class SharedAudioOutput
     // configured. 48 kHz is what video containers carry (it is Opus's only rate), so the common case
     // needs no conversion at all.
     private const int DefaultPacketSampleRate = 48000;
+
+    /// <summary>
+    /// Selects the backend used when the shared output next starts. Platform integration
+    /// packages call this once at application startup, before any playback.
+    /// </summary>
+    /// <param name="factory">Creates a fresh engine with its native codecs registered.
+    /// The shared output owns and disposes each returned engine.</param>
+    /// <exception cref="ArgumentNullException">The factory is null.</exception>
+    /// <exception cref="InvalidOperationException">The shared output is already running.</exception>
+    /// <remarks>The factory survives <see cref="Shutdown"/>. Desktop applications need
+    /// no registration; their default remains <see cref="MiniAudioEngine"/>.</remarks>
+    public static void UseEngineFactory(Func<AudioEngine> factory)
+    {
+        if (factory == null) throw new ArgumentNullException(nameof(factory));
+        lock (Gate)
+        {
+            if (_running) throw new InvalidOperationException("Select the audio backend before playback starts.");
+            _engineFactory = factory;
+        }
+    }
 
     /// <summary>Whether the shared engine and playback device are currently running.</summary>
     public static bool IsRunning
@@ -436,7 +457,7 @@ public static class SharedAudioOutput
     {
         Timer timer = null;
         AudioPlaybackDevice device = null;
-        MiniAudioEngine engine = null;
+        AudioEngine engine = null;
 
         lock (Gate)
         {
@@ -512,7 +533,7 @@ public static class SharedAudioOutput
                 SampleRate = rate,
             };
 
-            var engine = new MiniAudioEngine();
+            var engine = _engineFactory() ?? throw new InvalidOperationException("The audio engine factory returned null.");
             AudioPlaybackDevice device;
             try
             {

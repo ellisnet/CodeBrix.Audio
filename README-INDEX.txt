@@ -10,13 +10,14 @@ are changing this repository itself.
 AGENT-README FILES (consumer documentation, one per NuGet package)
 ------------------------------------------------------------------
   AGENT-README.txt
-      CodeBrix.Audio.MitLicenseForever - fully managed, cross-platform audio
+      CodeBrix.Audio.MitLicenseForever and CodeBrix.Audio.Core.MitLicenseForever - shared audio
       file library (WAV / MP3 / Ogg Vorbis / FLAC, MIDI, abc notation, ID3 and
       Vorbis tags, SoundFont, SFZ and Decent Sampler instruments, instrument
       libraries and per-part routing, rendering to a file through a registry of
       writers, multi-track playback, DSP primitives) plus the bundled
       CodeBrix.Audio.Engine assembly for device playback and recording. One
-      file covers both assemblies, because one package ships both.
+      file covers both assemblies. Core owns them; Desktop supplies native assets.
+      Android integration lives in the sibling CodeBrix.Audio.Android repository.
 
   src/CodeBrix.Audio.ModestSynth/AGENT-README.txt
       CodeBrix.Audio.ModestSynth.MitLicenseForever - the synthesis add-on:
@@ -38,7 +39,11 @@ MAINTAINER AND EXTRAS
 GENERAL
 -------
   README.md
-      Human-facing overview shown on GitHub and nuget.org.
+      Human-facing overview shown on GitHub and on the nuget.org page of the
+      desktop package, CodeBrix.Audio.MitLicenseForever.
+  src/CodeBrix.Audio/README.md
+      The Core package's nuget.org page: what CodeBrix.Audio.Core.MitLicenseForever
+      carries, and which platform package to install instead of it.
   README-INDEX.txt
       This file.
   THIRD-PARTY-NOTICES.txt

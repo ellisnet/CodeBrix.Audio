@@ -1,0 +1,24 @@
+<Project>
+
+  <!--
+    Imported into every project that references CodeBrix.Audio.MitLicenseForever, directly or
+    through another package or project (buildTransitive/ is what makes it reach the application
+    at the top of the graph).
+
+    NuGet lists the LICENSE-MiniAudio.txt beside each native binary as a native asset, but for
+    a build with NO RuntimeIdentifier the .NET SDK copies only the binaries into
+    runtimes/<rid>/native/ under the output folder and leaves the text files behind. This puts
+    them back where the package layout says they are, so the licence notice sits beside the code
+    it covers in the consuming application's output and publish folders.
+
+    A RID-specific build or publish needs nothing from here: the SDK already copies that RID's
+    binary AND its LICENSE-MiniAudio.txt to the application root.
+  -->
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == ''">
+    <None Include="$(MSBuildThisFileDirectory)../../runtimes/**/LICENSE-MiniAudio.txt"
+          Link="runtimes/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+  </ItemGroup>
+
+</Project>

@@ -1,7 +1,7 @@
 # CodeBrix.Audio
 
 A fully managed, cross-platform audio file library for .NET. CodeBrix.Audio reads WAV, MP3, Ogg Vorbis and FLAC waveform audio, reads and writes Standard MIDI Files, reads MP3 ID3v2 and Vorbis-comment tags, plays sampled instruments in three formats, plays audio through a bundled cross-platform engine, and exposes a set of DSP primitives (FFT, biquad filters, envelope follower, voice-activity detection) for audio analysis — and it behaves properly on Windows, macOS, and Linux.
-CodeBrix.Audio is provided as a .NET 10 library and associated `CodeBrix.Audio.MitLicenseForever` NuGet package, which also bundles **CodeBrix.Audio.Engine**, a cross-platform audio engine with a native backend (see below). File decoding is fully managed; playback goes through that engine.
+CodeBrix.Audio is provided as a .NET 10 library and associated `CodeBrix.Audio.MitLicenseForever` NuGet package, which includes **CodeBrix.Audio.Engine** through its Core dependency, plus a native desktop backend (see below). The high-level file readers use managed decoding; the engine also supports native codecs.
 
 CodeBrix.Audio supports applications and assemblies that target Microsoft .NET version 10.0 and later.
 Microsoft .NET version 10.0 is a Long-Term Supported (LTS) version of .NET, and was released on Nov 11, 2025; and will be actively supported by Microsoft until Nov 14, 2028.
@@ -18,7 +18,11 @@ Note that the NuGet package ID and the namespace are different - there is no pac
 * NuGet package ID: `CodeBrix.Audio.MitLicenseForever`
 * Assembly and primary namespace: `CodeBrix.Audio` - the public types live in its sub-namespaces, i.e. `using CodeBrix.Audio.Wave;` (readers, writers, `WaveFormat`, `SharedAudioOutput`), `using CodeBrix.Audio.Playback;` (the players and sound effects), and `using CodeBrix.Audio.Midi;` / `using CodeBrix.Audio.Dsp;` / `using CodeBrix.Audio.Synth;`.
 
-The package has no NuGet dependencies. Everything it needs is inside it, including the second assembly it ships - `CodeBrix.Audio.Engine` - and that engine's native backend. Both assemblies are referenced automatically; there is no separate Engine package to add. Licence acceptance is required at install time.
+The desktop package automatically references `CodeBrix.Audio.Core.MitLicenseForever`, which owns the existing `CodeBrix.Audio.dll` and `CodeBrix.Audio.Engine.dll` assemblies. Their names, namespaces and public APIs are unchanged. The desktop package supplies the same Windows, Linux and macOS native backends, so existing consumers need no reference, code or startup changes. Licence acceptance is required at install time.
+
+For Android, reference `CodeBrix.Audio.Android.ApacheLicenseForever` instead of the desktop package. It also depends on Core and supplies Oboe devices plus native WAV/MP3/FLAC/Ogg Vorbis codecs. Android applications call `CodeBrixAndroidAudio.Initialize(context)` once before playback. The Android package targets .NET 10, Android API 33 and newer, ARM64 and x64; see [the Android guide](https://github.com/ellisnet/CodeBrix.Audio.Android).
+
+ModestSynth and Opus depend on Core only. Applications using either add-on select their playback platform explicitly: `CodeBrix.Audio.MitLicenseForever` for desktop, or `CodeBrix.Audio.Android.ApacheLicenseForever` for Android. No separate Android variation of either add-on is needed. Core by itself supports managed file processing and offline synthesis; native codec/device operations require a platform package.
 
 XML documentation (IntelliSense) ships alongside both assemblies.
 
@@ -46,7 +50,7 @@ XML documentation (IntelliSense) ships alongside both assemblies.
 
 ## CodeBrix.Audio.Engine (bundled audio engine)
 
-The same `CodeBrix.Audio.MitLicenseForever` package also ships **CodeBrix.Audio.Engine**, a full cross-platform audio engine: audio playback and recording, effects, editing/mixing, MIDI, synthesis, and visualization. Its types live under the `CodeBrix.Audio.Engine.*` namespaces (separate from `CodeBrix.Audio.*`).
+The same `CodeBrix.Audio.MitLicenseForever` reference automatically supplies **CodeBrix.Audio.Engine** through Core, a full cross-platform audio engine: audio playback and recording, effects, editing/mixing, MIDI, synthesis, and visualization. Its types live under the `CodeBrix.Audio.Engine.*` namespaces (separate from `CodeBrix.Audio.*`).
 
 The Engine has a **native dependency**: a bundled native backend, with an Ogg Vorbis decoder compiled in, shipped for seven runtime identifiers — Windows, macOS and Linux on x64 and ARM64, plus Linux on RISC-V 64. The correct native binary is selected automatically at runtime, and its licence notice travels beside it into your application's output folder. The backend is built from sources vendored in this repository and can be rebuilt from them; see `tools/build_native_libraries/README.txt`.
 
@@ -58,7 +62,7 @@ That package also carries **the instruments**. `GeneralMidiSynthesizer` plays a 
 
 ## Formats not included
 
-Opus is deliberately not part of this package: it is BSD-3-Clause rather than MIT, so it ships separately as `CodeBrix.Audio.Opus.BsdLicenseForever`, which depends on this package and registers itself through the public extension points (`SharedAudioOutput.RegisterCodecFactory` for file playback, `SharedAudioOutput.RegisterPacketCodecFactory` for packet playback, and `AudioFileReaderRegistry.Register` for reading by file name). An Opus file opened without that package installed is recognised — duration, sample rate and channels all read — and fails with a message saying it is Opus.
+Opus is deliberately not part of this package: it is BSD-3-Clause rather than MIT, so it ships separately as `CodeBrix.Audio.Opus.BsdLicenseForever`, which depends on Core and registers itself through the public extension points (`SharedAudioOutput.RegisterCodecFactory` for file playback, `SharedAudioOutput.RegisterPacketCodecFactory` for packet playback, and `AudioFileReaderRegistry.Register` for reading by file name). An Opus file opened without that package installed is recognised — duration, sample rate and channels all read — and fails with a message saying it is Opus.
 
 ## Sample Code
 

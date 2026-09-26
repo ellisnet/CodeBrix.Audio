@@ -1,0 +1,14 @@
+<Project>
+  <PropertyGroup>
+    <ApiTaskAssembly>$(MSBuildToolsPath)/Sdks/Microsoft.NET.Sdk/tools/net10.0/Microsoft.DotNet.ApiCompat.Task.dll</ApiTaskAssembly>
+  </PropertyGroup>
+  <UsingTask TaskName="Microsoft.DotNet.ApiCompat.Task.ValidateAssembliesTask" AssemblyFile="$(ApiTaskAssembly)" />
+  <Target Name="Verify">
+    <Error Condition="'$(BaselineDirectory)' == '' Or '$(CurrentDirectory)' == ''" Text="Pass BaselineDirectory and CurrentDirectory, each containing the package's managed assemblies." />
+    <Microsoft.DotNet.ApiCompat.Task.ValidateAssembliesTask
+      LeftAssemblies="$(BaselineDirectory)/CodeBrix.Audio.dll;$(BaselineDirectory)/CodeBrix.Audio.Engine.dll"
+      RightAssemblies="$(CurrentDirectory)/CodeBrix.Audio.dll;$(CurrentDirectory)/CodeBrix.Audio.Engine.dll"
+      RoslynAssembliesPath="$(MSBuildToolsPath)/Roslyn/bincore"
+      EnableRuleCannotChangeParameterName="true" />
+  </Target>
+</Project>

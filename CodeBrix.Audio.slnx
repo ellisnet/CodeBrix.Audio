@@ -18,6 +18,7 @@
     <Project Path="tests/CodeBrix.Audio.ModestSynth.Tests/CodeBrix.Audio.ModestSynth.Tests.csproj" />
   </Folder>
   <Project Path="src/CodeBrix.Audio/CodeBrix.Audio.csproj" />
+  <Project Path="src/CodeBrix.Audio.Desktop/CodeBrix.Audio.Desktop.csproj" />
   <Project Path="src/CodeBrix.Audio.Engine/CodeBrix.Audio.Engine.csproj" />
   <Project Path="src/CodeBrix.Audio.ModestSynth/CodeBrix.Audio.ModestSynth.csproj" />
 </Solution>

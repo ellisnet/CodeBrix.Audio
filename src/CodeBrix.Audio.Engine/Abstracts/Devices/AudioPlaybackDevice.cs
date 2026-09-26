@@ -20,6 +20,14 @@ public abstract class AudioPlaybackDevice : AudioDevice
     /// </summary>
     protected readonly AudioFramesRenderedEventArgs CachedRenderEventArgs;
 
+    /// <summary>Raises the engine render notification using the cached event arguments.</summary>
+    /// <param name="frameCount">Number of frames in the current callback.</param>
+    protected void NotifyFramesRendered(int frameCount)
+    {
+        CachedRenderEventArgs.FrameCount = frameCount;
+        Engine.RaiseAudioFramesRendered(CachedRenderEventArgs);
+    }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="AudioPlaybackDevice"/> class.
     /// </summary>

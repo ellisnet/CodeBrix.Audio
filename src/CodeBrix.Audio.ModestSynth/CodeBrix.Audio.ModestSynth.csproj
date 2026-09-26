@@ -16,8 +16,8 @@
 
   <!-- Version: 1.<years since 2026>.<day of year>.<minute of day>, computed once for the whole
        repository in Directory.Build.props at the repo root. This package and
-       CodeBrix.Audio.MitLicenseForever carry the same version by construction, which is what
-       makes the ProjectReference below emit a dependency that resolves exactly. -->
+       CodeBrix.Audio.Core.MitLicenseForever carry the same version by construction, which is
+       what makes the ProjectReference below emit a dependency that resolves exactly. -->
   <PropertyGroup>
     <Version>$(BuildVersion)</Version>
     <AssemblyVersion>$(BuildVersion)</AssemblyVersion>
@@ -44,7 +44,7 @@
   </PropertyGroup>
 
   <!--
-    The icon and the third-party notices come from the repo root and cover both packages; the
+    The icon and the third-party notices come from the repo root and cover every package; the
     README and the agent guide are this package's OWN, living beside this csproj, because the
     root ones describe CodeBrix.Audio. Files inside the project folder are already part of the
     SDK's default None glob, so they are packed with Update rather than Include.
@@ -58,9 +58,10 @@
 
   <!--
     An ORDINARY ProjectReference, deliberately: pack turns it into a NuGet dependency on
-    CodeBrix.Audio.MitLicenseForever at the version that project produced in this same build.
-    Do not add PrivateAssets="all" here - that is the Engine's arrangement inside the core
-    package, and the opposite of what this add-on wants.
+    CodeBrix.Audio.Core.MitLicenseForever at the version that project produced in this same
+    build. Do not add PrivateAssets="all" here - that is the Engine's arrangement inside the
+    Core package, and the opposite of what this add-on wants. The dependency is on Core, not
+    on the desktop package: a consuming application picks its platform package itself.
   -->
   <ItemGroup>
     <ProjectReference Include="..\CodeBrix.Audio\CodeBrix.Audio.csproj" />

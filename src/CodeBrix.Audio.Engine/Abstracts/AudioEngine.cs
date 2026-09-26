@@ -62,6 +62,22 @@ public abstract class AudioEngine : IDisposable
         MidiManager = new MidiManager(this);
     }
 
+    /// <summary>Creates a paired capture/playback device for an external backend.</summary>
+    /// <param name="playbackDeviceInfo">Output device, or null for the default.</param>
+    /// <param name="captureDeviceInfo">Input device, or null for the default.</param>
+    /// <param name="format">Format for both devices.</param>
+    /// <param name="config">Backend configuration.</param>
+    /// <returns>The initialized device pair, owned by the caller.</returns>
+    protected FullDuplexDevice CreateFullDuplexDevice(DeviceInfo? playbackDeviceInfo,
+        DeviceInfo? captureDeviceInfo, AudioFormat format, DeviceConfig config) =>
+        new(this, playbackDeviceInfo, captureDeviceInfo, format, config);
+
+    /// <summary>Copies capture subscriptions while switching devices in an external backend.</summary>
+    /// <param name="source">The old capture device.</param>
+    /// <param name="destination">The replacement capture device.</param>
+    protected static void CopyCaptureSubscriptions(AudioCaptureDevice source, AudioCaptureDevice destination) =>
+        DeviceSwitcher.RestoreCaptureState(destination, DeviceSwitcher.PreserveCaptureState(source));
+
     /// <summary>
     /// Gets an array of available playback devices.
     /// </summary>

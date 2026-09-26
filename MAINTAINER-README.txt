@@ -10,31 +10,26 @@ in this file is needed to use the package.
 
 PURPOSE AND SCOPE
 =================
-This repository produces TWO NuGet packages. The first ships TWO assemblies:
+This repository produces THREE MIT NuGet packages at one shared version:
 
-  CodeBrix.Audio.MitLicenseForever
-      Assemblies:    CodeBrix.Audio  (src/CodeBrix.Audio/)
-                     CodeBrix.Audio.Engine  (src/CodeBrix.Audio.Engine/),
-                     bundled into the same package rather than published
-                     separately
-      Native payload: codebrix_miniaudio, for seven runtime identifiers
-      License:       MIT
-      Consumer doc:  AGENT-README.txt (repo root) - covers BOTH assemblies
+  CodeBrix.Audio.Core.MitLicenseForever (src/CodeBrix.Audio/)
+      Owns CodeBrix.Audio.dll and CodeBrix.Audio.Engine.dll, preserving their
+      assembly names, namespaces and public APIs. No native runtime assets.
+  CodeBrix.Audio.MitLicenseForever (src/CodeBrix.Audio.Desktop/)
+      Original desktop package ID. Depends on Core, carries the unchanged seven
+      desktop native backends and requires zero consumer startup/reference changes.
+  CodeBrix.Audio.ModestSynth.MitLicenseForever (src/CodeBrix.Audio.ModestSynth/)
+      Synthesis assembly; depends on Core. Its own README/AGENT-README are packed.
 
-  CodeBrix.Audio.ModestSynth.MitLicenseForever
-      Assembly:      CodeBrix.Audio.ModestSynth
-                     (src/CodeBrix.Audio.ModestSynth/)
-      Native payload: none
-      License:       MIT
-      Consumer doc:  src/CodeBrix.Audio.ModestSynth/AGENT-README.txt, packed with
-                     ITS package in place of the repo-root pair
+Engine remains a private project reference bundled into Core. Platform packages
+supply native assets. The Apache-2.0 CodeBrix.Audio.Android backend lives in its
+own repository and depends on pinned Core NuGet. Opus also depends on Core.
+ModestSynth/Opus applications reference Desktop or Android themselves.
 
-The Engine is not a package: it is referenced with PrivateAssets="all" so it is
-never surfaced as a NuGet dependency; a custom TargetsForTfmSpecificBuildOutput
-target injects its .dll and .xml into lib/, and a None item packs its
-runtimes/<rid>/native/ payload. The ADD-ON is a real package with a real
-dependency on the core, and the two are versioned and published together - see
-PACKAGING AND PUBLISHING.
+The Android backend is registered through SharedAudioOutput.UseEngineFactory.
+Its startup registration is explicit; the default desktop MiniAudioEngine factory
+is unchanged. Never rename shared assemblies or move their public types into a
+new assembly: the existing binary-consumer contract is part of this split.
 
 THE LICENCE BAR, AND WHY IT MATTERS TO EVERY DECISION HERE. The bar for
 CodeBrix.Audio is MIT or more permissive, and the package id -
@@ -49,7 +44,12 @@ package, and this one stays what its id claims.
 
 REPOSITORY LAYOUT
 =================
-  src/CodeBrix.Audio/            the main library
+  src/CodeBrix.Audio/            the shared Core package and original main assembly;
+                                 packs its OWN README.md (the root one is the
+                                 desktop package's) with the root AGENT-README.txt
+  src/CodeBrix.Audio.Desktop/    the original desktop package ID and native payload,
+                                 plus the buildTransitive targets that copy the
+                                 native licence files into consumers' output
   src/CodeBrix.Audio.Engine/     the bundled engine (vendored; see PROVENANCE)
   src/CodeBrix.Audio.ModestSynth/  the synthesis add-on - its OWN package, its
                                  own README.md and AGENT-README.txt packed with
@@ -1942,74 +1942,62 @@ THE ADD-ON'S SIDE OF THE JOIN
     here", and every_listed_feature_has_a_status asks it with a NULL registry so
     that running both test assemblies in one process cannot make it lie.
 
-  Both packages are published together at one version - see PACKAGING AND
-  PUBLISHING, "TWO PACKAGES, ONE VERSION, PUBLISHED TOGETHER". The add-on's own
+  All three packages are published together at one version - see PACKAGING AND
+  PUBLISHING, "THREE PACKAGES, ONE VERSION, PUBLISHED TOGETHER". The add-on's own
   README.md and AGENT-README.txt are what its package carries; the repo-root pair
   stay CodeBrix.Audio's.
 
 PACKAGING AND PUBLISHING
 ========================
-  TWO PACKAGES, ONE VERSION, PUBLISHED TOGETHER. This repository builds
-  CodeBrix.Audio.MitLicenseForever and CodeBrix.Audio.ModestSynth.MitLicenseForever.
-  They carry the same version (see BUILDING, "the shared version") because the
-  add-on's dependency on the core has to resolve exactly, and they go to
-  nuget.org in the same session: core first, then the add-on. Never publish the
-  add-on against a core version that is not on nuget.org yet.
+  THREE PACKAGES, ONE VERSION, PUBLISHED TOGETHER. Build Core, Desktop and
+  ModestSynth with one explicit BuildVersion. Publish Core first, then the two
+  dependent packages. Do not publish dependents until that Core version resolves
+  publicly. Publishing remains Jeremy's responsibility; agents must not commit
+  or push changes.
 
-  PackageId              CodeBrix.Audio.MitLicenseForever
-  License expression     MIT, with PackageRequireLicenseAcceptance set
-  GeneratePackageOnBuild true - every build writes a fresh .nupkg
-  NuGet dependencies     none
+  Core nupkg (CodeBrix.Audio.Core.MitLicenseForever):
+    lib/net10.0/CodeBrix.Audio.dll and .xml
+    lib/net10.0/CodeBrix.Audio.Engine.dll and .xml
+    No NuGet dependencies and no runtimes/ payload.
+    Engine is referenced with PrivateAssets=all; IncludeEngineAssemblyInPackage
+    injects its assembly and documentation. Keep this ownership in Core.
+    README.md is src/CodeBrix.Audio/README.md, packed with None Update; the
+    root README.md names the desktop id as the package to install and would
+    read wrongly on Core's nuget.org page. AGENT-README.txt is the root one.
 
-  WHAT SHIPS IN THE NUPKG
-    lib/net10.0/CodeBrix.Audio.dll (+ .xml)
-    lib/net10.0/CodeBrix.Audio.Engine.dll (+ .xml), injected by the
-        IncludeEngineAssemblyInPackage target rather than by a package reference
-    runtimes/<rid>/native/...    the seven native backends, packed from
-        src/CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/
-    runtimes/<rid>/native/LICENSE-MiniAudio.txt   one beside each of the seven
-        binaries, packed by the same glob. It carries both the miniaudio and the
-        stb_vorbis grants, and it lands in every consuming application's output
-        folder alongside the binary it covers. A new RID folder must get a copy
-        too - see tools/build_native_libraries/README.txt, "ADOPTING A BUILT
-        BINARY INTO THE PACKAGE".
-    icon-codebrix-128.png        the package icon
-    README.md                    the nuget.org / GitHub landing page
-    AGENT-README.txt             the consumer guide - THIS is the file that
-        reaches consumers, so keep it consumer-only
-    THIRD-PARTY-NOTICES.txt      required by the vendored sources' licences
+  Desktop nupkg (CodeBrix.Audio.MitLicenseForever):
+    Depends on Core at the shared version; no duplicate managed assemblies.
+    lib/net10.0/_._ marks framework compatibility.
+    runtimes/<rid>/native/ holds the original seven binaries and adjacent
+    LICENSE-MiniAudio.txt files from Engine/Backends/MiniAudio/runtimes/.
+    buildTransitive/net10.0/CodeBrix.Audio.MitLicenseForever.targets copies
+    those licence files into runtimes/<rid>/native/ under the consuming
+    application's output folder on a RID-less build; the SDK copies only the
+    binaries there and drops the text files, while a RID-specific build or
+    publish already copies both to the application root, so the targets do
+    nothing when a RuntimeIdentifier is set. It reaches the application through
+    any intermediate library because it is under buildTransitive/, not build/.
+    Do not rebuild desktop binaries as part of Android development.
 
-  MAINTAINER-README.txt, EXTRAS-README.txt and README-INDEX.txt are NOT packed.
-  They exist for this repository only.
+  ModestSynth nupkg (CodeBrix.Audio.ModestSynth.MitLicenseForever):
+    Depends on Core at the shared version, through its ordinary ProjectReference.
+    lib/net10.0/CodeBrix.Audio.ModestSynth.dll and .xml.
+    Uses its own README.md and AGENT-README.txt via None Update.
 
-  The Engine csproj is referenced with PrivateAssets="all". Do not turn that into
-  an ordinary ProjectReference or a PackageReference: the whole point is that
-  consumers get one package id and two assemblies.
+  All packages carry MIT metadata, PackageRequireLicenseAcceptance, the package
+  icon and THIRD-PARTY-NOTICES.txt. Core and Desktop share the root
+  AGENT-README.txt; Desktop packs the root README.md and Core packs its own.
+  MAINTAINER-README.txt, EXTRAS-README.txt and README-INDEX.txt are not packed.
 
-  THE ADD-ON PACKAGE
-    PackageId              CodeBrix.Audio.ModestSynth.MitLicenseForever
-    License expression     MIT, with PackageRequireLicenseAcceptance set
-    GeneratePackageOnBuild true
-    NuGet dependencies     CodeBrix.Audio.MitLicenseForever, at the shared version
+  PackageVersionTests verifies the Core/ModestSynth dependency and version
+  relationship using packages in normal bin/Release outputs. The scripts in
+  tools/verify-packages additionally verify assembly ownership, API compatibility,
+  unchanged native assets and an unchanged desktop consumer binary. Preserve a
+  baseline package before future compatibility-sensitive work.
 
-    WHAT SHIPS IN ITS NUPKG
-      lib/net10.0/CodeBrix.Audio.ModestSynth.dll (+ .xml)
-      icon-codebrix-128.png        from the repo root
-      THIRD-PARTY-NOTICES.txt      from the repo root; it covers both packages
-      README.md                    ITS OWN, from src/CodeBrix.Audio.ModestSynth/
-      AGENT-README.txt             ITS OWN, from the same folder
-
-    The two doc files are the add-on's, NOT the repo-root pair - the root ones
-    describe CodeBrix.Audio and are packed into the core package only. Because
-    they live inside the project folder they are packed with None Update rather
-    than None Include; switching to Include is a duplicate-item error.
-
-    The ProjectReference to CodeBrix.Audio is deliberately ORDINARY - no
-    PrivateAssets - because the dependency is the point. CodeBrix.Audio.ModestSynth
-    .Tests carries three tests that read both built .nupkg files and check that
-    the declared dependency version, the two package versions and the two
-    assembly versions all agree; they SKIP rather than fail if the packages are
-    not there.
+  Cross-repository development uses a local NuGet feed. Android and Opus pin
+  Core through CodeBrixAudioCoreVersion in their Directory.Build.props. See the
+  Android repository's DEVELOPMENT.md and tools/build-local.sh for build order.
 
 VERSIONING. Directory.Build.props at the repository root computes the version
 from the UTC clock at build time: 1.<years since 2026>.<day of year>.<minute of
@@ -2028,15 +2016,15 @@ build, including the inner project-reference builds:
     dotnet build CodeBrix.Audio.slnx -c Release -p:BuildVersion=1.0.249.640
 
 Ordinary development builds need none of that; the version they stamp is
-throwaway either way, and the two projects agree in practice because the whole
+throwaway either way, and the projects agree in practice because the whole
 solution evaluates inside a second.
 
 Publishing follows the family rule: tag the repository at the version that was
-published, so the latest git tag and the latest nuget.org version agree. Both
+published, so the latest git tag and the latest nuget.org version agree. All three
 packages are published at that one version and the tag names it once.
 
-DOWNSTREAM. CodeBrix.Audio.Opus.BsdLicenseForever pins a version of this package
-in its own csproj, CodeBrix.Audio.ModestSynth takes it by project reference from
+DOWNSTREAM. CodeBrix.Audio.Opus.BsdLicenseForever pins Core through CodeBrixAudioCoreVersion
+in its Directory.Build.props, CodeBrix.Audio.ModestSynth takes it by project reference from
 inside this repository, and the CodeBrix.Platform AudioPlayer add-in and
 GameEngine build on it. A breaking change to the codec-registration seams, to
 SharedAudioOutput or to AudioFileReaderRegistry is a breaking change for them.

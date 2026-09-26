@@ -165,13 +165,19 @@ Note that the PACKAGE id carries the ".MitLicenseForever" suffix, but the
 NAMESPACE is simply "CodeBrix.Audio.ModestSynth" (no suffix).
 
   License:        MIT (licence acceptance is required)
-  Depends on:     CodeBrix.Audio.MitLicenseForever, at the same version - the
+  Depends on:     CodeBrix.Audio.Core.MitLicenseForever, at the same version - the
                   two packages are built and published together
   Target:         .NET 10 or later
   Native libs:    NONE of its own. The only native code in the tree is the audio
                   engine's playback backend, which arrives with CodeBrix.Audio
                   and is not needed to RENDER anything.
   OS limits:      none. Rendering is pure managed code.
+
+For playback the APPLICATION also references CodeBrix.Audio.MitLicenseForever
+on Windows/Linux/macOS, or CodeBrix.Audio.Android.ApacheLicenseForever on Android.
+Android applications call CodeBrixAndroidAudio.Initialize(context) before playback.
+Use this same ModestSynth package on both platforms; no Android add-on variant
+is needed. Offline managed synthesis requires no platform package.
 
 See also: the CodeBrix.Audio package's own guide, at
 https://github.com/ellisnet/CodeBrix.Audio/blob/main/AGENT-README.txt - it

@@ -46,7 +46,15 @@ public sealed class FullDuplexDevice : AudioDevice, IDisposable
     internal FullDuplexDevice(AudioEngine engine, DeviceInfo? playbackDeviceInfo, DeviceInfo? captureDeviceInfo, AudioFormat format, DeviceConfig config) : base(engine, format, config)
     {
         PlaybackDevice = engine.InitializePlaybackDevice(playbackDeviceInfo, format, config);
-        CaptureDevice = engine.InitializeCaptureDevice(captureDeviceInfo, format, config);
+        try
+        {
+            CaptureDevice = engine.InitializeCaptureDevice(captureDeviceInfo, format, config);
+        }
+        catch
+        {
+            PlaybackDevice.Dispose();
+            throw;
+        }
     }
     
     /// <summary>
@@ -56,7 +64,15 @@ public sealed class FullDuplexDevice : AudioDevice, IDisposable
     {
         if (IsRunning || IsDisposed) return;
         CaptureDevice.Start();
-        PlaybackDevice.Start();
+        try
+        {
+            PlaybackDevice.Start();
+        }
+        catch
+        {
+            CaptureDevice.Stop();
+            throw;
+        }
         IsRunning = true;
     }
 

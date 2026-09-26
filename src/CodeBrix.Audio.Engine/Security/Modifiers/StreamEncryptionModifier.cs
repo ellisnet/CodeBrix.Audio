@@ -134,7 +134,7 @@ public sealed class StreamEncryptionModifier : SoundModifier, IDisposable
                 var bytesToProcess = Math.Min(remainingInKeystream, remainingInData);
 
                 // Use SIMD for full 16-byte blocks.
-                if (Vector128.IsHardwareAccelerated && bytesToProcess == 16)
+                if (Sse2.IsSupported && bytesToProcess == 16)
                 {
                     var vData = Sse2.LoadVector128(pData + i);
                     var vKey = Sse2.LoadVector128(pKeyStream);

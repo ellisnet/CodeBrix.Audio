@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Compatibility package: the managed assemblies now belong to Core, retaining
+       their original identities. This package supplies the unchanged desktop assets. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>CodeBrix.Audio.MitLicenseForever</PackageId>
+    <Version>$(BuildVersion)</Version>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IsPackable>true</IsPackable>
+    <Authors>Jeremy Ellis</Authors>
+    <Title>CodeBrix.Audio</Title>
+    <Description>CodeBrix audio playback, recording, mixing, synthesis and codecs for Windows, Linux and macOS. Includes the shared managed Core and native desktop backends. Existing applications require no startup or API changes.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon-codebrix-128.png</PackageIcon>
+    <RepositoryUrl>https://github.com/ellisnet/CodeBrix.Audio</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/ellisnet/CodeBrix.Audio</PackageProjectUrl>
+    <Copyright>Copyright (c) 2026 Jeremy Ellis and contributors</Copyright>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../CodeBrix.Audio/CodeBrix.Audio.csproj" />
+    <None Include="_._" Pack="true" PackagePath="lib/net10.0/" />
+    <None Include="../../README.md;../../AGENT-README.txt;../../THIRD-PARTY-NOTICES.txt;../../icon-codebrix-128.png" Pack="true" PackagePath="" />
+    <None Include="../CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/**/*.*"
+          Pack="true" PackagePath="runtimes/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- Copies each LICENSE-MiniAudio.txt into the consuming application's output folder on a
+         RID-less build, which the SDK does not do for text files under runtimes/. It is inside
+         the project folder, hence Update rather than Include. See the file's own comment. -->
+    <None Update="buildTransitive/CodeBrix.Audio.MitLicenseForever.targets"
+          Pack="true" PackagePath="buildTransitive/net10.0/CodeBrix.Audio.MitLicenseForever.targets" />
+  </ItemGroup>
+</Project>

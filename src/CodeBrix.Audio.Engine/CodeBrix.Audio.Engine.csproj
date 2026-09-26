@@ -15,9 +15,11 @@
     changed here follows the Engine's local style. See MAINTAINER-README.txt,
     "MAINTAINING CODEBRIX.AUDIO.ENGINE".
 
-    It is NOT independently packable: it ships inside the single
-    CodeBrix.Audio.MitLicenseForever package alongside CodeBrix.Audio, wired up by
-    src/CodeBrix.Audio/CodeBrix.Audio.csproj.
+    It is NOT independently packable: its managed assembly ships inside the
+    CodeBrix.Audio.Core.MitLicenseForever package alongside CodeBrix.Audio, wired up by
+    src/CodeBrix.Audio/CodeBrix.Audio.csproj. Its native backend binaries ship in the
+    desktop platform package, CodeBrix.Audio.MitLicenseForever, packed by
+    src/CodeBrix.Audio.Desktop/CodeBrix.Audio.Desktop.csproj.
   -->
 
   <PropertyGroup>
@@ -34,7 +36,7 @@
   </PropertyGroup>
 
   <!-- Date-stamped version, matching CodeBrix.Audio so both assemblies bundled in the
-       CodeBrix.Audio.MitLicenseForever package share one version. $(BuildVersion) is computed
+       CodeBrix.Audio.Core.MitLicenseForever package share one version. $(BuildVersion) is computed
        once for the whole repository in Directory.Build.props at the repo root; see that file for
        the 1.<years-since-2026>.<day>.<minute> scheme. -->
   <PropertyGroup>
@@ -47,9 +49,9 @@
     Native miniaudio wrapper binaries (renamed codebrix_miniaudio.* from SoundFlow's
     prebuilt libminiaudio.*). Copied to output under runtimes/<rid>/native/ for local
     dev + test; the DllImportResolver in Backends/MiniAudio/Native.cs loads them from
-    there. Packed into the NuGet package by CodeBrix.Audio.csproj, not here (Pack=false).
-    Remove-then-Include so the explicit metadata does not collide with the SDK default
-    None glob.
+    there. Packed into the desktop platform package by CodeBrix.Audio.Desktop.csproj, not
+    here (Pack=false). Remove-then-Include so the explicit metadata does not collide with
+    the SDK default None glob.
   -->
   <ItemGroup>
     <None Remove="Backends\MiniAudio\runtimes\**\*.*" />

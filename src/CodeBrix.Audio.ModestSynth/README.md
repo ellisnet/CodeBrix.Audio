@@ -22,9 +22,9 @@ XML documentation (IntelliSense) ships alongside the assembly.
 
 The package pulls in the following automatically; no version pinning is needed in the consuming project:
 
-* `CodeBrix.Audio.MitLicenseForever` - the audio library this package adds synthesis to. Both packages are MIT and are published together at the same version.
+* `CodeBrix.Audio.Core.MitLicenseForever` - the shared audio library this package adds synthesis to. Both packages are MIT and are published together at the same version.
 
-There is nothing else to add - no native-asset package, and no platform-specific payload.
+For playback, the application also references `CodeBrix.Audio.MitLicenseForever` on Windows/Linux/macOS, or `CodeBrix.Audio.Android.ApacheLicenseForever` on Android. Android applications call `CodeBrixAndroidAudio.Initialize(context)` before playback. This same ModestSynth package works with either backend; offline managed synthesis requires no platform package.
 
 ## CodeBrix.Audio.ModestSynth supports:
 

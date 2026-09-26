@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <!-- Version: 1.<years since 2026>.<day of year>.<minute of day>, computed once for the whole
-       repository in Directory.Build.props at the repo root. Both packages this repository
+       repository in Directory.Build.props at the repo root. All three packages this repository
        publishes read the same $(BuildVersion) from there; see that file for the full rationale
        and MAINTAINER-README.txt, "PACKAGING AND PUBLISHING", for how a publish pins it. -->
   <PropertyGroup>
@@ -18,11 +18,11 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <PackageId>CodeBrix.Audio.MitLicenseForever</PackageId>
+    <PackageId>CodeBrix.Audio.Core.MitLicenseForever</PackageId>
     <Product>CodeBrix.Audio</Product>
     <Title>CodeBrix.Audio</Title>
     <Authors>Jeremy Ellis</Authors>
-    <Description>A fully managed audio library for playing, recording, and analyzing sound. Reads and plays common audio file formats like WAV, MP3, Ogg Vorbis, and FLAC, plays MIDI music through SoundFont, SFZ or Decent Sampler instruments, plays several tracks as one song - including a stems download, where each part can play as its recording or as its MIDI performance - and includes a small set of signal-processing tools for analyzing audio. Also includes a full audio engine for recording, editing, mixing, and effects, with no platform-specific setup required.</Description>
+    <Description>Shared CodeBrix audio APIs for playback, recording, mixing, synthesis, codecs, MIDI, metadata and audio file processing. Retains CodeBrix.Audio and CodeBrix.Audio.Engine assembly identities. Applications reference CodeBrix.Audio.MitLicenseForever for desktop or CodeBrix.Audio.Android.ApacheLicenseForever for Android device and native codec support.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ellisnet/CodeBrix.Audio</PackageProjectUrl>
     <RepositoryUrl>https://github.com/ellisnet/CodeBrix.Audio</RepositoryUrl>
@@ -36,23 +36,20 @@
     <PackageTags>audio;wav;mp3;ogg;vorbis;flac;midi;abc;abc-notation;abc-to-midi;abc2midi;waveform;dsp;id3;playback;recording;engine;miniaudio;packets;soundfont;sfz;dspreset;sampler;multitrack;stems;mpe;synthesis;midi-stream;CodeBrix</PackageTags>
   </PropertyGroup>
 
+  <!-- The README.md is this package's OWN, beside this csproj, because the repo-root one is the
+       desktop package's landing page and tells readers to install that id. It sits inside the
+       project folder, so it is packed with Update rather than Include. AGENT-README.txt is the
+       repo-root one: it documents the two assemblies this package carries. -->
   <ItemGroup>
     <None Include="..\..\icon-codebrix-128.png" Pack="true" PackagePath="" />
-    <None Include="..\..\README.md" Pack="true" PackagePath="" />
+    <None Update="README.md" Pack="true" PackagePath="" />
     <None Include="..\..\AGENT-README.txt" Pack="true" PackagePath="" />
     <None Include="..\..\THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="" />
   </ItemGroup>
 
-  <!--
-    Bundle the CodeBrix.Audio.Engine assembly (vendored SoundFlow v1.4.1) into THIS
-    single CodeBrix.Audio.MitLicenseForever package. The Engine is referenced privately
-    so it is never surfaced as a NuGet dependency; its built assembly + XML docs are
-    injected into lib/, and its native miniaudio runtimes - plus the LICENSE-MiniAudio.txt
-    that sits beside each binary - are packed under runtimes/<rid>/native/ by the glob below.
-    The standard NuGet native-asset resolution plus the Engine's own DllImportResolver
-    (Backends/MiniAudio/Native.cs) load the right binary per platform; the licence file simply
-    travels with it into the consuming application's output folder.
-  -->
+  <!-- Core owns both existing managed assemblies, retaining their names and public APIs.
+       Engine remains a private project reference and its DLL/XML are packed below.
+       Platform packages provide native runtime assets; Core contains none. -->
   <ItemGroup>
     <ProjectReference Include="..\CodeBrix.Audio.Engine\CodeBrix.Audio.Engine.csproj" PrivateAssets="all" />
   </ItemGroup>
@@ -68,11 +65,5 @@
                             Condition="Exists('$(OutputPath)CodeBrix.Audio.Engine.xml')" />
     </ItemGroup>
   </Target>
-
-  <ItemGroup>
-    <None Include="..\CodeBrix.Audio.Engine\Backends\MiniAudio\runtimes\**\*.*"
-          Pack="true"
-          PackagePath="runtimes\%(RecursiveDir)%(Filename)%(Extension)" />
-  </ItemGroup>
 
 </Project>

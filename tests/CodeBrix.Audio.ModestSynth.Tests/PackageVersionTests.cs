@@ -34,7 +34,7 @@ namespace CodeBrix.Audio.ModestSynth.Tests;
 /// </remarks>
 public class PackageVersionTests
 {
-    private const string CorePackageId = "CodeBrix.Audio.MitLicenseForever";
+    private const string CorePackageId = "CodeBrix.Audio.Core.MitLicenseForever";
     private const string AddOnPackageId = "CodeBrix.Audio.ModestSynth.MitLicenseForever";
 
     [Fact]
@@ -56,6 +56,7 @@ public class PackageVersionTests
 
         //Assert
         dependency.Should().NotBeNull();
+        nuspec.Descendants(ns + "dependency").Should().ContainSingle();
         ((string)dependency.Attribute("version")).Should().Be(coreVersion);
     }
 

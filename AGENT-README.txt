@@ -24,9 +24,9 @@ different library; this package ships the seam and NO instruments, so a consumer
 registers what it wants to hear. The AUDIO-FILE WRITER registry does the same
 for output, so an offline render goes to whatever format the file name asks for.
 
-NOTE: the CodeBrix.Audio.MitLicenseForever package ALSO bundles a second
-assembly, CodeBrix.Audio.Engine — a full audio engine WITH a bundled native
-backend — documented in its own section below ("CODEBRIX.AUDIO.ENGINE"). Unless a
+NOTE: CodeBrix.Audio.MitLicenseForever also supplies CodeBrix.Audio.Engine through
+its Core dependency, alongside the desktop package's native backend. This full
+audio engine is documented below ("CODEBRIX.AUDIO.ENGINE"). Unless a
 passage says otherwise, the rest of this document describes the CodeBrix.Audio
 assembly.
 
@@ -49,15 +49,16 @@ NAMESPACE is simply "CodeBrix.Audio" (no suffix).
 
   License:        MIT (licence acceptance is required)
   Target:         .NET 10 or later
-  NuGet deps:     NONE. The package has no PackageReference dependencies of its
-                  own - everything it needs, including the bundled
-                  CodeBrix.Audio.Engine assembly and its native backend, is
-                  inside the package.
-  Assemblies:     TWO, from this one package - CodeBrix.Audio and
+  NuGet deps:     CodeBrix.Audio.Core.MitLicenseForever. Core owns the existing
+                  CodeBrix.Audio.dll and CodeBrix.Audio.Engine.dll, with the same
+                  assembly names, namespaces and public APIs. The desktop package
+                  supplies the existing native backends. Existing desktop consumers
+                  require no package-reference, code or startup changes.
+  Assemblies:     TWO, automatically supplied by Core - CodeBrix.Audio and
                   CodeBrix.Audio.Engine. Both are referenced automatically; you
                   do not add a second PackageReference for the Engine, and there
                   is no separate Engine package to find.
-  Native payload: the Engine ships codebrix_miniaudio for seven runtime
+  Native payload: the desktop package ships codebrix_miniaudio for seven runtime
                   identifiers - win-x64, win-arm64, linux-x64, linux-arm64,
                   linux-riscv64, osx-x64, osx-arm64 - under runtimes/<rid>/
                   native/. The right one is loaded at runtime with no
@@ -71,6 +72,20 @@ NAMESPACE is simply "CodeBrix.Audio" (no suffix).
                   authoritative record for everything else.
   System deps:    none. No system audio package and no system-wide codec is
                   required on Windows, macOS or Linux.
+
+ANDROID: select CodeBrix.Audio.Android.ApacheLicenseForever instead of the desktop
+package, and call CodeBrixAndroidAudio.Initialize(context) before playback. It
+supplies Oboe devices and native WAV/MP3/FLAC/Ogg Vorbis decoding for .NET 10 Android,
+API 33 and newer, ARM64 and x64. Shared players, synthesis, DSP and metadata use
+the same Core assemblies. Examples explicitly constructing MiniAudioEngine below
+are desktop examples; Android applications construct AndroidAudioEngine instead.
+The application controls audio focus, permission prompts and foreground services.
+See https://github.com/ellisnet/CodeBrix.Audio.Android for its integration guide.
+
+ModestSynth and Opus depend on Core only. Their consuming application must also
+select the desktop or Android platform package for playback. Core alone supports
+managed file processing and offline synthesis; native codecs require a platform
+package even when no audio device is opened.
 
 ADD-ON PACKAGES IN THE FAMILY
 
