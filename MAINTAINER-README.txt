@@ -2459,6 +2459,19 @@ NOTES
     fact and does not carry a version pin. If someone reports this symptom, the
     first question is which package version they are on.
 
+  - PackagedAssets (src/CodeBrix.Audio/Instruments/PackagedAssets.cs) IS A SEAM
+    WITH TWO SIDES IN OTHER REPOSITORIES. Instrument packages
+    (CodeBrix.Audio.Samples.FluidR3Gm and successors) CALL Locate for the files
+    they ship; the platform package for Android (CodeBrix.Audio.Android)
+    INSTALLS a locator that extracts the asset out of the APK. Neither side
+    exists in this repository, so keep the contract - relative forward-slash
+    asset paths, Locate producing the file, Exists never producing it, the
+    default looking beside the application - stable across publishes: an older
+    instrument package and a newer platform package must keep agreeing. The
+    Android side is written against this contract but is NOT wired until a
+    Core carrying the seam is published and that repository's Core pin is
+    raised (its MAINTAINER-README says where the one-line registration goes).
+
   - THE OPUS SPLIT IS THE FAMILY PRECEDENT. It is recorded in PURPOSE AND SCOPE
     above and in CodeBrix.Audio.Opus's own MAINTAINER-README.txt. Do not fold
     that codec back in.

@@ -916,6 +916,42 @@ SWAPPING VOICES ONE AT A TIME - MappedInstrumentLibrary
   is an error on that line. One loaded instrument serves every program taken
   from it, and a loaded instrument is held for the life of the library.
 
+WHERE A PACKAGE'S FILES ARE FOUND. An instrument library that ships in a NuGet
+package delivers its samples - a SoundFont, an SFZ or Decent Sampler folder -
+as files, and opens them by path at run time. Where those files are depends on
+the platform: beside the application on desktop, extracted out of the
+application package on Android. PackagedAssets is the seam that answers, so
+neither the instrument package nor the application has to know:
+
+    string path = PackagedAssets.Locate("FluidR3_GM.sf2");  // the full path
+    bool there  = PackagedAssets.Exists("FluidR3_GM.sf2");  // without producing
+
+  - The DEFAULT answer looks beside the application
+    (ApplicationDirectoryAssetLocator over AppContext.BaseDirectory), which is
+    where an instrument package's build targets put its files on desktop. An
+    application that references nothing but this package and an instrument
+    package gets that and needs no call of its own.
+  - A PLATFORM package installs a different answer with PackagedAssets.Use(
+    IPackagedAssetLocator) during its own start-up call. The Android platform
+    package does this so that an asset inside the APK is extracted once, into
+    private storage, and its copy's path is returned - the application still
+    makes no call of its own.
+  - An instrument package that offers an explicit "use the file at this path"
+    override keeps it, and that override WINS: the consumer said where the file
+    is. This seam is for the case where nobody said.
+  - Paths are relative and forward-slash - a file name, or a path to a file or
+    folder inside what the package ships. An absolute path, a drive, or a ".."
+    segment is an ArgumentException. PackagedAssets.NormalizeAssetPath is the
+    same check, callable on its own.
+  - PackagedAssets.Locator says which locator is in effect,
+    HasPlatformLocator whether a platform package installed one, and
+    ResetToDefault puts the default back. All of it is thread-safe.
+
+  If you WRITE an instrument package: call PackagedAssets.Locate for each file
+  you ship, instead of computing a path beside the application yourself, and
+  your package works on every platform the family supports without an
+  Android-specific line in it.
+
 
 ROUTING THE PARTS OF AN ARRANGEMENT
 ===================================
@@ -5150,6 +5186,12 @@ QUICK REFERENCE CARD
     InstrumentLibraryRegistry.SetDefault(string name)
     InstrumentLibraryRegistry.Default / .DefaultName / .Registered
     InstrumentLibraryRegistry.RegisteredNames / .IsRegistered(string name)
+    PackagedAssets.Locate(string assetPath)        // where a package's file is
+    PackagedAssets.Exists(string assetPath)        // ...and whether it is there
+    PackagedAssets.Use(IPackagedAssetLocator)      // a PLATFORM package's call
+    PackagedAssets.Locator / .HasPlatformLocator / .ResetToDefault()
+    PackagedAssets.NormalizeAssetPath(string assetPath)
+    new ApplicationDirectoryAssetLocator()         // the default; or (rootDir)
     library.CreateSynthesizer(int program, int sampleRate)   // IInstrumentLibrary
     library.CreatePercussionSynthesizer(int sampleRate)
     library.CreateMultiTimbralSynthesizer(int sampleRate)
