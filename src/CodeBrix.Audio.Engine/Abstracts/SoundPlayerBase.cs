@@ -1,6 +1,7 @@
 using CodeBrix.Audio.Engine.Components;
 using CodeBrix.Audio.Engine.Enums;
 using CodeBrix.Audio.Engine.Interfaces;
+using CodeBrix.Audio.Engine.Providers;
 using CodeBrix.Audio.Engine.Structs;
 
 namespace CodeBrix.Audio.Engine.Abstracts;  //was previously: SoundFlow.Abstracts
@@ -11,6 +12,63 @@ namespace CodeBrix.Audio.Engine.Abstracts;  //was previously: SoundFlow.Abstract
 public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
 {
     private int _rawSamplePosition;
+    private readonly BufferedPlaybackSource? _streaming;
+    // Positive owner = control thread, negative owner = render thread. Rendering tries once;
+    // only control threads may wait. This also fences DSP buffer resets against rendering.
+    private int _transportOwner;
+
+    private readonly struct TransportScope(SoundPlayerBase? player) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (player != null) Volatile.Write(ref player._transportOwner, 0);
+        }
+    }
+
+    private TransportScope EnterTransport()
+    {
+        if (_streaming == null) return default;
+        if (_streaming.IsWorkerThread)
+            throw new InvalidOperationException("Post transport operations off decoder/provider callbacks.");
+        int thread = Environment.CurrentManagedThreadId;
+        int owner = Volatile.Read(ref _transportOwner);
+        if (owner == thread) return default; // Nested control operation.
+        if (owner == -thread)
+            throw new InvalidOperationException("Post transport operations off the render callback.");
+        var spin = new SpinWait();
+        while (Interlocked.CompareExchange(ref _transportOwner, thread, 0) != 0)
+            spin.SpinOnce();
+        return new TransportScope(this);
+    }
+
+    private void RefreshStreaming()
+    {
+        if (_streaming == null) return;
+        _streaming.Reset(_rawSamplePosition, true, IsLooping, _loopStartSamples, _loopEndSamples);
+        ResetPlaybackBuffers();
+    }
+
+    private int ReadSource(Span<float> output) =>
+        _streaming != null ? _streaming.Read(output) : _dataProvider.ReadBytes(output);
+
+    private void AdvancePosition(int count)
+    {
+        if (_streaming == null)
+        {
+            _rawSamplePosition += count;
+            return;
+        }
+        if (_streaming != null && Math.Abs(_playbackSpeed - 1.0f) < 0.001f)
+        {
+            _rawSamplePosition = _streaming.Position;
+            return;
+        }
+        long position = (long)_rawSamplePosition + count;
+        int end = _loopEndSamples < 0 ? _dataProvider.Length : _loopEndSamples;
+        if (_streaming != null && IsLooping && end > _loopStartSamples && position >= end)
+            position = _loopStartSamples + (position - end) % (end - _loopStartSamples);
+        _rawSamplePosition = (int)Math.Min(position, int.MaxValue);
+    }
 
     private readonly ISoundDataProvider _dataProvider;
     private float _currentFractionalFrame;
@@ -31,6 +89,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
         get => _playbackSpeed;
         set
         {
+            using var transport = EnterTransport();
             if (value <= 0)
                 throw new ArgumentOutOfRangeException(nameof(value), "Playback speed must be greater than zero.");
             if (Math.Abs(_playbackSpeed - value) > 1e-6f)
@@ -50,6 +109,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
         get => _timeStretchConfig;
         set
         {
+            using var transport = EnterTransport();
             ArgumentNullException.ThrowIfNull(value);
             if (_timeStretchConfig != value)
             {
@@ -73,10 +133,25 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
     public PlaybackState State { get; internal set; }
 
     /// <inheritdoc />
+    /// <remarks>For chunked playback this provider is owned by the decoder worker. Do not
+    /// read, seek or dispose it independently while the player owns it. Its position/events
+    /// describe decode-ahead; use the player's Time and PlaybackEnded for transport state.</remarks>
     public ISoundDataProvider DataProvider => _dataProvider;
 
+    private bool _isLooping;
+
     /// <inheritdoc />
-    public bool IsLooping { get; set; }
+    public bool IsLooping
+    {
+        get => _isLooping;
+        set
+        {
+            using var transport = EnterTransport();
+            if (_isLooping == value) return;
+            _isLooping = value;
+            RefreshStreaming();
+        }
+    }
 
     /// <inheritdoc />
     public float Time =>
@@ -127,10 +202,29 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
         _timeStretchConfig = WsolaConfig.FromPreset(WsolaPerformancePreset.Fast);
         _timeStretcher = new WsolaTimeStretcher(initialChannels, _playbackSpeed, _timeStretchConfig);
         _timeStretcherInputBuffer = new float[Math.Max(_timeStretcher.MinInputSamplesToProcess * 2, 8192 * initialChannels)];
+        if (dataProvider is ChunkedDataProvider)
+            _streaming = new BufferedPlaybackSource(dataProvider, initialChannels);
     }
 
     /// <inheritdoc />
     protected override void GenerateAudio(Span<float> output, int channels)
+    {
+        if (_streaming == null)
+        {
+            GenerateAudioCore(output, channels);
+            return;
+        }
+        if (Interlocked.CompareExchange(ref _transportOwner,
+                -Environment.CurrentManagedThreadId, 0) != 0)
+        {
+            output.Clear();
+            return;
+        }
+        try { GenerateAudioCore(output, channels); }
+        finally { Volatile.Write(ref _transportOwner, 0); }
+    }
+
+    private void GenerateAudioCore(Span<float> output, int channels)
     {
         // Clear output if not playing or no channels.
         if (State != PlaybackState.Playing || channels == 0)
@@ -140,7 +234,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
         }
         
         // Proactively check for looping before generating audio. This handles loops where a specific end point is set.
-        if (IsLooping && _loopEndSamples != -1)
+        if (_streaming == null && IsLooping && _loopEndSamples != -1)
         {
             // Ensure loop is valid, and we've reached or passed the end point.
             if (_loopStartSamples < _loopEndSamples && _rawSamplePosition >= _loopEndSamples)
@@ -155,17 +249,17 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
             // Loop until the output buffer is full or the stream truly ends.
             while (!outputSlice.IsEmpty)
             {
-                var samplesReadThisCall = _dataProvider.ReadBytes(outputSlice);
+                var samplesReadThisCall = ReadSource(outputSlice);
                 
-                // A return value of 0 is the ONLY reliable end-of-stream signal.
+                // A zero read may mean starvation; HandleEndOfStream distinguishes it from EOF.
                 if (samplesReadThisCall == 0)
                 {
-                    // The data provider is exhausted. Handle the end of stream for the remaining part of the buffer.
+                    // Handle exhaustion or temporary starvation for the rest of this callback.
                     HandleEndOfStream(outputSlice, channels);
                     break; // Exit the read loop
                 }
 
-                _rawSamplePosition += samplesReadThisCall;
+                AdvancePosition(samplesReadThisCall);
                 outputSlice = outputSlice.Slice(samplesReadThisCall);
             }
             return;
@@ -194,8 +288,8 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
                 // If still not enough data after filling and the provider is truly exhausted and can't provide more data, end of stream.
                 if (_resampleBufferValidSamples < samplesRequiredInBufferForInterpolation)
                 {
-                    _rawSamplePosition += totalSourceSamplesAdvancedThisCall;
-                    _rawSamplePosition = Math.Min(_rawSamplePosition, _dataProvider.Length);
+                    AdvancePosition(totalSourceSamplesAdvancedThisCall);
+                    if (_streaming == null) _rawSamplePosition = Math.Min(_rawSamplePosition, _dataProvider.Length);
                     HandleEndOfStream(output[outputBufferOffset..], channels);
                     return;
                 }
@@ -244,8 +338,8 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
         }
 
         // Update raw sample position based on actual source samples advanced.
-        _rawSamplePosition += totalSourceSamplesAdvancedThisCall;
-        _rawSamplePosition = Math.Min(_rawSamplePosition, _dataProvider.Length);
+        AdvancePosition(totalSourceSamplesAdvancedThisCall);
+        if (_streaming == null) _rawSamplePosition = Math.Min(_rawSamplePosition, _dataProvider.Length);
     }
 
     /// <summary>
@@ -274,7 +368,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
 
             while (!directReadSlice.IsEmpty)
             {
-                var readThisCall = _dataProvider.ReadBytes(directReadSlice);
+                var readThisCall = ReadSource(directReadSlice);
                 if (readThisCall == 0)
                 {
                     break; // True end of stream.
@@ -334,10 +428,10 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
                     var totalReadFromProvider = 0;
                     while (!targetSpan.IsEmpty)
                     {
-                        var readThisCall = _dataProvider.ReadBytes(targetSpan);
+                        var readThisCall = ReadSource(targetSpan);
                         if (readThisCall == 0)
                         {
-                            providerExhausted = true; // True end of stream signaled.
+                            providerExhausted = _streaming == null || _streaming.IsExhausted;
                             break;
                         }
                         totalReadFromProvider += readThisCall;
@@ -430,12 +524,24 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
 
     /// <summary>
     /// Handles the end-of-stream condition, including looping and stopping.
-    /// This is called when the data provider is fully exhausted (ReadBytes returns 0).
+    /// A temporarily empty background ring emits silence without ending playback.
     /// </summary>
     /// <param name="remainingOutputBuffer">The buffer for remaining output.</param>
     /// <param name="channels">The number of channels.</param>
     protected virtual void HandleEndOfStream(Span<float> remainingOutputBuffer, int channels)
     {
+        if (_streaming != null)
+        {
+            remainingOutputBuffer.Clear();
+            // Empty ring != EOF. Keep the transport alive and position fixed during starvation.
+            if (_streaming.IsExhausted)
+            {
+                State = PlaybackState.Stopped;
+                Enabled = false;
+                OnPlaybackEnded();
+            }
+            return;
+        }
         // Not looping, and it's a file with a known length. This is the definitive end.
         if (!IsLooping && _dataProvider.Length > 0)
         {
@@ -449,7 +555,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
                 {
                     var sourceSamplesFromFinalFill = FillResampleBuffer(Math.Max(currentlyValidInResample, spaceToFill), channels);
                     _rawSamplePosition += sourceSamplesFromFinalFill;
-                    _rawSamplePosition = Math.Min(_rawSamplePosition, _dataProvider.Length);
+                    if (_streaming == null) _rawSamplePosition = Math.Min(_rawSamplePosition, _dataProvider.Length);
                 }
 
                 var toCopy = Math.Min(spaceToFill, _resampleBufferValidSamples);
@@ -530,22 +636,28 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
     /// <inheritdoc />
     public void Play()
     {
+        using var transport = EnterTransport();
         Enabled = true;
         State = PlaybackState.Playing;
+        _streaming?.SetActive(true);
     }
 
     /// <inheritdoc />
     public void Pause()
     {
+        using var transport = EnterTransport();
         Enabled = false;
         State = PlaybackState.Paused;
+        _streaming?.SetActive(false);
     }
 
     /// <inheritdoc />
     public void Stop()
     {
+        using var transport = EnterTransport();
         State = PlaybackState.Stopped;
         Enabled = false;
+        _streaming?.SetActive(false);
         Seek(0, Format.Channels);
         _timeStretcher.Reset();
         _resampleBufferValidSamples = 0;
@@ -559,6 +671,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
     /// <inheritdoc />
     public bool Seek(TimeSpan time, SeekOrigin seekOrigin = SeekOrigin.Begin)
     {
+        using var transport = EnterTransport();
         if (Format.Channels == 0 || Format.SampleRate == 0) return false;
         float targetTimeSeconds;
         var currentDuration = Duration;
@@ -590,6 +703,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
     
     private bool Seek(float timeInSeconds, int channels)
     {
+        using var transport = EnterTransport();
         if (channels == 0 || Format.SampleRate == 0) return false;
         timeInSeconds = Math.Max(0, timeInSeconds);
         // Convert time in seconds to sample offset in source data.
@@ -605,6 +719,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
 
     private bool Seek(int sampleOffset, int channels)
     {
+        using var transport = EnterTransport();
         if (!_dataProvider.CanSeek || channels == 0) return false;
 
         var maxSeekableSample = _dataProvider.Length > 0 ? _dataProvider.Length - channels : 0;
@@ -612,14 +727,22 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
         // Align sample offset to frame boundary.
         sampleOffset = (sampleOffset / channels) * channels;
         sampleOffset = Math.Clamp(sampleOffset, 0, maxSeekableSample);
-        _dataProvider.Seek(sampleOffset);
+        if (_streaming != null)
+            _streaming.Reset(sampleOffset, true, IsLooping, _loopStartSamples, _loopEndSamples);
+        else
+            _dataProvider.Seek(sampleOffset);
         _rawSamplePosition = sampleOffset;
+        ResetPlaybackBuffers();
+        return true;
+    }
+
+    private void ResetPlaybackBuffers()
+    {
         _currentFractionalFrame = 0f;
         _resampleBufferValidSamples = 0;
         _timeStretcher.Reset();
         _timeStretcherInputBufferValidSamples = 0;
         _timeStretcherInputBufferReadOffset = 0;
-        return true;
     }
 
     #endregion
@@ -637,6 +760,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
     /// <inheritdoc />
     public void SetLoopPoints(float startTime, float? endTime = null)
     {
+        using var transport = EnterTransport();
         var channels = Format.Channels;
         var sampleRate = Format.SampleRate;
         if (channels == 0 || sampleRate == 0) return;
@@ -664,11 +788,13 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
             _loopEndSamples = _loopEndSamples / channels * channels;
             _loopEndSamples = Math.Clamp(_loopEndSamples, _loopStartSamples, _dataProvider.Length);
         }
+        RefreshStreaming();
     }
 
     /// <inheritdoc />
     public void SetLoopPoints(int startSample, int endSample = -1)
     {
+        using var transport = EnterTransport();
         var channels = Format.Channels;
         if (channels == 0) return;
 
@@ -692,6 +818,7 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
         {
             _loopEndSamples = -1;
         }
+        RefreshStreaming();
     }
 
     /// <inheritdoc />
@@ -705,8 +832,13 @@ public abstract class SoundPlayerBase : SoundComponent, ISoundPlayer
     /// <inheritdoc cref="Dispose()" />
     protected override void Dispose(bool disposing)
     {
+        if (!disposing) _streaming?.RequestStop();
         if (disposing)
         {
+            using var transport = EnterTransport();
+            State = PlaybackState.Stopped;
+            Enabled = false;
+            _streaming?.Dispose();
             _dataProvider.Dispose();
         }
     }

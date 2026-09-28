@@ -5,6 +5,7 @@ using CodeBrix.Audio.Engine.Components;
 using CodeBrix.Audio.Engine.Providers;
 using CodeBrix.Audio.Engine.Structs;
 using CodeBrix.Audio.Wave;
+using CodeBrix.Audio.Utils;
 using EnginePlaybackState = CodeBrix.Audio.Engine.Enums.PlaybackState;
 
 namespace CodeBrix.Audio.Playback;
@@ -20,7 +21,11 @@ namespace CodeBrix.Audio.Playback;
 /// Typical use for a transport / scrubber control: <c>Load</c> a file, read <see cref="Duration"/> to
 /// size the timeline, <c>Play</c>, poll <see cref="Position"/> (for example each UI frame) to move the
 /// playback marker, and call <see cref="Seek"/> when the user drags the marker. The file streams from
-/// disk in chunks, so a multi‑minute track does not sit fully decoded in memory.
+/// disk through a bounded background PCM buffer, so a multi-minute track does not sit fully
+/// decoded in memory. Decode and loop seeks run on a worker, not in the audio callback. If the
+/// worker falls behind, playback emits silence without advancing source position or ending.
+/// Load, Seek and changes to IsLooping may wait on the calling control thread for preparation;
+/// schedule them off the UI thread when their latency matters.
 /// </para>
 /// <para>
 /// The file plays through the process‑wide <see cref="SharedAudioOutput"/> (the same device that
@@ -266,7 +271,8 @@ public sealed class AudioFilePlayer : IDisposable
             ChunkedDataProvider provider = null;
             try
             {
-                provider = new ChunkedDataProvider(device.Engine, device.Format, stream);
+                provider = new ChunkedDataProvider(device.Engine, device.Format,
+                    ownsStream ? stream : new IgnoreDisposeStream(stream));
                 player = new SoundPlayer(device.Engine, device.Format, provider)
                 {
                     Volume = _volume,
@@ -314,7 +320,7 @@ public sealed class AudioFilePlayer : IDisposable
         }
         else
         {
-            handler(this, EventArgs.Empty);
+            ThreadPool.QueueUserWorkItem(_ => handler(this, EventArgs.Empty));
         }
     }
 

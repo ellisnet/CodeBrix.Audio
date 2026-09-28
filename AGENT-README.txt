@@ -1168,6 +1168,98 @@ Playback (cross-platform, via the bundled engine):
                             [, channels]) once at start to pin the format; Shutdown() to
                             release it.
 
+BACKGROUND FILE PLAYBACK
+  AudioFilePlayer keeps its ordinary Load/Play/Pause/Stop/Seek/IsLooping API.
+  Its engine SoundPlayer decodes ChunkedDataProvider sources on a background
+  worker into a bounded, preallocated PCM ring. Loop seeking and decoding of
+  the next loop happen ahead of playback on that worker, including explicit
+  engine loop points. Memory does not grow with track length.
+
+  Load, Seek and loop-setting operations prepare audio synchronously on the
+  CALLING control thread; use an application worker if their latency would
+  block the UI. During a seek/control change the render callback emits silence
+  rather than waiting for decoding. Pause preserves position. If decoding
+  falls behind, playback also emits silence and holds source position until
+  PCM becomes available; starvation is not end-of-file. A bounded buffer cannot
+  guarantee gapless playback when decoding or storage is slower than playback.
+  Device xrun counters do not count this deliberately supplied silence.
+
+  Direct ChunkedDataProvider.ReadBytes/Seek calls remain synchronous, suitable
+  for existing offline consumers. Other provider types keep their existing
+  behavior. Do not read, seek or dispose a player's DataProvider independently
+  while the player owns it: its position/events reflect decode-ahead, whereas
+  the player's Time (AudioFilePlayer.Position) reports playback progress.
+  Provider callbacks run on the decoder worker; never control the player from
+  those callbacks. Marshal the operation to the application's control thread.
+  Use the player's PlaybackEnded for playback completion, not the provider's EOF.
+  Position and completion reflect rendered PCM, not measured speaker latency.
+
+  Dispose the player to stop/join its worker and release the decoder/stream.
+  A decoder blocked in synchronous I/O can delay control operations and
+  disposal, but does not block rendering. Load/seek errors reach the caller;
+  later decode errors reach the backend's render-error handling. No codec is
+  silently replaced and corrupt audio is not treated as successful EOF.
+  AudioFilePlayer.Load(stream, leaveOpen: true) leaves the caller's stream open.
+
+CONFIGURING AND OBSERVING THE ACTUAL SHARED OUTPUT
+  SharedAudioOutput has optional, platform-neutral startup hooks. Register
+  them before the first player starts; they do not open a device themselves:
+
+    UseDeviceConfigFactory(Func<AudioFormat, DeviceConfig>)
+      Supplies backend-specific device options for the selected shared format.
+      Return null (or register null) for backend defaults. Return fresh options
+      for each start and do not mutate them after handing them to the backend.
+    UseOutputObserver(Func<AudioEngine, AudioPlaybackDevice, IDisposable>)
+      Runs for each shared engine/device pair BEFORE Start. Subscribe to backend
+      events here and return an IDisposable that detaches those subscriptions.
+      That lifetime is disposed before device teardown, including failed Start.
+      If setup itself throws, undo any partial subscriptions before rethrowing.
+    TryObserveOutput(Action<AudioEngine, AudioPlaybackDevice>) -> bool
+      Runs a short read-only action against the CURRENT shared pair, protected
+      against disposal by Shutdown. Returns false without invoking the action
+      if output is not running. Does not start output. Copy diagnostic values
+      out of the action; do not retain or control the engine/device.
+
+  The config and observer registrations survive Shutdown, just like the engine
+  factory. Clear either with null while stopped. Configure(sampleRate, channels)
+  still controls the format and is still cleared by Shutdown. Backend defaults
+  and ordinary player call sites are unchanged when no hooks are installed.
+
+  Example for an application referencing the Android platform package:
+
+    CodeBrixAndroidAudio.Initialize(context);
+    SharedAudioOutput.UseDeviceConfigFactory(format => new AndroidDeviceConfig
+    {
+        BufferBursts = 3,
+        Usage = Android.Media.AudioUsageKind.Media
+    });
+    // Load/play using AudioFilePlayer, MidiMusicPlayer or other normal players.
+    // Later, on a control thread (never in an audio callback):
+    AndroidAudioDiagnostics snapshot = default;
+    Exception backendError = null;
+    bool running = SharedAudioOutput.TryObserveOutput((engine, device) =>
+    {
+        snapshot = ((IAndroidAudioDevice)device).GetDiagnostics();
+        backendError = ((AndroidAudioEngine)engine).LastBackendError;
+    });
+
+  Import CodeBrix.Audio.Android for the Android types and CodeBrix.Audio.Wave
+  for SharedAudioOutput. Read the snapshot only when running is true. It now
+  describes the very stream mixing your MIDI and file players, not a separate
+  diagnostic engine. UseOutputObserver can subscribe to the Android engine's
+  AudioDevicesChanged; polling the actual device also observes backend state
+  and errors across automatic stream recovery. Core does not invent a recovery
+  notification that the backend does not provide: native counters can reset on
+  recovery, and a route-list change alone does not prove recovery succeeded.
+
+  Hooks run synchronously on a control thread; keep them short and do not
+  reenter shared-output lifecycle/configuration or player operations. Backend
+  event handlers keep their backend's threading rules. SharedAudioOutput owns
+  the engine/device: observers must not start, stop, switch or dispose them.
+  Observer disposal must detach promptly without waiting for callbacks that
+  need SharedAudioOutput's lock. Exceptions from configuration/observer setup
+  fail startup with cleanup; exceptions from TryObserveOutput reach its caller.
+
 WaveFormat:
   - WaveFormat            : sample rate, channel count, bit depth, encoding.
 

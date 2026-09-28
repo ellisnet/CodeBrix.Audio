@@ -43,6 +43,10 @@ public static class SharedAudioOutput
     private static AudioEngine _engine;
     private static Func<AudioEngine> _engineFactory = () => new MiniAudioEngine();
     private static AudioPlaybackDevice _device;
+    private static Func<AudioFormat, DeviceConfig> _deviceConfigFactory;
+    private static Func<AudioEngine, AudioPlaybackDevice, IDisposable> _outputObserver;
+    private static IDisposable _outputObservation;
+    private static bool _invokingExtension;
     private static Timer _sweepTimer;
     private static bool _running;
 
@@ -73,9 +77,88 @@ public static class SharedAudioOutput
         if (factory == null) throw new ArgumentNullException(nameof(factory));
         lock (Gate)
         {
+            ThrowIfInvokingExtension();
             if (_running) throw new InvalidOperationException("Select the audio backend before playback starts.");
             _engineFactory = factory;
         }
+    }
+
+    /// <summary>
+    /// Selects backend-specific options for each future shared playback device without replacing
+    /// the normal players. Call before playback starts; this registration survives Shutdown.
+    /// </summary>
+    /// <param name="factory">Creates options for the selected output format, or null to restore
+    /// backend defaults. Returning null also selects defaults. Do not mutate returned options.</param>
+    /// <remarks>The factory runs synchronously on the starting control thread. It must not call
+    /// back into shared-output configuration, lifecycle or player operations.</remarks>
+    /// <exception cref="InvalidOperationException">Output is running or an extension is executing.</exception>
+    public static void UseDeviceConfigFactory(Func<AudioFormat, DeviceConfig> factory)
+    {
+        lock (Gate)
+        {
+            RequireExtensionConfiguration();
+            _deviceConfigFactory = factory;
+        }
+    }
+
+    /// <summary>
+    /// Registers an observer for each actual shared engine/device pair, before the device starts.
+    /// Use it to subscribe to platform backend events. The registration survives Shutdown.
+    /// </summary>
+    /// <param name="observer">Called on the starting control thread. Return a subscription lifetime
+    /// that detaches handlers when disposed, or null if no cleanup is needed. Pass null to clear
+    /// the registration. The shared output disposes the lifetime before disposing the device,
+    /// including when startup fails. The observer must clean up partial work if it throws.</param>
+    /// <remarks>The engine and device remain owned by SharedAudioOutput: do not start, stop,
+    /// switch or dispose them. Do not reenter shared-output configuration/lifecycle or start a
+    /// player from the observer. Backend events retain their backend-defined threading rules;
+    /// marshal UI work and never block a render event. Dispose the returned lifetime promptly
+    /// without waiting for work that calls back into SharedAudioOutput.</remarks>
+    /// <exception cref="InvalidOperationException">Output is running or an extension is executing.</exception>
+    public static void UseOutputObserver(Func<AudioEngine, AudioPlaybackDevice, IDisposable> observer)
+    {
+        lock (Gate)
+        {
+            RequireExtensionConfiguration();
+            _outputObserver = observer;
+        }
+    }
+
+    /// <summary>
+    /// Reads the actual shared engine/device on the calling control thread, without starting it.
+    /// Shutdown cannot dispose the pair during the action. Suitable for platform diagnostics.
+    /// </summary>
+    /// <param name="observe">A short read-only action. Copy diagnostic values out; do not retain,
+    /// control or dispose the engine/device, reenter player operations, or call this from an audio
+    /// callback. Exceptions from the action propagate to its caller.</param>
+    /// <returns>False when no shared output is running (the action is not called), otherwise true.</returns>
+    /// <exception cref="ArgumentNullException">The action is null.</exception>
+    /// <exception cref="InvalidOperationException">Called from another shared-output extension.</exception>
+    public static bool TryObserveOutput(Action<AudioEngine, AudioPlaybackDevice> observe)
+    {
+        if (observe == null) throw new ArgumentNullException(nameof(observe));
+        lock (Gate)
+        {
+            ThrowIfInvokingExtension();
+            if (!_running) return false;
+            _invokingExtension = true;
+            try { observe(_engine, _device); }
+            finally { _invokingExtension = false; }
+            return true;
+        }
+    }
+
+    private static void ThrowIfInvokingExtension()
+    {
+        if (_invokingExtension)
+            throw new InvalidOperationException("Do not reenter shared-output operations from an extension.");
+    }
+
+    private static void RequireExtensionConfiguration()
+    {
+        ThrowIfInvokingExtension();
+        if (_running)
+            throw new InvalidOperationException("Configure the shared playback device before playback starts.");
     }
 
     /// <summary>Whether the shared engine and playback device are currently running.</summary>
@@ -124,6 +207,7 @@ public static class SharedAudioOutput
 
         lock (Gate)
         {
+            ThrowIfInvokingExtension();
             if (_running)
             {
                 throw new InvalidOperationException(
@@ -458,9 +542,11 @@ public static class SharedAudioOutput
         Timer timer = null;
         AudioPlaybackDevice device = null;
         AudioEngine engine = null;
+        IDisposable observation = null;
 
         lock (Gate)
         {
+            ThrowIfInvokingExtension();
             // Always return to the pristine, unconfigured state (even when the device never started),
             // so a later start adopts the first sound's rate again unless the caller reconfigures.
             _configuredSampleRate = 0;
@@ -469,6 +555,8 @@ public static class SharedAudioOutput
             if (_running)
             {
                 Players.Clear();
+                observation = _outputObservation;
+                _outputObservation = null;
                 timer = _sweepTimer;
                 device = _device;
                 engine = _engine;
@@ -484,6 +572,7 @@ public static class SharedAudioOutput
         {
             timer.Dispose();
         }
+        try { observation?.Dispose(); } catch (Exception) { /* teardown remains best effort */ }
         try { if (device != null) { device.Stop(); } } catch (Exception) { /* device may already be stopping */ }
         try { if (device != null) { device.Dispose(); } } catch (Exception) { /* best effort */ }
         try { if (engine != null) { engine.Dispose(); } } catch (Exception) { /* best effort */ }
@@ -518,6 +607,7 @@ public static class SharedAudioOutput
     {
         lock (Gate)
         {
+            ThrowIfInvokingExtension();
             if (_running)
             {
                 return _device;
@@ -534,7 +624,8 @@ public static class SharedAudioOutput
             };
 
             var engine = _engineFactory() ?? throw new InvalidOperationException("The audio engine factory returned null.");
-            AudioPlaybackDevice device;
+            AudioPlaybackDevice device = null;
+            IDisposable observation = null;
             try
             {
                 // The managed Ogg Vorbis and FLAC decoders register BELOW the engine's native
@@ -563,17 +654,27 @@ public static class SharedAudioOutput
                     engine.RegisterPacketCodecFactory(packetFactory);
                 }
 
-                device = engine.InitializePlaybackDevice(null, format);
+                DeviceConfig config;
+                _invokingExtension = true;
+                try { config = _deviceConfigFactory?.Invoke(format); }
+                finally { _invokingExtension = false; }
+                device = engine.InitializePlaybackDevice(null, format, config);
+                _invokingExtension = true;
+                try { observation = _outputObserver?.Invoke(engine, device); }
+                finally { _invokingExtension = false; }
                 device.Start();
             }
             catch (Exception)
             {
-                engine.Dispose();
+                try { observation?.Dispose(); } catch (Exception) { /* preserve startup error */ }
+                try { device?.Dispose(); } catch (Exception) { /* preserve startup error */ }
+                try { engine.Dispose(); } catch (Exception) { /* preserve startup error */ }
                 throw;
             }
 
             _engine = engine;
             _device = device;
+            _outputObservation = observation;
             _sweepTimer = new Timer(Sweep, null, SweepIntervalMilliseconds, SweepIntervalMilliseconds);
             _running = true;
             return _device;

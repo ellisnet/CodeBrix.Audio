@@ -2240,6 +2240,53 @@ Nothing there is a licence obligation; it is the engineering record, kept
 separate because a shipped document carries no dates, no phase names and no
 corpus names.
 
+BACKGROUND CHUNKED PLAYBACK AND SHARED OUTPUT HOOKS
+--------------------------------------------------
+SoundPlayerBase wraps ChunkedDataProvider playback with BufferedPlaybackSource;
+direct provider reads retain their synchronous contract. The provider uses a
+fixed float array instead of a growing Queue. Its decoder, stream and locks
+are used by the producer, never by the buffered render consumer. No codec or
+native backend changes are required, including for separately packaged Opus.
+
+BufferedPlaybackSource is a single-producer/single-consumer ring: one second
+of PCM (at least 4096 frames), a same-size position-tag array and a 4096-frame
+decode scratch buffer, plus the provider's configured chunk storage. All are
+allocated before rendering. Position tags let one read span arbitrarily short
+loops without losing transport position. Volatile publication of written/read
+counters transfers ownership of slots. The worker polls for free space while
+full; the audio callback does not signal an OS event. Paused/stopped and
+EOF/fault workers sleep until a control request. Explicit disposal joins before closing the source;
+finalization requests worker cleanup without blocking the finalizer thread.
+
+Control requests are serialized against rendering by an atomic transport gate.
+The callback tries ONCE and supplies silence on contention; only controls wait.
+A seek/config request is handled by the decoder worker, clears obsolete PCM,
+prefills, then acknowledges the caller. Normal loop boundaries need no control
+request: the worker already queued the next iteration. Empty/invalid loops
+cannot spin indefinitely. Rendering distinguishes a temporarily empty ring
+from real EOF; asynchronous decode faults propagate through the render backend.
+An indefinitely blocked third-party decoder can delay seek/disposal: the
+ISoundDecoder contract has no cancellation mechanism. It cannot stall the
+render consumer. The underlying DataProvider remains worker-owned while used
+by a player; its position/events are decode-ahead, not audible transport time.
+
+BufferedPlaybackTests exercises worker stalls, seek/dispose ordering, sample
+identity across ring wraps and loops, starvation versus EOF, speed changes,
+errors and callback allocations, without an audio device. Existing provider
+tests fence synchronous decode and duration behavior. Real-device listening,
+sustained load and measured audible loop gaps remain separate validation.
+
+SharedAudioOutput.UseDeviceConfigFactory passes a platform DeviceConfig to its
+actual output creation. UseOutputObserver owns a per-device subscription
+lifetime, and TryObserveOutput offers a scoped control-thread read under Gate
+so Shutdown cannot invalidate the observed pair. Registration survives shutdown;
+sample-rate/channel configuration keeps its existing reset behavior. Observer
+setup precedes Start and cleanup precedes device disposal, even on start failure.
+Reentrant lifecycle/configuration calls from extensions are rejected. Core
+does not depend on Android or claim an Android recovery event exists.
+BackendRegistrationTests fence the startup/configuration seam, observation,
+restart/failure cleanup, ordinary player routing and borrowed-stream ownership.
+
 MAINTAINING CODEBRIX.AUDIO.ENGINE
 ---------------------------------
 PER-NATIVE LICENCE FILE (added 2026-08-29, Jeremy's family convention): every

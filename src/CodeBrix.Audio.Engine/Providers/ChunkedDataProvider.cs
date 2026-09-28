@@ -1,4 +1,3 @@
-using System.Buffers;
 using CodeBrix.Audio.Engine.Abstracts;
 using CodeBrix.Audio.Engine.Enums;
 using CodeBrix.Audio.Engine.Interfaces;
@@ -22,7 +21,9 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
     private readonly ISoundDecoder _decoder;
     private readonly int _chunkSize;
 
-    private readonly Queue<float> _buffer = new();
+    private readonly float[] _buffer;
+    private int _bufferOffset;
+    private int _bufferCount;
     private bool _isEndOfStream;
     private int _samplePosition;
 
@@ -74,11 +75,12 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
             };
         }
         
-        _chunkSize = chunkSize > 0 ? chunkSize * discoveredFormat.Channels : throw new ArgumentOutOfRangeException(nameof(chunkSize));
+        _chunkSize = chunkSize > 0 ? checked(chunkSize * discoveredFormat.Channels) : throw new ArgumentOutOfRangeException(nameof(chunkSize));
         SampleFormat = _decoder.SampleFormat;
         SampleRate = _decoder.SampleRate;
         CanSeek = _stream.CanSeek;
         
+        _buffer = new float[_chunkSize];
         FillBuffer();
     }
     
@@ -93,7 +95,7 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
     public ChunkedDataProvider(AudioEngine engine, AudioFormat format, Stream stream, int chunkSize = DefaultChunkSize)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
-        _chunkSize = chunkSize > 0 ? chunkSize * format.Channels : throw new ArgumentOutOfRangeException(nameof(chunkSize));
+        _chunkSize = chunkSize > 0 ? checked(chunkSize * format.Channels) : throw new ArgumentOutOfRangeException(nameof(chunkSize));
 
         var formatInfoResult = SoundMetadataReader.Read(_stream, new ReadOptions
         {
@@ -128,6 +130,7 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
         SampleRate = _decoder.SampleRate;
         CanSeek = _stream.CanSeek;
         
+        _buffer = new float[_chunkSize];
         FillBuffer();
     }
 
@@ -187,7 +190,7 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
         {
             while (samplesRead < buffer.Length)
             {
-                if (_buffer.Count == 0)
+                if (_bufferCount == 0)
                 {
                     if (_isEndOfStream)
                     {
@@ -198,7 +201,7 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
 
                     // Fill buffer with more data
                     FillBuffer();
-                    if (_buffer.Count == 0)
+                    if (_bufferCount == 0)
                     {
                         // No more data to read
                         _isEndOfStream = true;
@@ -207,11 +210,11 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
                     }
                 }
 
-                var toRead = Math.Min(buffer.Length - samplesRead, _buffer.Count);
-                for(var i = 0; i < toRead; i++)
-                {
-                    buffer[samplesRead++] = _buffer.Dequeue();
-                }
+                var toRead = Math.Min(buffer.Length - samplesRead, _bufferCount);
+                _buffer.AsSpan(_bufferOffset, toRead).CopyTo(buffer[samplesRead..]);
+                samplesRead += toRead;
+                _bufferOffset += toRead;
+                _bufferCount -= toRead;
             }
             
             _samplePosition += samplesRead;
@@ -245,7 +248,8 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
             }
 
             // Clear the existing buffer
-            _buffer.Clear();
+            _bufferOffset = 0;
+            _bufferCount = 0;
             _isEndOfStream = false;
             
             // Update the sample position
@@ -262,28 +266,9 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
     {
         if (IsDisposed || _isEndOfStream) return;
 
-        var buffer = ArrayPool<float>.Shared.Rent(_chunkSize);
-
-        try
-        {
-            var samplesRead = _decoder.Decode(buffer.AsSpan(0, _chunkSize));
-
-            if (samplesRead > 0)
-            {
-                for (var i = 0; i < samplesRead; i++)
-                {
-                    _buffer.Enqueue(buffer[i]);
-                }
-            }
-            else
-            {
-                _isEndOfStream = true;
-            }
-        }
-        finally
-        {
-            ArrayPool<float>.Shared.Return(buffer);
-        }
+        _bufferOffset = 0;
+        _bufferCount = _decoder.Decode(_buffer);
+        if (_bufferCount == 0) _isEndOfStream = true;
     }
 
     /// <inheritdoc />
@@ -295,7 +280,8 @@ public sealed class ChunkedDataProvider : ISoundDataProvider
         {
             _decoder.Dispose();
             _stream.Dispose();
-            _buffer.Clear();
+            _bufferOffset = 0;
+            _bufferCount = 0;
             IsDisposed = true;
         }
     }
