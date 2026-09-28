@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <!-- Version: 1.<years since 2026>.<day of year>.<minute of day>, computed once for the whole
-       repository in Directory.Build.props at the repo root. All three packages this repository
+       repository in Directory.Build.props at the repo root. All four packages this repository
        publishes read the same $(BuildVersion) from there; see that file for the full rationale
        and MAINTAINER-README.txt, "PACKAGING AND PUBLISHING", for how a publish pins it. -->
   <PropertyGroup>

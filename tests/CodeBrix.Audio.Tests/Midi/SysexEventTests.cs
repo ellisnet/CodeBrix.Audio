@@ -12,6 +12,57 @@ namespace CodeBrix.Audio.Tests.Midi;
 public class SysexEventTests
 {
     [Fact]
+    public void File_events_preserve_unterminated_segments_and_f7_escapes()
+    {
+        //Arrange: start a divided SysEx, finish it later, then escape a MIDI clock.
+        byte[] fixture = { 0, 0xF0, 2, 0x7D, 1, 10, 0xF7, 2, 2, 0xF7, 0, 0xF7, 1, 0xF8 };
+        using var source = new BinaryReader(new MemoryStream(fixture));
+        using var target = new MemoryStream();
+        using var writer = new BinaryWriter(target);
+        long readTime = 0, writtenTime = 0;
+        //Act
+        for (int i = 0; i < 3; i++)
+        {
+            var item = (SysexEvent)MidiEvent.ReadNextEvent(source, null);
+            readTime += item.DeltaTime;
+            item.AbsoluteTime = readTime;
+            item.Clone().Export(ref writtenTime, writer);
+        }
+        //Assert
+        Assert.Equal(fixture, target.ToArray());
+    }
+
+    [Fact]
+    public void File_sysex_length_uses_variable_length_quantity_including_terminator()
+    {
+        //Arrange
+        var item = new SysexEvent(0, new byte[127]);
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream);
+        long time = 0;
+        //Act
+        item.Export(ref time, writer);
+        var bytes = stream.ToArray();
+        stream.Position = 0;
+        using var reader = new BinaryReader(stream);
+        var read = (SysexEvent)MidiEvent.ReadNextEvent(reader, null);
+        //Assert
+        Assert.Equal(new byte[] { 0, 0xF0, 0x81, 0 }, bytes[..4]);
+        Assert.Equal(132, bytes.Length);
+        Assert.Equal(128, read.GetFileData().Length);
+        Assert.Equal(0xF7, read.GetFileData()[127]);
+    }
+
+    [Fact]
+    public void Truncated_file_sysex_is_reported_as_truncated_even_without_f7()
+    {
+        //Arrange
+        using var reader = new BinaryReader(new MemoryStream(new byte[] { 0, 0xF0, 10, 1, 2 }));
+        //Act, Assert
+        Assert.Throws<EndOfStreamException>(() => MidiEvent.ReadNextEvent(reader, null));
+    }
+
+    [Fact]
     public void Constructor_SetsAbsoluteTimeAndPayload()
     {
         var payload = new byte[] { 0x01, 0x02 };
@@ -57,7 +108,7 @@ public class SysexEventTests
     [Fact]
     public void ReadNextEvent_ParsesSysexEventAndAssignsBaseFields()
     {
-        using (var ms = new MemoryStream(new byte[] { 0x05, 0xF0, 0x10, 0x20, 0xF7 }))
+        using (var ms = new MemoryStream(new byte[] { 0x05, 0xF0, 0x03, 0x10, 0x20, 0xF7 }))
         using (var br = new BinaryReader(ms))
         {
             var midiEvent = MidiEvent.ReadNextEvent(br, null);
@@ -83,7 +134,7 @@ public class SysexEventTests
             sysex.Export(ref absoluteTime, writer);
 
             Assert.Equal(10, absoluteTime);
-            Assert.Equal(new byte[] { 0x0A, 0xF0, 0x01, 0x02, 0xF7 }, ms.ToArray());
+            Assert.Equal(new byte[] { 0x0A, 0xF0, 0x03, 0x01, 0x02, 0xF7 }, ms.ToArray());
         }
     }
 
@@ -143,10 +194,11 @@ public class SysexEventTests
 
     private static SysexEvent ReadViaMidiEvent(byte[] data)
     {
-        var bytes = new byte[2 + data.Length + 1];
+        var bytes = new byte[3 + data.Length + 1];
         bytes[0] = 0x00;
         bytes[1] = 0xF0;
-        Array.Copy(data, 0, bytes, 2, data.Length);
+        bytes[2] = (byte)(data.Length + 1);
+        Array.Copy(data, 0, bytes, 3, data.Length);
         bytes[bytes.Length - 1] = 0xF7;
 
         using (var ms = new MemoryStream(bytes))

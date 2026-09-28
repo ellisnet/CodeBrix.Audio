@@ -82,7 +82,7 @@ are desktop examples; Android applications construct AndroidAudioEngine instead.
 The application controls audio focus, permission prompts and foreground services.
 See https://github.com/ellisnet/CodeBrix.Audio.Android for its integration guide.
 
-ModestSynth and Opus depend on Core only. Their consuming application must also
+ModestSynth, MidiConnect and Opus depend on Core only. Their consuming application must also
 select the desktop or Android platform package for playback. Core alone supports
 managed file processing and offline synthesis; native codecs require a platform
 package even when no audio device is opened.
@@ -119,6 +119,13 @@ ADD-ON PACKAGES IN THE FAMILY
       Built and published from THIS repository at the same version as
       CodeBrix.Audio, so the two always match. Its guide is at
       https://github.com/ellisnet/CodeBrix.Audio/blob/main/src/CodeBrix.Audio.ModestSynth/AGENT-README.txt
+
+  CodeBrix.Audio.MidiConnect.MitLicenseForever
+      Connects to PHYSICAL MIDI DEVICES: device control, capturing the notes a
+      player performs, and sending music out to the devices that accept it.
+      Built and published from THIS repository at the same version as
+      CodeBrix.Audio. Its guide is at
+      https://github.com/ellisnet/CodeBrix.Audio/blob/main/src/CodeBrix.Audio.MidiConnect/AGENT-README.txt
 
   Any other codec package built on the seams described in ADDING A CODEC FROM
   ANOTHER PACKAGE below plugs in the same way.

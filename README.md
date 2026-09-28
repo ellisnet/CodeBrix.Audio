@@ -60,6 +60,10 @@ Sound that is generated rather than played back — band-limited saw, square and
 
 That package also carries **the instruments**. `GeneralMidiSynthesizer` plays a `.mid` with no configuration at all, and `GeneralMidiInstrumentLibrary.Register()` — one line — puts the complete General MIDI sound set, all 128 programs and the 47-note percussion kit, into the instrument registry described above under the name `ModestSynthGm`. It is synthesis throughout, with no recorded sample anywhere in it, so it sounds like a good synthesizer rather than like sampled instruments; the two voice programs sing a vowel properly, through resonances that stay put while the note moves through them, with several singers to a key and no two of them holding the pitch quite the same way. For recorded instruments, name a SoundFont library or swap voices into a mapped library instead. `CodeBrix.Audio` registers nothing itself, so this is the call that makes the instrument seam sound.
 
+## CodeBrix.Audio.MidiConnect (add-on MIDI device package)
+
+Connects to physical MIDI devices for device control and note capture, and sends music out to the devices that accept it. It is published from this repository as its own package, `CodeBrix.Audio.MidiConnect.MitLicenseForever`, at the same version as CodeBrix.Audio, and depends on Core only. See [its README](https://github.com/ellisnet/CodeBrix.Audio/blob/main/src/CodeBrix.Audio.MidiConnect/README.md).
+
 ## Formats not included
 
 Opus is deliberately not part of this package: it is BSD-3-Clause rather than MIT, so it ships separately as `CodeBrix.Audio.Opus.BsdLicenseForever`, which depends on Core and registers itself through the public extension points (`SharedAudioOutput.RegisterCodecFactory` for file playback, `SharedAudioOutput.RegisterPacketCodecFactory` for packet playback, and `AudioFileReaderRegistry.Register` for reading by file name). An Opus file opened without that package installed is recognised — duration, sample rate and channels all read — and fails with a message saying it is Opus.

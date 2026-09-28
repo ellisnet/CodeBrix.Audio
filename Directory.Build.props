@@ -3,11 +3,12 @@
   <!--
     Repo-wide build version. Imported automatically by every project in this repository
     (MSBuild walks up from each project directory looking for Directory.Build.props), so
-    CodeBrix.Audio, CodeBrix.Audio.Desktop, CodeBrix.Audio.Engine and CodeBrix.Audio.ModestSynth
-    all read the SAME $(BuildVersion) instead of each computing its own. That matters because
-    the three PACKAGES this repository publishes - CodeBrix.Audio.Core.MitLicenseForever,
-    CodeBrix.Audio.MitLicenseForever (desktop) and CodeBrix.Audio.ModestSynth.MitLicenseForever -
-    must carry one version so the desktop package's and the add-on's dependencies on Core
+    CodeBrix.Audio, CodeBrix.Audio.Desktop, CodeBrix.Audio.Engine, CodeBrix.Audio.ModestSynth and
+    CodeBrix.Audio.MidiConnect all read the SAME $(BuildVersion) instead of each computing its own.
+    That matters because the four PACKAGES this repository publishes -
+    CodeBrix.Audio.Core.MitLicenseForever, CodeBrix.Audio.MitLicenseForever (desktop),
+    CodeBrix.Audio.ModestSynth.MitLicenseForever and CodeBrix.Audio.MidiConnect.MitLicenseForever -
+    must carry one version so the desktop package's and the add-ons' dependencies on Core
     resolve exactly, and because the Engine assembly is bundled inside the Core package and
     would look odd carrying a version a minute away from it.
 

@@ -1,10 +1,14 @@
 THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 
-This file is packed into BOTH packages built from this repository -
-CodeBrix.Audio.MitLicenseForever and CodeBrix.Audio.ModestSynth.MitLicenseForever
-- and is the authoritative provenance record for both.
+This file is packed into all four packages built from this repository -
+CodeBrix.Audio.Core.MitLicenseForever, CodeBrix.Audio.MitLicenseForever,
+CodeBrix.Audio.ModestSynth.MitLicenseForever and
+CodeBrix.Audio.MidiConnect.MitLicenseForever - and is the authoritative
+provenance record for all of them.
 
-The CodeBrix.Audio.MitLicenseForever NuGet package ships two assemblies:
+The CodeBrix.Audio.Core.MitLicenseForever NuGet package ships two assemblies
+(the CodeBrix.Audio.MitLicenseForever desktop package depends on it and adds
+the native desktop backends):
 
   * CodeBrix.Audio        — a fully managed, cross-platform audio FILE library
                             (WAV/MP3/Ogg Vorbis/FLAC reading, Standard MIDI File
@@ -30,9 +34,19 @@ assembly:
                             CodeBrix code written from public documentation and
                             from published algorithm descriptions. It is listed
                             here so that a reader of this file knows the whole of
-                            what both packages carry.
+                            what every package carries.
 
-Both assemblies incorporate source code (and, for the Engine, a native library)
+The CodeBrix.Audio.MidiConnect.MitLicenseForever NuGet package ships one
+assembly:
+
+  * CodeBrix.Audio.MidiConnect — connection to physical MIDI devices for device
+                            control, note capture and output. Includes adaptations
+                            from NAudio (entry 1) and managed-midi (entry 8),
+                            alongside original CodeBrix code. It binds to the
+                            operating system's MIDI services; no native MIDI
+                            library or external device driver is bundled.
+
+These assemblies incorporate source code (and, for the Engine, a native library)
 adapted from the open-source projects listed below. Every incorporated project
 is distributed under a license — MIT, or the public-domain Unlicense / MIT-0 —
 that is permissive and compatible with the MIT License of CodeBrix.Audio itself.
@@ -73,6 +87,16 @@ Incorporated source (production):
     - Standard MIDI File reading and writing: MidiFile, the MidiEvent type
       hierarchy, and MidiEventCollection (NAudio.Midi/*).
 
+  MidiConnect Windows device support added 2026-09-28:
+    Source revision: 603d4d2487237377f5997ec10c54e7c5cd6d38a7
+    Upstream paths: src/NAudio.WinMM/Midi/MidiInterop.cs, MidiIn.cs, MidiOut.cs
+    Destination: src/CodeBrix.Audio.MidiConnect/Backends/Windows/
+    Narrowed WinMM declarations and device enumeration/buffer-lifecycle design
+    adapted for the new connection API. Original CodeBrix buffering, dispatch,
+    validation, cancellation and ownership logic replaces the upstream public
+    API. MIDIHDR uses pointer-sized 64-bit fields; long-message buffers remain
+    allocated until native unprepare succeeds. Supports Windows x64/ARM64.
+
 Incorporated source (tests):
     The test project under tests/CodeBrix.Audio.Tests contains test files and
     test helpers adapted from the NAudio.Core.Tests project (MIT). They were
@@ -82,10 +106,11 @@ Incorporated source (tests):
 Modifications made during the port:
     - Namespaces renamed from NAudio.* to CodeBrix.Audio.* (see provenance
       comments on each file's namespace line).
-    - Windows-only and other platform-specific NAudio projects (NAudio.WinMM,
+    - Except for the MidiConnect WinMM MIDI subset identified above,
+      Windows-only and other platform-specific NAudio projects (NAudio.WinMM,
       NAudio.Wasapi, NAudio.Asio, NAudio.Dmo, NAudio.Alsa, NAudio.WinForms,
-      etc.) were NOT incorporated; CodeBrix.Audio contains no audio-device
-      playback or recording code.
+      etc.) were NOT incorporated. MidiConnect does MIDI device I/O, not PCM
+      audio-device playback or recording.
     - NAudio's ACM/DMO-based MP3 decoding (Windows-only) was NOT incorporated;
       MP3 decoding is provided by the managed NLayer decoder (see entry 2).
     - NAudio.Core file-format parsers and engines unrelated to the supported
@@ -614,6 +639,75 @@ CodeBrix.Audio's own MIT license:
     synthesis, published FM algorithm charts, and the standard textbook forms of
     the creative effects. No synthesizer's source was used or adapted, and it
     carries no third-party code.
+  * CodeBrix.Audio.MidiConnect (src/CodeBrix.Audio.MidiConnect/) includes the
+    NAudio and managed-midi adaptations identified in entries 1 and 8. The
+    streaming parser, recording, playback, Linux bindings, tests and harnesses
+    are original CodeBrix code. Linux interop was independently authored from
+    ALSA API/ABI documentation. No alsa-sharp code was copied or adapted, and
+    alsa-sharp is not a dependency. System ALSA libasound.so.2 is required on
+    Linux (normally LGPL-2.1-or-later), installed and supplied by the operating
+    system/user, and is not redistributed in this NuGet package. Windows WinMM,
+    macOS CoreMIDI/CoreFoundation and Android's MIDI framework are likewise
+    operating-system services. The external Maschine Mikro MK3 test driver is
+    neither incorporated nor bundled.
+
+================================================================================
+
+
+8. managed-midi (MidiConnect device-access design)
+================================================================================
+
+Project:    managed-midi
+Source URL: https://github.com/atsushieno/managed-midi
+Revision:   fbdc142c27f4d71237e6dc14c07a61c4a6bc9c62 (local source reviewed 2026-09-28)
+Author:     Atsushi Eno and contributors
+License:    MIT
+
+Referenced/adapted design:
+  Commons.Music.Midi.Shared/MidiAccessManager.cs
+  Commons.Music.Midi.CoreMidiShared/CoreMidiAccess.cs
+  Commons.Music.Midi.DesktopShared/coremidi/CoreMidiInterop.cs
+  Commons.Music.Midi.Android/AndroidMidiAccess.cs
+
+Destination:
+  src/CodeBrix.Audio.MidiConnect/MidiDeviceManager.cs
+  src/CodeBrix.Audio.MidiConnect/Internal/BackendContracts.cs
+  src/CodeBrix.Audio.MidiConnect/Backends/MacOS/CoreMidiBackend.cs
+  src/CodeBrix.Audio.MidiConnect/Backends/Android/AndroidMidiBackend.cs
+
+The input/output-access separation and platform connection designs informed
+these implementations. They have been substantially rewritten: owned message
+buffers, bounded dispatch, explicit start/disposal, timestamps on a common
+clock, polling discovery, corrected device/app port directions on Android,
+API 33 byte-stream discovery and complete native device closure. CoreMIDI
+uses uint object handles and determines packet alignment with the native
+packet-list builder. The original managed-midi binaries, packages, optional
+backends, database and third-party dependencies are not included. ALSA code
+in managed-midi and alsa-sharp was inspected only to understand their relationship;
+our Linux binding is independently authored, not an adaptation of either.
+
+----- managed-midi MIT License -----
+
+Copyright (c) 2010 Atsushi Eno
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
 
 ================================================================================
 

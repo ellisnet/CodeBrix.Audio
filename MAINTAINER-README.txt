@@ -10,7 +10,7 @@ in this file is needed to use the package.
 
 PURPOSE AND SCOPE
 =================
-This repository produces THREE MIT NuGet packages at one shared version:
+This repository produces FOUR MIT NuGet packages at one shared version:
 
   CodeBrix.Audio.Core.MitLicenseForever (src/CodeBrix.Audio/)
       Owns CodeBrix.Audio.dll and CodeBrix.Audio.Engine.dll, preserving their
@@ -20,6 +20,9 @@ This repository produces THREE MIT NuGet packages at one shared version:
       desktop native backends and requires zero consumer startup/reference changes.
   CodeBrix.Audio.ModestSynth.MitLicenseForever (src/CodeBrix.Audio.ModestSynth/)
       Synthesis assembly; depends on Core. Its own README/AGENT-README are packed.
+  CodeBrix.Audio.MidiConnect.MitLicenseForever (src/CodeBrix.Audio.MidiConnect/)
+      Physical MIDI device assembly; depends on Core. Its own README/AGENT-README
+      are packed.
 
 Engine remains a private project reference bundled into Core. Platform packages
 supply native assets. The Apache-2.0 CodeBrix.Audio.Android backend lives in its
@@ -54,6 +57,9 @@ REPOSITORY LAYOUT
   src/CodeBrix.Audio.ModestSynth/  the synthesis add-on - its OWN package, its
                                  own README.md and AGENT-README.txt packed with
                                  it in place of the repo-root pair
+  src/CodeBrix.Audio.MidiConnect/  the physical MIDI device add-on - its OWN
+                                 package, packed with its own README.md and
+                                 AGENT-README.txt exactly as ModestSynth is
   native/miniaudio/              C sources and CMake project for the native
                                  backend, plus BUILD-PROVENANCE.txt
   tools/build_native_libraries/  the native build + verification driver
@@ -66,6 +72,9 @@ REPOSITORY LAYOUT
                                     app; outside the solution, see its README.txt
   tests/CodeBrix.Audio.Engine.Tests/ native-decode-path tests
   tests/CodeBrix.Audio.ModestSynth.Tests/  the add-on's test project
+  tests/CodeBrix.Audio.MidiConnect.Tests/  the MIDI device add-on's test project
+  tests/CodeBrix.Audio.MidiConnect.AndroidTests/  Android MIDI echo test app;
+                                    outside the solution, see its README.md
   tests/Assets/                      audio, soundfont and synth fixtures
   samples/                           runnable samples, each with its OWN .slnx
                                      and NOT referenced by CodeBrix.Audio.slnx,
@@ -87,7 +96,7 @@ REPOSITORY LAYOUT
                                      MAINTAINER-README.txt, README-INDEX.txt,
                                      README.md, THIRD-PARTY-NOTICES.txt and
                                      Directory.Build.props; the Tests folder
-                                     carries the three test projects
+                                     carries the four test projects
   Directory.Build.props              computes $(BuildVersion) once for the whole
                                      repository - see BUILDING
   global.json                        selects the test runner. It does NOT pin an
@@ -232,8 +241,8 @@ already committed under
 src/CodeBrix.Audio.Engine/Backends/MiniAudio/runtimes/<rid>/native/, so an
 ordinary build does not compile any C.
 
-GeneratePackageOnBuild is ON in both packable csprojs, so an ordinary build also
-produces two .nupkg files - see PACKAGING AND PUBLISHING.
+GeneratePackageOnBuild is ON in every packable csproj, so an ordinary build also
+produces the .nupkg files - see PACKAGING AND PUBLISHING.
 
 THE SHARED VERSION. Directory.Build.props at the repository root computes
 $(BuildVersion) - 1.<years since 2026>.<day of year>.<minute of day>, UTC - and
@@ -317,10 +326,11 @@ coverlet.collector any more; `dotnet test` produces test results and nothing
 else. If you want coverage, add the collector locally for the run rather than
 committing it back into the csproj files.
 
-There are three test projects: tests/CodeBrix.Audio.Tests (the bulk of them),
+There are four test projects: tests/CodeBrix.Audio.Tests (the bulk of them),
 tests/CodeBrix.Audio.Engine.Tests (~70, which exercise the native decode path
-without opening a device) and tests/CodeBrix.Audio.ModestSynth.Tests (the
-synthesis add-on). The core project deliberately does NOT reference the add-on:
+without opening a device), tests/CodeBrix.Audio.ModestSynth.Tests (the
+synthesis add-on) and tests/CodeBrix.Audio.MidiConnect.Tests (the MIDI device
+add-on - see MIDICONNECT TESTING below). The core project deliberately does NOT reference the add-on:
 what a consumer who never installed it hears is only testable from a project that
 cannot see it, so the "without the add-on" cases live in the core project and the
 "with it" cases live in the add-on's. Most of the core project's tests are
@@ -331,6 +341,72 @@ analysis primitives. Coverage includes: WAV reading/writing round-trips, MP3
 frame parsing and full managed decode, Ogg Vorbis and FLAC decoding, MIDI
 read/write round-trips and the event hierarchy, ID3v2 tag reading, the codecs,
 and the DSP primitives.
+
+MIDICONNECT TESTING
+-------------------
+tests/CodeBrix.Audio.MidiConnect.Tests covers the stream parser, recording, file
+export, playback timing, MPE transport and the package dependency/version
+relationship without any device. The ALSA virtual-port loopback test (output,
+input, timestamps and long SysEx) is opt-in:
+
+    CODEBRIX_MIDI_TEST_ALSA=1 dotnet test --project tests/CodeBrix.Audio.MidiConnect.Tests/CodeBrix.Audio.MidiConnect.Tests.csproj -p:GeneratePackageOnBuild=false
+
+It creates and removes only its own virtual MIDI port. Sandboxes may hide
+/dev/snd/seq even when it exists on the host.
+
+tests/CodeBrix.Audio.MidiConnect.AndroidTests is an Android 13/API 33+ app,
+outside the solution, whose virtual MIDI echo service verifies exact message
+bytes/order, fragmented SysEx, timestamps, note pairing, strict file
+export/read and repeated open/start/send/close; see its README.md. Check with
+Jeremy BEFORE running anything on either Android test device, because another
+concurrent project shares them. Physical USB/Bluetooth MIDI on Android has not
+been tested.
+
+samples/MidiConnect is a desktop CLI harness (list, monitor, record, inspect,
+play, panic, check-missing-alsa); see its README.md. check-missing-alsa
+simulates a libasound load failure in a separate process without modifying
+system libraries.
+
+Validation status: discovery and real hardware input are verified on the LMDE 7
+x64 workstation, and the Android echo tests pass on both an Arm64 and an X64
+Android 13 device. The Windows x64/ARM64 and macOS x64/ARM64 backends compile,
+but native/hardware tests on those systems, the Raspberry Pi 5 (ARM64) and Linux
+RISC-V 64 are still pending. Compilation and shared parser tests are not evidence
+of device validation on those platforms.
+
+Rules for this work: never install software on Jeremy's computer - describe
+missing prerequisites for him instead. No native MIDI library is built or
+redistributed; future Linux native binaries must use the configured ManyLinux
+environments.
+
+The Maschine Mikro MK3 (hardware input test device). It needs the separately
+installed Linux userspace driver running before it appears as an ALSA MIDI
+input. Start it in a separate terminal and leave it running during tests:
+
+    maschine-driver -c ~/GitHome/maschine-mikro-mk3-driver/example_config.toml
+
+Driver project: https://github.com/r00tman/maschine-mikro-mk3-driver
+The ALSA client is "Maschine Mikro MK3" and its source port is
+"Maschine Mikro MK3 MIDI Out". Despite the port's name, it is an INPUT to our
+application. Enumerate its address each session; do not hard-code an ALSA
+client number. The driver is not part of MidiConnect or its package, and must
+not be edited under CodeBrix.Audio work. Its LED color is hard-coded blue and it
+exposes no MIDI destination for LED control, so app-side pad latch state cannot
+be mirrored on the pad lights. Its example mapping shares notes 36 and 38
+between two pairs of pads; give pads distinct notes for independent toggles.
+
+The ROLI Seaboard RISE 2 is the expressive-keyboard (MPE) test target.
+MidiConnect transports MIDI 1.0 MPE without flattening channels or discarding
+RPN/CC74/pressure/bend/release-velocity messages; synth-side MPE interpretation
+is separate. Synthetic MPE regression coverage is in MpeTransportTests.
+
+Core SMF SysEx: Standard MIDI File F0/F7 events are length-delimited.
+SysexEvent.Export writes the length and MidiEvent.ReadNextEvent reads F0/F7
+payloads by length; GetFileData/FromFileData preserve continuation and escape
+payloads. Direct ReadSysexEvent remains a raw F7-terminated device-stream
+reader. Lengthless SysEx events are malformed files and are not read by any
+heuristic. MidiConnect device playback rejects timed split SysEx before sending
+anything.
 
 Test audio: WAV and MP3 fixtures are still built in code (TestAudio.cs). Ogg
 Vorbis and FLAC cannot reasonably be hand-assembled, so those live as files under
@@ -1944,17 +2020,17 @@ THE ADD-ON'S SIDE OF THE JOIN
     here", and every_listed_feature_has_a_status asks it with a NULL registry so
     that running both test assemblies in one process cannot make it lie.
 
-  All three packages are published together at one version - see PACKAGING AND
-  PUBLISHING, "THREE PACKAGES, ONE VERSION, PUBLISHED TOGETHER". The add-on's own
+  All four packages are published together at one version - see PACKAGING AND
+  PUBLISHING, "FOUR PACKAGES, ONE VERSION, PUBLISHED TOGETHER". The add-on's own
   README.md and AGENT-README.txt are what its package carries; the repo-root pair
   stay CodeBrix.Audio's.
 
 PACKAGING AND PUBLISHING
 ========================
-  THREE PACKAGES, ONE VERSION, PUBLISHED TOGETHER. Build Core, Desktop and
-  ModestSynth with one explicit BuildVersion. Publish Core first, then the two
-  dependent packages. Do not publish dependents until that Core version resolves
-  publicly. Publishing remains Jeremy's responsibility; agents must not commit
+  FOUR PACKAGES, ONE VERSION, PUBLISHED TOGETHER. Build Core, Desktop,
+  ModestSynth and MidiConnect with one explicit BuildVersion. Publish Core first,
+  then the three dependent packages. Do not publish dependents until that Core
+  version resolves publicly. Publishing remains Jeremy's responsibility; agents must not commit
   or push changes.
 
   Core nupkg (CodeBrix.Audio.Core.MitLicenseForever):
@@ -1986,13 +2062,25 @@ PACKAGING AND PUBLISHING
     lib/net10.0/CodeBrix.Audio.ModestSynth.dll and .xml.
     Uses its own README.md and AGENT-README.txt via None Update.
 
+  MidiConnect nupkg (CodeBrix.Audio.MidiConnect.MitLicenseForever):
+    Depends on Core ONLY - never on the desktop package - at the shared version,
+    through its ordinary ProjectReference.
+    lib/net10.0/CodeBrix.Audio.MidiConnect.dll and .xml.
+    Also lib/net10.0-android<SDK API>/CodeBrix.Audio.MidiConnect.dll and .xml,
+    with the Android API33 minimum encoded in the assembly. Both framework
+    dependency groups contain Core only. Requires the installed .NET Android
+    workload to build/pack both targets; do not install workloads automatically.
+    Uses its own README.md and AGENT-README.txt via explicit None Remove/Include:
+    the multi-target outer build has no default None glob to Update.
+
   All packages carry MIT metadata, PackageRequireLicenseAcceptance, the package
   icon and THIRD-PARTY-NOTICES.txt. Core and Desktop share the root
   AGENT-README.txt; Desktop packs the root README.md and Core packs its own.
   MAINTAINER-README.txt, EXTRAS-README.txt and README-INDEX.txt are not packed.
 
-  PackageVersionTests verifies the Core/ModestSynth dependency and version
-  relationship using packages in normal bin/Release outputs. The scripts in
+  PackageVersionTests (one in each add-on's test project) verifies the
+  Core/ModestSynth and Core/MidiConnect dependency and version relationships
+  using packages in normal bin/Release outputs. The scripts in
   tools/verify-packages additionally verify assembly ownership, API compatibility,
   unchanged native assets and an unchanged desktop consumer binary. Preserve a
   baseline package before future compatibility-sensitive work.
@@ -2022,12 +2110,12 @@ throwaway either way, and the projects agree in practice because the whole
 solution evaluates inside a second.
 
 Publishing follows the family rule: tag the repository at the version that was
-published, so the latest git tag and the latest nuget.org version agree. All three
+published, so the latest git tag and the latest nuget.org version agree. All four
 packages are published at that one version and the tag names it once.
 
 DOWNSTREAM. CodeBrix.Audio.Opus.BsdLicenseForever pins Core through CodeBrixAudioCoreVersion
-in its Directory.Build.props, CodeBrix.Audio.ModestSynth takes it by project reference from
-inside this repository, and the CodeBrix.Platform AudioPlayer add-in and
+in its Directory.Build.props, CodeBrix.Audio.ModestSynth and CodeBrix.Audio.MidiConnect take it by project
+reference from inside this repository, and the CodeBrix.Platform AudioPlayer add-in and
 GameEngine build on it. A breaking change to the codec-registration seams, to
 SharedAudioOutput or to AudioFileReaderRegistry is a breaking change for them.
 
@@ -2485,7 +2573,8 @@ These conventions govern the CodeBrix.Audio assembly and its tests. They do NOT
 govern CodeBrix.Audio.Engine, which keeps the upstream project's own settings -
 see MAINTAINING CODEBRIX.AUDIO.ENGINE above.
 
-  - Target framework net10.0 only; no multi-targeting.
+  - Core target framework net10.0 only. MidiConnect intentionally adds
+    net10.0-android for API33+ platform bindings; keep that exception in the add-on.
   - Nullable reference types are OFF. Do NOT add `?` to reference types and do
     NOT use the null-forgiveness `!` operator. Value-type nullables (int?,
     bool?, enum?) are fine.

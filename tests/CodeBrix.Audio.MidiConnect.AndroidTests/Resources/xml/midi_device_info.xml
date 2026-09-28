@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<devices>
+  <device manufacturer="CodeBrix" product="MidiConnect test echo" name="MidiConnect test echo">
+    <input-port name="Echo input" />
+    <output-port name="Echo output" />
+  </device>
+</devices>

@@ -11,6 +11,12 @@ namespace CodeBrix.Audio.Midi; //was previously: NAudio.Midi;
 public class SysexEvent : MidiEvent 
 {
     private byte[] data;
+    private bool appendTerminator = true;
+
+    private SysexEvent(long absoluteTime, MidiCommandCode command) : base(absoluteTime, 1, command)
+    {
+        data = Array.Empty<byte>();
+    }
 
     /// <summary>
     /// Creates a new sysex event
@@ -38,16 +44,47 @@ public class SysexEvent : MidiEvent
         this.data = (byte[])data.Clone();
     }
 
+    /// <summary>Creates a length-delimited Standard MIDI File F0 or F7 event.
+    /// The data is exactly the file payload, including a terminating F7 only when present.
+    /// F7 events may contain escaped MIDI messages or continue a preceding SysEx.</summary>
+    public static SysexEvent FromFileData(long absoluteTime, MidiCommandCode command, ReadOnlySpan<byte> fileData)
+    {
+        if (command != MidiCommandCode.Sysex && command != MidiCommandCode.Eox)
+            throw new ArgumentOutOfRangeException(nameof(command));
+        var result = new SysexEvent(absoluteTime, command);
+        result.appendTerminator = fileData.Length > 0 && fileData[^1] == 0xF7;
+        result.data = (result.appendTerminator ? fileData[..^1] : fileData).ToArray();
+        return result;
+    }
+
+    /// <summary>Returns an owned copy of the Standard MIDI File payload, including any F7 terminator.
+    /// Does not include the event's F0/F7 status or its variable-length size field.</summary>
+    public byte[] GetFileData()
+    {
+        var result = new byte[data.Length + (appendTerminator ? 1 : 0)];
+        data.CopyTo(result, 0);
+        if (appendTerminator) result[^1] = 0xF7;
+        return result;
+    }
+
+    internal static SysexEvent ReadFileEvent(BinaryReader reader, MidiCommandCode command)
+    {
+        int length = ReadVarInt(reader);
+        if (reader.BaseStream.CanSeek && length > reader.BaseStream.Length - reader.BaseStream.Position)
+            throw new EndOfStreamException("The MIDI file's SysEx payload is truncated.");
+        byte[] payload = reader.ReadBytes(length);
+        if (payload.Length != length) throw new EndOfStreamException("The MIDI file's SysEx payload is truncated.");
+        return FromFileData(0, command, payload);
+    }
+
     /// <summary>
-    /// Reads a sysex message from a MIDI stream
+    /// Reads an F7-terminated raw device message after its F0 byte. This is not the Standard MIDI File format.
     /// </summary>
     /// <param name="br">Stream of MIDI data</param>
     /// <returns>a new sysex message</returns>
     public static SysexEvent ReadSysexEvent(BinaryReader br) 
     {
         SysexEvent se = new SysexEvent();
-        //se.length = ReadVarInt(br);
-        //se.data = br.ReadBytes(se.length);
 
         var sysexData = new List<byte>();
         bool loop = true;
@@ -102,10 +139,8 @@ public class SysexEvent : MidiEvent
     public override void Export(ref long absoluteTime, BinaryWriter writer)
     {
         base.Export(ref absoluteTime, writer);
-        //WriteVarInt(writer,length);
-        //writer.Write(data, 0, data.Length);
-        var sysexData = data ?? Array.Empty<byte>();
-        writer.Write(sysexData, 0, sysexData.Length);
-        writer.Write((byte)0xF7);
+        var fileData = GetFileData();
+        WriteVarInt(writer, fileData.Length);
+        writer.Write(fileData);
     }
 }

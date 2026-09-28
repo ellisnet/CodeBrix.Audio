@@ -16,9 +16,11 @@
     <Project Path="tests/CodeBrix.Audio.Tests/CodeBrix.Audio.Tests.csproj" />
     <Project Path="tests/CodeBrix.Audio.Engine.Tests/CodeBrix.Audio.Engine.Tests.csproj" />
     <Project Path="tests/CodeBrix.Audio.ModestSynth.Tests/CodeBrix.Audio.ModestSynth.Tests.csproj" />
+    <Project Path="tests/CodeBrix.Audio.MidiConnect.Tests/CodeBrix.Audio.MidiConnect.Tests.csproj" />
   </Folder>
   <Project Path="src/CodeBrix.Audio/CodeBrix.Audio.csproj" />
   <Project Path="src/CodeBrix.Audio.Desktop/CodeBrix.Audio.Desktop.csproj" />
   <Project Path="src/CodeBrix.Audio.Engine/CodeBrix.Audio.Engine.csproj" />
+  <Project Path="src/CodeBrix.Audio.MidiConnect/CodeBrix.Audio.MidiConnect.csproj" />
   <Project Path="src/CodeBrix.Audio.ModestSynth/CodeBrix.Audio.ModestSynth.csproj" />
 </Solution>

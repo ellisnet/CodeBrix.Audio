@@ -1,0 +1,77 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    CodeBrix.Audio.MidiConnect - the MIDI device add-on for CodeBrix.Audio: connecting to
+    physical MIDI devices for device control and note capture, and sending music out to the
+    devices that accept it. It is published as its own package, at the SAME version as
+    CodeBrix.Audio (see Directory.Build.props at the repo root), and depends on nothing but
+    CodeBrix.Audio.Core.
+  -->
+
+  <PropertyGroup>
+    <TargetFrameworks>net10.0;net10.0-android</TargetFrameworks>
+    <SupportedOSPlatformVersion Condition="'$(TargetFramework)' == 'net10.0-android'">33.0</SupportedOSPlatformVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>CodeBrix.Audio.MidiConnect</AssemblyName>
+    <RootNamespace>CodeBrix.Audio.MidiConnect</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-android'">
+    <Compile Remove="Backends/Android/**/*.cs" />
+  </ItemGroup>
+
+  <!-- Version: 1.<years since 2026>.<day of year>.<minute of day>, computed once for the whole
+       repository in Directory.Build.props at the repo root. This package and
+       CodeBrix.Audio.Core.MitLicenseForever carry the same version by construction, which is
+       what makes the ProjectReference below emit a dependency that resolves exactly. -->
+  <PropertyGroup>
+    <Version>$(BuildVersion)</Version>
+    <AssemblyVersion>$(BuildVersion)</AssemblyVersion>
+    <FileVersion>$(BuildVersion)</FileVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>CodeBrix.Audio.MidiConnect.MitLicenseForever</PackageId>
+    <Product>CodeBrix.Audio.MidiConnect</Product>
+    <Title>CodeBrix.Audio.MidiConnect</Title>
+    <Authors>Jeremy Ellis</Authors>
+    <Description>Connects CodeBrix.Audio to physical MIDI devices: device control, capturing the notes a player performs, and sending music out to the devices that accept it. Ships as a separate add-on so you only include the MIDI device code when you actually need it.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/ellisnet/CodeBrix.Audio</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ellisnet/CodeBrix.Audio</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageIcon>icon-codebrix-128.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Copyright>Copyright (c) 2026 Jeremy Ellis and contributors</Copyright>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+    <IsPackable>true</IsPackable>
+    <PackageTags>audio;midi;midi-device;midi-input;midi-output;controller;keyboard;note-capture;CodeBrix</PackageTags>
+  </PropertyGroup>
+
+  <!--
+    The icon and the third-party notices come from the repo root and cover every package; the
+    README and the agent guide are this package's OWN. The multi-target outer build has
+    no default None glob, so remove/include makes these explicit there while avoiding
+    duplicates in inner framework builds.
+  -->
+  <ItemGroup>
+    <None Include="..\..\icon-codebrix-128.png" Pack="true" PackagePath="" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.txt" Pack="true" PackagePath="" />
+    <None Remove="README.md;AGENT-README.txt" />
+    <None Include="README.md;AGENT-README.txt" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <!--
+    An ORDINARY ProjectReference, deliberately: pack turns it into a NuGet dependency on
+    CodeBrix.Audio.Core.MitLicenseForever at the version that project produced in this same
+    build. Do not add PrivateAssets="all" here - that is the Engine's arrangement inside the
+    Core package, and the opposite of what this add-on wants. The dependency is on Core, not
+    on the desktop package: a consuming application picks its platform package itself.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\CodeBrix.Audio\CodeBrix.Audio.csproj" />
+  </ItemGroup>
+
+</Project>

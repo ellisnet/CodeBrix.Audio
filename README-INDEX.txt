@@ -28,6 +28,13 @@ AGENT-README FILES (consumer documentation, one per NuGet package)
       from this repository at the same version as CodeBrix.Audio, and packed
       with its own README.md.
 
+  src/CodeBrix.Audio.MidiConnect/AGENT-README.txt
+      CodeBrix.Audio.MidiConnect.MitLicenseForever - the MIDI device add-on:
+      connecting to physical MIDI devices for device control and note capture,
+      and sending music out to the devices that accept it. Built and published
+      from this repository at the same version as CodeBrix.Audio, and packed
+      with its own README.md.
+
 MAINTAINER AND EXTRAS
 ---------------------
   MAINTAINER-README.txt

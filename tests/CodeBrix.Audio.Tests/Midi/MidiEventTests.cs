@@ -288,7 +288,7 @@ public class MidiEventTests
     [Fact]
     public void ReadNextEventParsesSysexEvent()
     {
-        var bytes = new byte[] { 0x00, 0xF0, 0x01, 0x02, 0xF7 };
+        var bytes = new byte[] { 0x00, 0xF0, 0x03, 0x01, 0x02, 0xF7 };
         using (var ms = new MemoryStream(bytes))
         using (var br = new BinaryReader(ms))
         {

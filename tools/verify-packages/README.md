@@ -5,8 +5,9 @@ before the split. Keep the baseline package outside source control, for example
 under `artifacts/android-port/baseline-feed`. The initial development baseline is
 `CodeBrix.Audio.MitLicenseForever.1.0.269.1.nupkg`.
 
-1. Build the coordinated packages with a single `BuildVersion` and copy the three
-   packages to a local feed. See the Android repository's `tools/build-local.sh`.
+1. Build the coordinated packages with a single `BuildVersion` and copy the desktop,
+   Core and ModestSynth packages (the three the script checks) to a local feed.
+   See the Android repository's `tools/build-local.sh`.
 2. Run `python3 tools/verify-packages/verify_packages.py BASELINE_NUPKG FEED VERSION`.
    It checks Core assembly ownership, all dependency edges, and byte identity of
    every desktop native binary and adjacent license file.
