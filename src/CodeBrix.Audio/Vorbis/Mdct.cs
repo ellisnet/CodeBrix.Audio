@@ -357,11 +357,16 @@ class Mdct : IMdct
         // The step3 helpers use ref arithmetic instead of array indexing: the
         // decreasing computed indices defeat the JIT's bounds-check elimination,
         // and these loops dominate the transform's cost. Offsets are provably
-        // in-range for any legal block size (see the golden-output tests).
+        // in-range for any legal block size (see MdctReferenceChecks).
+        // Keep variable negative offsets native-sized and SIGNED before Unsafe.Add
+        // scales them. Optimized Mono on Android can zero-extend the int overload
+        // here, turning a backwards step into an access many GiB past the buffer.
+        // The nint overload preserves the sign on both ARM64 and x64 without
+        // disabling optimization or adding a platform-specific decoder path.
         void step3_iter0_loop(int n, float[] e, int i_off, int k_off)
         {
             ref float ee0 = ref Unsafe.Add(ref e[0], i_off);
-            ref float ee2 = ref Unsafe.Add(ref ee0, k_off);
+            ref float ee2 = ref Unsafe.Add(ref ee0, (nint)k_off);
             ref float aa = ref _a[0];
             for (int i = n >> 2; i > 0; --i)
             {
@@ -409,7 +414,7 @@ class Mdct : IMdct
             float k00_20, k01_21;
 
             ref float e0 = ref Unsafe.Add(ref e[0], d0);
-            ref float e2 = ref Unsafe.Add(ref e0, k_off);
+            ref float e2 = ref Unsafe.Add(ref e0, (nint)k_off);
             ref float aa = ref _a[0];
 
             for (int i = lim >> 2; i > 0; --i)
@@ -469,7 +474,7 @@ class Mdct : IMdct
             float k00, k11;
 
             ref float ee0 = ref Unsafe.Add(ref e[0], i_off);
-            ref float ee2 = ref Unsafe.Add(ref ee0, k_off);
+            ref float ee2 = ref Unsafe.Add(ref ee0, (nint)k_off);
 
             for (int i = n; i > 0; --i)
             {
@@ -501,8 +506,8 @@ class Mdct : IMdct
                 Unsafe.Add(ref ee2, -6) = k00 * A6 - k11 * A7;
                 Unsafe.Add(ref ee2, -7) = k11 * A6 + k00 * A7;
 
-                ee0 = ref Unsafe.Add(ref ee0, -k0);
-                ee2 = ref Unsafe.Add(ref ee2, -k0);
+                ee0 = ref Unsafe.Add(ref ee0, -(nint)k0);
+                ee2 = ref Unsafe.Add(ref ee2, -(nint)k0);
             }
         }
 

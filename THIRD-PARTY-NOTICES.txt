@@ -347,8 +347,13 @@ Modifications made during the port:
       netstandard-only package references (System.Memory, System.ValueTuple,
       System.Runtime.CompilerServices.Unsafe, Microsoft.Bcl.Numerics) were
       dropped because all of it is in-box on .NET 10.
-    - No decoding logic was changed. One upstream behaviour is documented rather
-      than modified: seeking into the middle of a Vorbis packet leaves the
+    - The packet-decoding entry point and overlap reset were added alongside the
+      original Ogg pulling path. The MDCT uses ref-based buffer traversal;
+      variable negative offsets explicitly use signed native-sized arithmetic
+      to preserve their sign on optimized Android Mono. The transform is checked
+      against independent cosine sums for every legal Vorbis block size.
+    - One upstream behaviour is documented rather than modified: seeking into
+      the middle of a Vorbis packet leaves the
       decoder without the preceding packet's overlap history, so up to one block
       of audio after a seek can differ from a sequential decode of the same
       region before the two converge. See the remarks on OggVorbisFileReader.

@@ -238,6 +238,11 @@ tests/ - the test projects
           tests/CodeBrix.Audio.Engine.Tests/
           tests/CodeBrix.Audio.ModestSynth.Tests/
 
+  tests/CodeBrix.Audio.AndroidTests/ is a separate Core-only Android decoder
+  regression app, outside the solution. It consumes a packed Core NuGet and
+  checks managed Vorbis in Release on API 33+ ARM64/x64 without an audio backend.
+  Read its README.txt for build/run commands and the signed-offset regression.
+
   Not samples, but they are the other non-package content in the repository and
   they are the best worked examples of every public API. AGENT-README.txt's
   "WORKING EXAMPLES ON GITHUB" section maps each feature to the file that

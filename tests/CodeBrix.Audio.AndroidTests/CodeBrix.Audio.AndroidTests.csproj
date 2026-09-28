@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-android36.1</TargetFramework>
+    <SupportedOSPlatformVersion>33.0</SupportedOSPlatformVersion>
+    <RuntimeIdentifiers>android-arm64;android-x64</RuntimeIdentifiers>
+    <OutputType>Exe</OutputType>
+    <!-- Uses the existing test friend assembly identity to exercise the internal MDCT in the packed Core. -->
+    <AssemblyName>CodeBrix.Audio.Tests</AssemblyName>
+    <ApplicationId>com.codebrix.audio.coretests</ApplicationId>
+    <ApplicationTitle>Audio.Core decoder checks</ApplicationTitle>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <Nullable>disable</Nullable>
+    <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
+    <AndroidManifest>Properties/AndroidManifest.xml</AndroidManifest>
+    <AndroidPackageFormats>apk</AndroidPackageFormats>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="CodeBrix.Audio.Core.MitLicenseForever" Version="$(AudioCoreVersion)" />
+    <Compile Include="../CodeBrix.Audio.Tests/Utils/OggPacketReader.cs" Link="OggPacketReader.cs" />
+    <Compile Include="../CodeBrix.Audio.Tests/Utils/MdctReferenceChecks.cs" Link="MdctReferenceChecks.cs" />
+    <AndroidAsset Include="../Assets/audio/vorbis-tone-*.ogg;../Assets/audio/vorbis-sweep-*.ogg" Link="%(Filename)%(Extension)" />
+  </ItemGroup>
+  <Target Name="RequireCoreVersion" BeforeTargets="CollectPackageReferences">
+    <Error Condition="'$(AudioCoreVersion)' == ''" Text="Specify -p:AudioCoreVersion=the-package-version-to-test." />
+  </Target>
+</Project>

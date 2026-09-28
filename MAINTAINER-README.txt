@@ -62,6 +62,8 @@ REPOSITORY LAYOUT
   tools/ds_feature_survey/       Decent Sampler feature coverage tool - see THE
                                  DECENT SAMPLER ENGINE, and its own README.txt
   tests/CodeBrix.Audio.Tests/        the main test project
+  tests/CodeBrix.Audio.AndroidTests/ Core-only packed-package decoder regression
+                                    app; outside the solution, see its README.txt
   tests/CodeBrix.Audio.Engine.Tests/ native-decode-path tests
   tests/CodeBrix.Audio.ModestSynth.Tests/  the add-on's test project
   tests/Assets/                      audio, soundfont and synth fixtures
@@ -2089,6 +2091,21 @@ trailing trim described above, so the comparison runs over the common prefix and
 bounds the difference. The reset test pins the other half: one packet of
 pre-roll after Reset() and the audio is identical to the uninterrupted decode,
 not merely close to it.
+
+ANDROID RELEASE MDCT REGRESSION (2026-09-28 UTC). The optimized Mono path in
+.NET 10.0.12 on Android 13 ARM64 and x64 crashed in Mdct's step-3 helpers when
+variable negative Unsafe.Add offsets lost their sign. An app referencing only
+published Core 1.0.269.1270 reproduced SIGSEGV at block size 128, with no audio
+backend, video decoder or Opus present. Five offsets now use signed native-sized
+arithmetic explicitly; optimization remains enabled and the algorithm is unchanged.
+MdctTests checks every legal block size against independent cosine sums and an
+impulse. The separate tests/CodeBrix.Audio.AndroidTests app runs those checks
+against the packed Core and compares packet/stream decoding for three fixtures.
+All pass on both API 33 devices with local fixed Core 1.0.271.274. The full
+Release desktop suite passed 5,203 tests, with 104 opt-in skips and no failures.
+The sibling Dav1d consumer also passed AV1 + Vorbis/Opus playback, pause, seek
+and drain using that Core and the unchanged published Audio.Android backend.
+See the Android test app's README for build/run and package rollout instructions.
 
 PACKETAUDIOPLAYER AND THE LIVE-STREAM PATH. Its data provider reports a Length
 of 0, which the engine's SoundPlayerBase reads as "live stream": when a read
