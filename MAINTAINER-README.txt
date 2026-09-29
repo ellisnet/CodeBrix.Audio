@@ -367,17 +367,19 @@ play, panic, check-missing-alsa); see its README.md. check-missing-alsa
 simulates a libasound load failure in a separate process without modifying
 system libraries.
 
-Validation status: discovery and real hardware input are verified on the LMDE 7
-x64 workstation, and the Android echo tests pass on both an Arm64 and an X64
-Android 13 device. The Windows x64/ARM64 and macOS x64/ARM64 backends compile,
-but native/hardware tests on those systems, the Raspberry Pi 5 (ARM64) and Linux
-RISC-V 64 are still pending. Compilation and shared parser tests are not evidence
-of device validation on those platforms.
+Validation status: discovery, real hardware input, Yamaha hardware output and
+live input driving computer-rendered instruments are verified on the LMDE 7
+x64 workstation (device details below). The Android echo tests pass on both an
+Arm64 and an X64 Android 13 device. The Windows x64/ARM64 and macOS x64/ARM64
+backends compile, but native/hardware tests on those systems, the Raspberry Pi 5
+(ARM64) and Linux RISC-V 64 are still pending. Compilation and shared parser
+tests are not evidence of device validation on those platforms.
 
-Rules for this work: never install software on Jeremy's computer - describe
-missing prerequisites for him instead. No native MIDI library is built or
-redistributed; future Linux native binaries must use the configured ManyLinux
-environments.
+Rules for this work: never install system software or drivers, or run apt
+updates, on Jeremy's computer - describe missing prerequisites for him instead.
+Jeremy permits NuGet package downloads/restores. No native MIDI library is built
+or redistributed; future Linux native binaries must use the configured
+ManyLinux environments.
 
 The Maschine Mikro MK3 (hardware input test device). It needs the separately
 installed Linux userspace driver running before it appears as an ALSA MIDI
@@ -395,10 +397,101 @@ exposes no MIDI destination for LED control, so app-side pad latch state cannot
 be mirrored on the pad lights. Its example mapping shares notes 36 and 38
 between two pairs of pads; give pads distinct notes for independent toggles.
 
-The ROLI Seaboard RISE 2 is the expressive-keyboard (MPE) test target.
-MidiConnect transports MIDI 1.0 MPE without flattening channels or discarding
-RPN/CC74/pressure/bend/release-velocity messages; synth-side MPE interpretation
-is separate. Synthetic MPE regression coverage is in MpeTransportTests.
+Yamaha PSR-E363 and ROLI Seaboard RISE 2: Linux USB tests, 2026-09-28
+
+Jeremy tested both on LMDE 7 Gigi (Debian 13), Linux x64, using a standalone
+net10.0 scratch application and the published nuget.org packages, all pinned
+to 1.0.271.1165:
+
+  - CodeBrix.Audio.MidiConnect.MitLicenseForever
+  - CodeBrix.Audio.Core.MitLicenseForever
+  - CodeBrix.Audio.MitLicenseForever (desktop audio for the live sampler)
+
+The scratch application has no repository project references. Both USB devices
+were detected with the existing Linux USB-audio/ALSA support; no system package,
+driver, Yamaha/ROLI software or Decent Sampler application was installed.
+libasound2t64 and alsa-utils were already present. Run hardware checks from a
+normal host terminal: an agent sandbox hiding /dev/snd/seq is not evidence of
+a missing driver. Enumerate names/addresses each session; reconnecting or
+swapping keyboards can change or reuse an ALSA client number.
+
+Yamaha PSR-E363:
+  - Connected through USB TO HOST; USB ID 0499:1710, ALSA client
+    "Digital Keyboard", port "Digital Keyboard MIDI 1". MidiConnect discovered
+    both input and output.
+  - Physical key presses/releases and variable velocities arrived on channel 1.
+    A two-minute capture, yamaha-input-check.mid, passed Core's strict MIDI
+    reader with 45 paired notes. The keyboard also sent idle MIDI clock and
+    active-sensing messages; those are not additional notes.
+  - Jeremy heard the four-note output check and the complete original eight-bar
+    yamaha-demo.mid through the Yamaha's own speakers. The demo passed strict
+    reading with 88 paired notes on channels 1 and 2, lasting 19.770 seconds;
+    playback completed and released its notes. Core read the file, and
+    MidiPlaybackSequence.FromMidiFile / MidiDevicePlayer sent MIDI to the
+    keyboard's internal synthesizer.
+  - Live input also drove CodeBrix's Decent Sampler renderer on the computer.
+    Jeremy confirmed Himalayan Vibes / Tibetan Bowls worked. Subsequent live
+    sessions used the Cinematic Granular Synth 2 download's Cinematic Granular
+    Synth and Crunchy Hills presets.
+  - To hear only the computer instrument, set Local Control OFF: press FUNCTION
+    repeatedly until Local (032), release FUNCTION, then press -/NO for OFF.
+    If you overshoot, hold FUNCTION and tap -/NO to step back; press VOICE to
+    exit. Restore Local ON with +/YES for standalone keyboard playing. Local
+    OFF does not disable MIDI transmission. External Clock (033) stayed OFF;
+    this scratch player does not generate MIDI clock.
+
+ROLI Seaboard RISE 2:
+  - Connected by USB after unplugging the Yamaha. ALSA and MidiConnect listed
+    "Seaboard RISE 2 MIDI 1" in both directions immediately, without ROLI
+    software. Hardware input was exercised; device output was only enumerated.
+  - Live sessions loaded Crunchy Hills, then Micah's Choir, and routed the
+    rendered sound to the computer. The receiver used MpeMode.LowerZone:
+    master channel 1, 15 member channels (2-16), member pitch bend +/-48
+    semitones and master bend +/-2. These are software receiver settings;
+    the test did not write settings to the Seaboard.
+  - Logs show notes across all 15 member channels, attack velocity, pitch bend,
+    channel pressure, CC74 slide and nonzero note-off release velocity. The
+    Micah's Choir session recorded counters of 192 note-ons, 192 note-offs,
+    22,060 pitch bends, 31,542 pressure messages and 3,867 CC74 messages.
+    Those are observations from this session, not regression-test thresholds.
+  - Channels were preserved when forwarding messages. Receiving pressure and
+    CC74 does not automatically make a preset respond audibly: Crunchy Hills
+    has no explicit MPE pressure/timbre modulators. Presets need suitable
+    mappings (such as mpePressure/mpeTimbre) to use those gestures. Independent
+    audible expression and the full pitch-bend range were not systematically
+    verified; neither were hardware RPN reconfiguration or Bluetooth.
+
+MidiConnect's MIDI 1.0 MPE transport preserves channels and
+RPN/CC74/pressure/bend/release-velocity messages; synth-side interpretation is
+separate. MpeTransportTests retains synthetic regression coverage beyond the
+physical input observations above.
+
+Shared live-sampler setup and local reproducer:
+  - The harness loads DecentSamplerInstrument into MidiMusicPlayer with an
+    unfinished empty MidiStream and zero preroll, then forwards channel voice
+    messages through thread-safe SendMidiMessage. Convert MidiConnect channels
+    1-16 to player channels 0-15. This live bridge ignores system messages
+    (clock, active sensing and SysEx).
+  - Desktop audio was verified on the computer's built-in analog output through
+    PipeWire at 48 kHz stereo. The harness requests two 256-frame periods;
+    this is not a measured end-to-end latency result. After Jeremy found the
+    initial sampler level too quiet, the harness gained a 0-16 gain range with
+    a 4x (+12 dB) starting level and +/- keys for 3 dB adjustments. Space
+    releases notes; Q or Ctrl+C stops the session.
+
+With the corresponding keyboard connected, run these from the scratch folder;
+stop a live session before starting another:
+
+    cd ~/{scratch folder}/yamaha-midi-check-2026-09-28
+    dotnet run --no-build --no-restore -- list
+    dotnet run --no-build --no-restore -- play "Digital Keyboard" yamaha-demo.mid
+    ./play-himalayan.sh
+    ./play-seaboard.sh crunchy 4 lower 48
+    ./play-seaboard.sh micah 4 lower 48
+
+The scratch README includes restore/build instructions and additional monitor,
+record, inspect, output-tone and panic commands. It also links the Yamaha
+manual and ROLI's default MPE settings used for the receiver configuration.
 
 Core SMF SysEx: Standard MIDI File F0/F7 events are length-delimited.
 SysexEvent.Export writes the length and MidiEvent.ReadNextEvent reads F0/F7
@@ -1569,16 +1662,16 @@ THE MEASUREMENT PROGRAMME
   measurement rounds recorded it, and their results are the reason most of the
   engine's constants are what they are.
 
-    ~/ClaudeHome/decent-sampler/MEASUREMENTS_ds_reference_semantics_*.txt
+    ~/{scratch folder}/decent-sampler/MEASUREMENTS_ds_reference_semantics_*.txt
         the measured truth. An index at the top, a summary per round at the
         bottom, and one section per item: the purpose, the exact preset XML, the
         MIDI content, the recordings, the number tables, and a conclusion an
         implementer can code from with a confidence rating.
-    ~/ClaudeHome/decent-sampler/measure/
+    ~/{scratch folder}/decent-sampler/measure/
         one folder per item, each with the build script, the preset, the MIDI
         file, the recording, the player's log and the analysis. Everything
         replays.
-    ~/ClaudeHome/decent-sampler/FIDELITY_*.txt
+    ~/{scratch folder}/decent-sampler/FIDELITY_*.txt
         the comparison tables per phase: our render against the reference's,
         RMS envelope per bar, filter transfer functions, reverb RT60 per band.
 
@@ -2327,7 +2420,7 @@ THE RECORD OF THE STEMS AND DECENT SAMPLER PROJECT. The multi-track player, the
 Suno stems loader, the MIDI/audio alignment estimator, the lenient MIDI readers,
 the shared MPE contract, the whole Decent Sampler engine and the ModestSynth
 add-on were built to one plan and one measurement programme, and the documents
-that record them live outside this repository under ~/ClaudeHome/ (they name
+that record them live outside this repository (they name
 corpora and real libraries, so none of them can be committed here):
 PLAN_codebrix_audio_suno_stems_and_decent_sampler_2026-09-06.md is the plan and
 the decisions Jeremy confirmed against it; decent-sampler/MEASUREMENTS_ds_
