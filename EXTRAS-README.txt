@@ -4,17 +4,36 @@ Samples, tools and other content in this repository that is not part of a NuGet
 package
 ================================================================================
 
-This repository ships two NuGet packages - CodeBrix.Audio.MitLicenseForever and
-the CodeBrix.Audio.ModestSynth.MitLicenseForever add-on - and has no sample
-applications and no demo projects. Everything below is developer tooling and
-test data: none of it is packed, and none of it is needed to consume either
-package.
+This repository ships four NuGet packages - CodeBrix.Audio.MitLicenseForever,
+CodeBrix.Audio.Core.MitLicenseForever, and the
+CodeBrix.Audio.ModestSynth.MitLicenseForever and
+CodeBrix.Audio.MidiConnect.MitLicenseForever add-ons. Everything below is
+samples, developer tooling and test data: none of it is packed, and none of it
+is needed to consume any of the packages.
 
 Each tool carries its own README.txt with the full detail; the entries here say
 what it is, how to run it, and why it exists. NOTHING IN tools/ INSTALLS
 ANYTHING ON YOUR MACHINE - every script checks for what it needs, names anything
 missing, prints the command that would install it, and stops. Installing is your
 decision.
+
+
+samples/ - runnable sample applications
+=======================================
+  Path:   samples/MidiConnect/
+          samples/SunoInstrumentSwap/
+
+  Each sample has its own README.md, references the src projects rather than
+  the published packages, and is NOT part of CodeBrix.Audio.slnx, so the
+  library build and test runs never touch it.
+
+  samples/MidiConnect is a desktop command-line harness for the MIDI device
+  add-on: list ports, monitor and record input, inspect a recorded .mid file,
+  and play a MIDI file out to a device.
+
+  samples/SunoInstrumentSwap (its own SunoInstrumentSwap.slnx) is a console
+  application that renders a stems export as downloaded and again with its
+  transcribed parts played through an instrument library.
 
 
 tools/build_native_libraries/ - build the native audio backend
@@ -237,6 +256,10 @@ tests/ - the test projects
   Path:   tests/CodeBrix.Audio.Tests/
           tests/CodeBrix.Audio.Engine.Tests/
           tests/CodeBrix.Audio.ModestSynth.Tests/
+          tests/CodeBrix.Audio.MidiConnect.Tests/
+
+  tests/CodeBrix.Audio.MidiConnect.AndroidTests/ is an Android MIDI echo test
+  app, outside the solution; read its README.md.
 
   tests/CodeBrix.Audio.AndroidTests/ is a separate Core-only Android decoder
   regression app, outside the solution. It consumes a packed Core NuGet and

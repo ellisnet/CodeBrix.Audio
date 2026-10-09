@@ -667,8 +667,9 @@ A synthesizer of your own joins in by implementing
 CodeBrix.Audio.Synth.Mpe.IMpeSynthesizer — MidiMusicPlayer then forwards the
 same settings to it and reads its zones and lift velocities.
 
-NO MIDI DEVICE INPUT. This is about MIDI FILES. Record the performance in a
-sequencer, export the clip, and play the file.
+NO MIDI DEVICE INPUT IN THIS PACKAGE. This is about MIDI FILES. Record the
+performance in a sequencer, export the clip, and play the file - or capture it
+live with the separate CodeBrix.Audio.MidiConnect.MitLicenseForever package.
 
 
 INSTRUMENT LIBRARIES
@@ -1773,7 +1774,9 @@ MULTI-TRACK SONG" and "PLAYING SUNO STEMS" below:
   - MidiAudioAlignment    : estimates how far a MIDI transcription sits from the
                             audio it was transcribed from, by cross-correlating
                             note-on times against an onset envelope. Estimate
-                            (mono or interleaved, list or MidiSequence) returns a
+                            (mono audio) and EstimateInterleaved (interleaved
+                            audio plus a channel count), each taking note-on
+                            times or a MidiSequence, return a
                             MidiAudioAlignmentResult carrying OffsetSeconds
                             (audioTime = midiTime + offset), Confidence,
                             IsReliable and CandidatePeakCount. Call it on a
@@ -1988,8 +1991,9 @@ SHAPED plumbing types, and they behave the way their NAudio counterparts do):
   More DSP and utilities:
   - FftProcessor / FftWindowType : windowed FFT over a stream of samples, when
     you want a spectrum rather than a single transform.
-  - Decibels : linear amplitude <-> dB.
-  - CircularBuffer : the ring buffer BufferedWaveProvider is built on.
+  - Decibels (CodeBrix.Audio.Utils) : linear amplitude <-> dB.
+  - CircularBuffer (CodeBrix.Audio.Utils) : the ring buffer
+    BufferedWaveProvider is built on.
   - IgnoreDisposeStream : hand a Stream to something that disposes what it is
     given, without losing the stream.
 
@@ -3264,6 +3268,8 @@ modulators, its MIDI handlers, its note sequences and its arpeggiator. "Decent
 Sampler" is Decidedly LLC's name for the format and its player, and appears here
 only to say what the files are.
 
+  using CodeBrix.Audio.Playback;            // MidiMusicPlayer
+  using CodeBrix.Audio.Synth;               // MidiSequence
   using CodeBrix.Audio.Synth.DecentSampler;
 
   using var instrument = DecentSamplerInstrument.Load(@"D:\Libraries\Choir.dslibrary");
@@ -3715,7 +3721,9 @@ MPE
   A clip exported from a sequencer normally carries no configuration message, so
   Auto is the setting for one; LowerZone, UpperZone and Both pin an ambiguous
   file, and Off insists it plays as ordinary MIDI. mpeTimbre and mpePressure
-  modulators read the voice's own channel. The format defines no consumer for
+  modulators read the voice's own channel; unlike SoundFontSynthesizer and
+  SfzSynthesizer, DecentSamplerSynthesizer has no MpeTimbre or MpePressure
+  members to read them back. The format defines no consumer for
   release velocity, so it changes nothing about the sound; it is available
   through synthesizer.ReleaseVelocity(channel, key) and
   player.GetReleaseVelocity(channel, key).
@@ -4156,6 +4164,7 @@ Voice an arrangement part by part, and play or render it either way:
 Play MIDI music through a Decent Sampler instrument (same transport again):
 
     using CodeBrix.Audio.Playback;
+    using CodeBrix.Audio.Synth;
     using CodeBrix.Audio.Synth.DecentSampler;
 
     using var instrument = DecentSamplerInstrument.Load(@"D:\Libraries\Choir.dslibrary");
@@ -4765,7 +4774,9 @@ WHAT THIS PACKAGE DOES NOT DO
     AAX host and not a plugin. It plays instrument FILES; it does not load
     anyone's processor binaries and cannot be loaded as one.
 
-  - No MIDI devices. Nothing here opens a MIDI input or output port. MIDI arrives
+  - No MIDI devices in this package. Nothing here opens a MIDI input or output
+    port; live device input and output is the separate
+    CodeBrix.Audio.MidiConnect.MitLicenseForever package. MIDI arrives
     as a Standard MIDI File, or as messages your code sends - SendMidiMessage on
     the player, ProcessMidiMessage on a synthesizer - which is also how an MPE
     performance reaches the engine: recorded, exported as a file, and played.
@@ -5384,6 +5395,13 @@ QUICK REFERENCE CARD
     MidiAudioAlignment.Estimate(IReadOnlyList<double> noteOnTimesSeconds,
                                 ReadOnlySpan<float> monoAudio, int sampleRate,
                                 double maxOffsetSeconds = 0.3)
+                                // also (MidiSequence sequence, monoAudio, ...)
+    MidiAudioAlignment.EstimateInterleaved(
+                                IReadOnlyList<double> noteOnTimesSeconds,
+                                ReadOnlySpan<float> interleavedAudio,
+                                int channels, int sampleRate,
+                                double maxOffsetSeconds = 0.3)
+                                // also (MidiSequence sequence, ...)
     MidiAudioAlignment.GetNoteOnTimesSeconds(MidiSequence sequence)
     SunoStemsLoader.Load(string path)       // also (path, SunoLoadOptions)
     SunoStemsLoader.LoadAsync(string path, CancellationToken ct = default)

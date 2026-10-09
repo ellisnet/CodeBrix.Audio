@@ -76,8 +76,9 @@ REPOSITORY LAYOUT
   tests/CodeBrix.Audio.MidiConnect.AndroidTests/  Android MIDI echo test app;
                                     outside the solution, see its README.md
   tests/Assets/                      audio, soundfont and synth fixtures
-  samples/                           runnable samples, each with its OWN .slnx
-                                     and NOT referenced by CodeBrix.Audio.slnx,
+  samples/                           runnable samples (SunoInstrumentSwap with
+                                     its OWN .slnx, MidiConnect a lone .csproj),
+                                     NOT referenced by CodeBrix.Audio.slnx,
                                      so the library never builds or tests them.
                                      They reference the src projects rather than
                                      the published packages, take nothing but

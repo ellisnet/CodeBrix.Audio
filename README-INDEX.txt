@@ -51,6 +51,10 @@ GENERAL
   src/CodeBrix.Audio/README.md
       The Core package's nuget.org page: what CodeBrix.Audio.Core.MitLicenseForever
       carries, and which platform package to install instead of it.
+  src/CodeBrix.Audio.ModestSynth/README.md
+      The nuget.org page of CodeBrix.Audio.ModestSynth.MitLicenseForever.
+  src/CodeBrix.Audio.MidiConnect/README.md
+      The nuget.org page of CodeBrix.Audio.MidiConnect.MitLicenseForever.
   README-INDEX.txt
       This file.
   THIRD-PARTY-NOTICES.txt
@@ -60,6 +64,11 @@ GENERAL
 
 ALSO WORTH READING, IN PLACE
 ----------------------------
+  samples/MidiConnect/README.md
+      How to run the MIDI device harness sample (list, monitor, record,
+      inspect, play).
+  samples/SunoInstrumentSwap/README.md
+      What the stems-render sample shows, its options and how to run it.
   tools/build_native_libraries/README.txt
       How the seven native backends are built and verified, why the Linux ones
       are built in containers, and the steps for adopting a built binary into

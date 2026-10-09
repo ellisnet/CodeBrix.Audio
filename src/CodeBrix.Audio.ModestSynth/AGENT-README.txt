@@ -1129,7 +1129,8 @@ wavetable  -  WavetableOscillator  (namespace ...ModestSynth.Wavetable)
 ------------------------------------------------------------------------
   Parameters: Table (a WavetableFile, or null), Position (0..1, default 0.0),
               FrameInterpolation (default true).
-  Read-only:  HasTable, Problem, MipLevel, Table.
+  Read-only:  HasTable, Problem, MipLevel. Table is settable: assigning it
+              clears Problem and takes effect on the next sample.
   Methods:    TryLoad(path, frameSize), ReportProblem(reason).
 
   It reads one cycle per period from a frame of a multi-frame .wav file, so
