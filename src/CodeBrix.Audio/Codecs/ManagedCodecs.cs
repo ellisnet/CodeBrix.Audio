@@ -28,7 +28,7 @@ public static class ManagedCodecs
 {
     /// <summary>
     /// Registers every managed codec factory with the engine: the Ogg Vorbis and FLAC STREAM
-    /// decoders, and the Vorbis PACKET decoder.
+    /// decoders, and the Vorbis and FLAC PACKET decoders.
     /// </summary>
     /// <param name="engine">The engine to register with.</param>
     /// <remarks>
@@ -64,5 +64,5 @@ public static class ManagedCodecs
     /// engine existing at all.
     /// </remarks>
     internal static readonly IReadOnlyList<IPacketCodecFactory> BuiltInPacketCodecFactories =
-        new IPacketCodecFactory[] { new VorbisPacketCodecFactory() };
+        new IPacketCodecFactory[] { new VorbisPacketCodecFactory(), new FlacPacketCodecFactory() };
 }

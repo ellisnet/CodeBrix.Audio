@@ -126,6 +126,23 @@ factory, so the native decoder is used wherever it can be and the managed one is
 the fallback. ManagedSoundDecoder carries the channel-mapping and linear
 rate-conversion both of them need.
 
+The PACKET seam (IPacketCodecFactory / IPacketSoundDecoder, for audio a media
+container hands over as loose packets) has two built-ins in CodeBrix.Audio.Codecs,
+listed once in ManagedCodecs.BuiltInPacketCodecFactories: VorbisPacketCodecFactory
+and FlacPacketCodecFactory, both at priority 0 because the native library has no
+packet decoder to sit below.
+
+The FLAC namespace is split so there is ONE frame implementation behind both
+seams. FlacFrameDecoder decodes a single frame - header, subframes, stereo
+decorrelation, both CRCs - from a FlacBitReader positioned at its sync code.
+FlacDecoder (the file path, behind FlacFileReader and FlacSoundDecoder) owns the
+"fLaC" marker, the metadata blocks, buffering and seeking, and drives the frame
+decoder over a Stream. FlacPacketSoundDecoder (the packet path) reads STREAMINFO
+from the codec-private data and drives the same frame decoder over one packet at
+a time, using FlacBitReader's packet mode (LoadPacket), where the loaded bytes
+are the whole of the data. A fix to frame decoding belongs in FlacFrameDecoder and
+reaches both paths; FlacStreamInfo.Read / Validate are likewise shared.
+
 The SoundFont renderer follows the same shape one level up: CodeBrix.Audio.Synth
 holds a MeltySynth-derived SF2 parser, object model and voice engine, of which
 only the SoundFont object model and a small playback facade are public. See
@@ -535,7 +552,10 @@ ships with the .wav it was encoded from, and the decoder must reproduce that PCM
 byte for byte - across bit depths, all four stereo decorrelation modes, constant/
 verbatim/fixed/LPC subframes and a short final block. It is separately compared
 sample for sample against the native dr_flac decoder, so two independent
-implementations have to agree.
+implementations have to agree. The packet path is held to the same bar: the
+FlacPacketSoundDecoder tests split every fixture into codec-private data and one
+packet per frame and require the decoded floats to equal FlacFileReader's output
+exactly.
 
 Tests that open a real audio device and make sound are opt-in:
 

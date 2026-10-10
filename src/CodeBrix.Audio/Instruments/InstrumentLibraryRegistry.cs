@@ -221,7 +221,13 @@ public static class InstrumentLibraryRegistry
     /// Empties the registry. For tests that have to exercise registration order or the default,
     /// which is process-wide state; nothing in a shipping application should call this.
     /// </summary>
-    internal static void ResetForTesting()
+    /// <remarks>
+    /// Public so that the test suite of a CONSUMING library or application can reset the shared state
+    /// between tests without reflection. Libraries that remember they have registered themselves (an
+    /// instrument library's own <c>Register()</c> guard, for example) do not know about a reset; after
+    /// one, register the library instance through <see cref="Register(IInstrumentLibrary)" /> directly.
+    /// </remarks>
+    public static void ResetForTesting()
     {
         lock (Gate)
         {

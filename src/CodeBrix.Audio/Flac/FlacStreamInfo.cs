@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace CodeBrix.Audio.Flac;
 
@@ -48,6 +49,56 @@ internal sealed class FlacStreamInfo
     public TimeSpan Duration => SampleRate > 0 && TotalSamples > 0
         ? TimeSpan.FromSeconds((double)TotalSamples / SampleRate)
         : TimeSpan.Zero;
+
+    /// <summary>The size in bytes of a STREAMINFO block's body.</summary>
+    public const int BodyLength = 34;
+
+    /// <summary>
+    /// Reads a STREAMINFO block's 34-byte body - everything after its metadata block header.
+    /// </summary>
+    /// <param name="reader">A reader positioned at the start of the body.</param>
+    /// <returns>The parsed block. Call <see cref="Validate"/> before decoding with it.</returns>
+    public static FlacStreamInfo Read(FlacBitReader reader)
+    {
+        var minBlockSize = (int)reader.ReadBits(16);
+        var maxBlockSize = (int)reader.ReadBits(16);
+        var minFrameSize = (int)reader.ReadBits(24);
+        var maxFrameSize = (int)reader.ReadBits(24);
+        var sampleRate = (int)reader.ReadBits(20);
+        var channels = (int)reader.ReadBits(3) + 1;
+        var bitsPerSample = (int)reader.ReadBits(5) + 1;
+        var totalSamples = ((long)reader.ReadBits(4) << 32) | reader.ReadBits(32);
+
+        var md5 = new byte[16];
+        reader.ReadBytes(md5);
+
+        return new FlacStreamInfo
+        {
+            MinimumBlockSize = minBlockSize,
+            MaximumBlockSize = maxBlockSize,
+            MinimumFrameSize = minFrameSize,
+            MaximumFrameSize = maxFrameSize,
+            SampleRate = sampleRate,
+            Channels = channels,
+            BitsPerSample = bitsPerSample,
+            TotalSamples = totalSamples,
+            Md5Signature = md5
+        };
+    }
+
+    /// <summary>
+    /// Rejects a STREAMINFO block that no frame could be decoded against.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The channel count, bit depth or maximum block size is unusable.</exception>
+    public void Validate()
+    {
+        if (Channels is < 1 or > 8)
+            throw new InvalidDataException($"Unsupported FLAC channel count: {Channels}.");
+        if (BitsPerSample is < 4 or > 32)
+            throw new InvalidDataException($"Unsupported FLAC bit depth: {BitsPerSample}.");
+        if (MaximumBlockSize <= 0)
+            throw new InvalidDataException("The FLAC stream declares an invalid maximum block size.");
+    }
 }
 
 /// <summary>

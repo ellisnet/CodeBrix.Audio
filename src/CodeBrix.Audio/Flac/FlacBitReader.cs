@@ -8,15 +8,23 @@ namespace CodeBrix.Audio.Flac;
 /// up to date as bytes are consumed.
 /// </summary>
 /// <remarks>
+/// <para>
 /// FLAC is a bit-packed format: subframe headers, Rice-coded residuals and LPC coefficients all
 /// sit at arbitrary bit offsets, so nearly everything is read through here. The CRC registers
 /// live in this class because CRCs cover whole bytes, and this is the only place that knows when
 /// a byte has actually been pulled from the stream.
+/// </para>
+/// <para>
+/// It reads either from a <see cref="Stream"/> (a whole FLAC file) or, in PACKET MODE, from bytes
+/// handed to it one frame at a time through <see cref="LoadPacket"/> - the shape a media container
+/// delivers FLAC in. The bit-level reading is identical either way; only where the next byte comes
+/// from differs, and in packet mode the end of the loaded bytes is the end of the data.
+/// </para>
 /// </remarks>
 internal sealed class FlacBitReader
 {
     private readonly Stream stream;
-    private readonly byte[] buffer;
+    private byte[] buffer;
 
     private int bufferLength;
     private int bufferPosition;
@@ -36,11 +44,45 @@ internal sealed class FlacBitReader
         buffer = new byte[bufferSize];
     }
 
+    /// <summary>
+    /// Creates a reader in packet mode: it has no stream, and reads only the bytes most recently
+    /// given to <see cref="LoadPacket"/>.
+    /// </summary>
+    public FlacBitReader()
+    {
+        stream = null;
+        buffer = [];
+    }
+
+    /// <summary>
+    /// In packet mode, replaces whatever was being read with a copy of <paramref name="data"/> and
+    /// positions the reader at its first bit, with both CRC registers cleared.
+    /// </summary>
+    /// <param name="data">The bytes to read - typically exactly one FLAC frame.</param>
+    /// <exception cref="InvalidOperationException">The reader was created over a stream.</exception>
+    public void LoadPacket(ReadOnlySpan<byte> data)
+    {
+        if (stream != null) throw new InvalidOperationException("The reader was created over a stream.");
+
+        if (buffer.Length < data.Length) buffer = new byte[data.Length];
+        data.CopyTo(buffer);
+
+        bufferLength = data.Length;
+        bufferPosition = 0;
+        bitCache = 0;
+        bitCacheCount = 0;
+        EndOfStream = false;
+        ResetCrc();
+    }
+
     /// <summary>True once the underlying stream has no more data and the cache is empty.</summary>
     public bool EndOfStream { get; private set; }
 
-    /// <summary>The byte offset in the source stream of the next unread bit's byte.</summary>
-    public long BytePosition => stream.Position - bufferLength + bufferPosition - bitCacheCount / 8;
+    /// <summary>
+    /// The byte offset in the source stream - or, in packet mode, in the loaded packet - of the next
+    /// unread bit's byte.
+    /// </summary>
+    public long BytePosition => (stream == null ? 0 : stream.Position - bufferLength) + bufferPosition - bitCacheCount / 8;
 
     /// <summary>Resets both CRC registers - call at the start of a frame.</summary>
     public void ResetCrc()
@@ -55,7 +97,10 @@ internal sealed class FlacBitReader
     /// <summary>The CRC-16 of every byte consumed since <see cref="ResetCrc"/>.</summary>
     public ushort Crc16 => crc16;
 
-    /// <summary>Discards buffered state and re-reads from the stream's current position.</summary>
+    /// <summary>
+    /// Discards buffered state and re-reads from the stream's current position. In packet mode it
+    /// discards the loaded packet, leaving nothing to read until the next <see cref="LoadPacket"/>.
+    /// </summary>
     public void Reset()
     {
         bufferLength = 0;
@@ -235,6 +280,13 @@ internal sealed class FlacBitReader
 
     private bool FillBuffer()
     {
+        // Packet mode: the loaded packet is all there is.
+        if (stream == null)
+        {
+            bufferPosition = bufferLength;
+            return false;
+        }
+
         bufferLength = stream.Read(buffer, 0, buffer.Length);
         bufferPosition = 0;
         return bufferLength > 0;

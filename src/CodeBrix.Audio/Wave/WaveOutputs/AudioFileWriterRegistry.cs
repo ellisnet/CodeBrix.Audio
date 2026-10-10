@@ -198,7 +198,13 @@ public static class AudioFileWriterRegistry
     /// Restores the registry to the WAV and AIFF writers it starts with. For tests that register a
     /// format of their own; nothing in a shipping application should call this.
     /// </summary>
-    internal static void ResetForTesting()
+    /// <remarks>
+    /// Public so that the test suite of a CONSUMING package (an encoder add-on that registers its own
+    /// writer, for example) can restore the shared state between tests without reflection. An add-on's
+    /// idempotent <c>Register()</c> may remember that it already ran; after a reset, register its
+    /// factory instance through <see cref="Register(IAudioFileWriterFactory)" /> directly.
+    /// </remarks>
+    public static void ResetForTesting()
     {
         lock (Gate)
         {

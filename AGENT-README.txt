@@ -189,7 +189,8 @@ public types in CodeBrix.Audio.Codecs a consumer might touch are ManagedCodecs
 (only when driving an engine they created themselves — see COMMON PITFALLS),
 ManagedSoundDecoder and OggCodecSniffer (what an add-on codec package builds on
 — see ADDING A CODEC FROM ANOTHER PACKAGE), the built-in factories
-VorbisCodecFactory, FlacCodecFactory and VorbisPacketCodecFactory, the OggCodec
+VorbisCodecFactory, FlacCodecFactory, VorbisPacketCodecFactory and
+FlacPacketCodecFactory, the OggCodec
 enum, and the A-law/mu-law encoders and decoders, which you call directly.)
 
 
@@ -782,6 +783,9 @@ process-wide, exactly as AudioFileReaderRegistry is.
                                                   SetDefault moved it
       InstrumentLibraryRegistry.DefaultName       null when empty; NEVER throws
       InstrumentLibraryRegistry.SetDefault(name)
+      InstrumentLibraryRegistry.ResetForTesting() empties it - for a TEST SUITE
+                                                  that shares this process-wide
+                                                  state; never in shipping code
 
   THE DEFAULT DEPENDS ON REGISTRATION ORDER, so in an application that registers
   more than one it depends on which start-up path ran first. Code that cares
@@ -2154,6 +2158,11 @@ A format nobody has registered is refused by name, with the alternatives:
     No audio writer is registered for '.opus'. Registered formats: .aif, .aiff,
     .wav. Add one with AudioFileWriterRegistry.Register.
 
+  AudioFileWriterRegistry.ResetForTesting() puts the registry back to its WAV and
+  AIFF writers - for a TEST SUITE that registers a format of its own; never in
+  shipping code. An add-on whose Register() remembers it already ran will not
+  re-register after a reset; register its factory instance directly.
+
 DRIVING THE SEAM BY HAND, when you have samples rather than a sequence:
 
     using CodeBrix.Audio.Wave;
@@ -2239,7 +2248,9 @@ has its own three pieces.
      not trim the end of the stream - the container knows where the audio really
      stops (a total-sample count, an end-trim field), so applying that is the
      caller's job. PacketAudioPlayer.SetTrailingTrim does it for you; see
-     TRIMMING THE END OF A TRACK below.
+     TRIMMING THE END OF A TRACK below. (FLAC is the exception to the first:
+     its frames carry no state from one to the next, so every FLAC packet
+     yields its whole block at once, including the first.)
 
      ConcealLoss and SupportsLossConcealment have DEFAULT IMPLEMENTATIONS, so an
      existing decoder keeps compiling and working untouched. The default
@@ -2250,9 +2261,10 @@ has its own three pieces.
      instead of assuming one packet. lostFrames counts FRAMES PER CHANNEL at the
      decoder's own rate, like PreSkipSamples; `output` is sized to
      MaxSamplesPerPacket as usual, and a call may cover less than was asked for
-     and be called again. The built-in Vorbis decoder has no concealment - it
-     answers a gap with SILENCE of exactly the right length, so the timeline
-     keeps its shape - and the CodeBrix.Audio.Opus package conceals for real.
+     and be called again. The built-in Vorbis and FLAC decoders have no
+     concealment - they answer a gap with SILENCE of exactly the right length,
+     so the timeline keeps its shape, and an EMPTY packet gets 0 back - and the
+     CodeBrix.Audio.Opus package conceals for real.
 
   2. IPacketCodecFactory (same namespace) is how a codec gets registered, and it
      mirrors ICodecFactory exactly - FactoryId, Priority, SupportedCodecIds,
@@ -2283,12 +2295,14 @@ has its own three pieces.
      which lists what you registered, in registration order, and deliberately
      NOT the built-ins, which are always present.
 
-     Vorbis packets are built in and always registered - the public
+     Vorbis and FLAC packets are built in and always registered - the public
      VorbisPacketCodecFactory (namespace CodeBrix.Audio.Codecs), FactoryId
-     "CodeBrix.Audio.ManagedVorbis.Packets", serving codec id "vorbis" at
-     Priority 0. You do not register it; it is named here so a factory of your
-     own can be given a priority relative to it. Opus packets come with the
-     CodeBrix.Audio.Opus add-on package.
+     "CodeBrix.Audio.ManagedVorbis.Packets", serving codec id "vorbis", and the
+     public FlacPacketCodecFactory (same namespace), FactoryId
+     "CodeBrix.Audio.ManagedFlac.Packets", serving codec id "flac", both at
+     Priority 0. You do not register them; they are named here so a factory of
+     your own can be given a priority relative to them. Opus packets come with
+     the CodeBrix.Audio.Opus add-on package.
 
      A CONSUMER DRIVING ITS OWN AudioEngine uses the engine's own surface
      instead, and gets more of it than the shared output exposes:
@@ -2306,7 +2320,8 @@ has its own three pieces.
      the factory's own Priority for that engine only. GetRegisteredPacketCodecs
      answers for ONE codec id, highest priority first, and returns an empty list
      rather than null. Call ManagedCodecs.RegisterAll(engine) on an engine of
-     your own to get the built-in Vorbis packet factory on it as well.
+     your own to get the built-in Vorbis and FLAC packet factories on it as
+     well.
      Registering the same factory twice on an engine ADDS IT TWICE - the
      de-duplication above belongs to SharedAudioOutput, not to the engine.
 
@@ -2338,7 +2353,22 @@ has its own three pieces.
      `codecPrivate` is whatever the container carries for the track: for Vorbis
      the three Xiph-laced setup headers (a count byte, the lengths of the first
      two headers as 255-continuation bytes, then the identification, comment and
-     setup headers back to back); for Opus the identification-header bytes.
+     setup headers back to back); for Opus the identification-header bytes; for
+     FLAC the bytes a .flac file starts with - the "fLaC" marker followed by the
+     metadata blocks, STREAMINFO first and the last block flagged as last (the
+     Matroska A_FLAC convention) - or just the bare 34-byte STREAMINFO body.
+
+     FLAC PACKETS ARE ONE FRAME EACH: every packet must be exactly one complete
+     FLAC frame, from its sync code (0xFFF8 / 0xFFF9) through its CRC-16 - no
+     more, no less. The decoder checks both CRCs and throws
+     InvalidDataException for a packet that is truncated, damaged, carries a
+     second frame or trailing bytes, or holds a block larger than STREAMINFO's
+     maximum block size (MaxSamplesPerPacket is that maximum times the channel
+     count). Samples are scaled to [-1, 1] by the frame's bit depth -
+     STREAMINFO's, or the frame header's own where it states one - and are
+     bit-exact with FlacFileReader. PreSkipSamples is 0, and a seek needs no
+     pre-roll: any frame decodes on its own, so Reset() and feed the frame at
+     the target.
 
   3. PacketAudioPlayer (CodeBrix.Audio.Playback) plays them. It is the supported
      route from packet audio to the speakers, because WaveOutEvent refuses a
@@ -2449,7 +2479,7 @@ own source FIRST, then tell the player where it now is:
   - preRoll is how much audio to decode and throw away before any is heard. A
     codec carrying state between packets cannot decode correctly at a jump, so
     start a little BEFORE the real target - one packet for Vorbis, about 80 ms
-    for Opus - and pass the gap as preRoll. Once it has been worked through,
+    for Opus, nothing for FLAC - and pass the gap as preRoll. Once it has been worked through,
     Position reads the position you were aiming at.
   - Calling Seek while the OLD packets are still queued dates the clock to the
     new position and then plays the old audio against it. Order matters.
@@ -2521,8 +2551,8 @@ gave up - say so, with the LENGTH:
   - THE LENGTHLESS FORM STILL WORKS: a packet with empty Data and no loss marker
     means one packet was lost without saying how long it was, and is passed to
     the decoder as an empty packet - what it makes of that is its own business
-    (the built-in Vorbis decoder produces nothing, since it cannot know the
-    length).
+    (the built-in Vorbis and FLAC decoders produce nothing, since they cannot
+    know the length).
   - Seek forgets a gap that had not been covered yet: it belonged to the
     position you left behind.
 
@@ -4845,12 +4875,22 @@ file that exercises it.
     VorbisPacketLossTests.cs    the built-in decoder has no concealment of its
                                 own and answers a gap with silence of exactly the
                                 right length.
+    FlacPacketCodecFactoryTests.cs, FlacPacketSoundDecoderTests.cs   the built-in
+                                FLAC packet factory and decoder - the
+                                codec-private shapes accepted and declined, one
+                                frame per packet decoding bit-exactly to what
+                                FlacFileReader produces, Reset mid-stream, loss,
+                                and truncated, damaged and oversized packets.
     Utils/FakePacketAudio.cs, Utils/OggPacketReader.cs   the test doubles: a
                                 scripted IAudioPacketSource / IPacketSoundDecoder
                                 pair, and the Ogg de-framer that turns a .ogg
                                 fixture into the packets a container would hand
                                 over. Read these first if you are writing a
                                 source of your own.
+    Utils/FlacFramePacketizer.cs   splits a .flac fixture into its stream
+                                header (the codec-private data) and one packet
+                                per frame, the shape a FLAC packet source hands
+                                over.
 
   MIDI
     Midi/MidiFileTests.cs, MidiFileTests.cs     read/write round trips.
