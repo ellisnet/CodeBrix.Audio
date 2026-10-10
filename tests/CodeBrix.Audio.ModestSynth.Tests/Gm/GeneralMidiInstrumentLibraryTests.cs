@@ -49,6 +49,27 @@ public class GeneralMidiInstrumentLibraryTests
     }
 
     [Fact]
+    public void register_runs_again_after_the_registry_has_been_reset()
+    {
+        //Arrange
+        Assert.SkipUnless(
+            Environment.GetEnvironmentVariable("CODEBRIX_AUDIO_RUN_DEFAULT_INSTRUMENT_TESTS") == "1",
+            "Resets the process-wide instrument library registry: set CODEBRIX_AUDIO_RUN_DEFAULT_INSTRUMENT_TESTS=1 and run it on its own.");
+        GeneralMidiInstrumentLibrary.Register();
+        InstrumentLibraryRegistry.ResetForTesting();
+
+        //Act
+        bool registeredAfterReset = GeneralMidiInstrumentLibrary.IsRegistered;
+        GeneralMidiInstrumentLibrary.Register();
+
+        //Assert
+        registeredAfterReset.Should().BeFalse();
+        GeneralMidiInstrumentLibrary.IsRegistered.Should().BeTrue();
+        InstrumentLibraryRegistry.Resolve("modestsynthgm")
+            .Should().BeSameAs(GeneralMidiInstrumentLibrary.Instance);
+    }
+
+    [Fact]
     public void it_offers_both_shapes_and_says_so()
     {
         //Arrange

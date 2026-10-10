@@ -56,11 +56,7 @@ public sealed class GeneralMidiInstrumentLibrary : IInstrumentLibrary
     /// <summary>The name this library registers under, matched case-insensitively.</summary>
     public const string LibraryName = "ModestSynthGm";
 
-    private static readonly object Gate = new object();
-
     private static readonly GeneralMidiInstrumentLibrary Shared = new GeneralMidiInstrumentLibrary();
-
-    private static bool registered;
 
     private GeneralMidiInstrumentLibrary()
     {
@@ -74,11 +70,11 @@ public sealed class GeneralMidiInstrumentLibrary : IInstrumentLibrary
     /// </summary>
     public static GeneralMidiInstrumentLibrary Instance => Shared;
 
-    /// <summary>Whether <see cref="Register" /> has run.</summary>
-    public static bool IsRegistered
-    {
-        get { lock (Gate) { return registered; } }
-    }
+    /// <summary>
+    /// Whether this library is currently in <see cref="InstrumentLibraryRegistry" /> - true after
+    /// <see cref="Register" /> has run, and false again if a test has reset the registry.
+    /// </summary>
+    public static bool IsRegistered => InstrumentLibraryRegistry.IsRegistered(LibraryName);
 
     /// <inheritdoc />
     public string Name => LibraryName;
@@ -124,13 +120,9 @@ public sealed class GeneralMidiInstrumentLibrary : IInstrumentLibrary
     /// </remarks>
     public static void Register()
     {
-        lock (Gate)
-        {
-            if (registered) { return; }
-
-            InstrumentLibraryRegistry.Register(Shared);
-            registered = true;
-        }
+        // No flag of its own: the registry treats the same instance registered twice as a no-op, and a
+        // flag here would wrongly keep Register() silent after a test has reset the registry.
+        InstrumentLibraryRegistry.Register(Shared);
     }
 
     /// <inheritdoc />
