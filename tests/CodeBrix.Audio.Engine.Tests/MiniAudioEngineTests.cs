@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Threading;
 using CodeBrix.Audio.Engine.Backends.MiniAudio;
 using CodeBrix.Audio.Engine.Components;
@@ -26,6 +28,15 @@ public class MiniAudioEngineTests
     /// It is skipped by default because it opens an actual audio device and emits sound.
     /// </summary>
     private const string PlaybackEnvVar = "CODEBRIX_AUDIO_ENGINE_RUN_PLAYBACK_TESTS";
+
+    private const int S_FALSE = 1;
+    private const uint COINIT_APARTMENTTHREADED = 0x2;
+
+    [DllImport("ole32.dll")]
+    private static extern int CoInitializeEx(IntPtr reserved, uint coInit);
+
+    [DllImport("ole32.dll")]
+    private static extern void CoUninitialize();
 
     [Fact]
     public void AvailableBackends_is_not_empty_on_this_platform() =>
@@ -91,5 +102,44 @@ public class MiniAudioEngineTests
 
         //Assert
         player.Should().NotBeNull();
+    }
+
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void Disposing_on_another_thread_leaves_that_threads_COM_apartment_intact()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "COM apartments exist only on Windows.");
+
+        //Arrange: create the engine on one thread (a game loop, say)...
+        MiniAudioEngine engine = null;
+        var creator = new Thread(() => engine = new MiniAudioEngine());
+        creator.Start();
+        creator.Join();
+
+        //Act: ...and dispose it on a UI-style STA thread.
+        var result = 0;
+        Exception failure = null;
+        var disposer = new Thread(() =>
+        {
+            try
+            {
+                engine.Dispose();
+                // S_FALSE: this thread's STA is still initialized. S_OK would mean the dispose
+                // uninitialized COM here, tearing the apartment down under the thread's own objects.
+                result = CoInitializeEx(IntPtr.Zero, COINIT_APARTMENTTHREADED);
+                if (result >= 0) CoUninitialize();
+            }
+            catch (Exception e)
+            {
+                failure = e;
+            }
+        });
+        disposer.SetApartmentState(ApartmentState.STA);
+        disposer.Start();
+        disposer.Join();
+
+        //Assert
+        failure.Should().BeNull();
+        result.Should().Be(S_FALSE);
     }
 }

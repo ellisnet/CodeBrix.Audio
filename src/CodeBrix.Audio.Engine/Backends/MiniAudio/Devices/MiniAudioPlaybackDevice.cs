@@ -63,7 +63,7 @@ internal sealed class MiniAudioPlaybackDevice : AudioPlaybackDevice
         if (device.Format.Format == SampleFormat.F32)
         {
             var buffer = Extensions.GetSpan<float>(pOutput, length);
-            ProcessAndFillBuffer(buffer, device.Format.Channels);
+            RenderOutput(buffer, device.Format.Channels);
             return;
         }
 
@@ -74,7 +74,7 @@ internal sealed class MiniAudioPlaybackDevice : AudioPlaybackDevice
             var buffer = tempBuffer.AsSpan(0, length);
             
             // 1. Generate the audio signal into our temporary float buffer.
-            ProcessAndFillBuffer(buffer, device.Format.Channels);
+            RenderOutput(buffer, device.Format.Channels);
 
             // 2. Convert the float buffer to the device's native format.
             DeviceBufferHelper.ConvertToDeviceFormat(buffer, pOutput, length, device.Format.Format);
@@ -83,21 +83,5 @@ internal sealed class MiniAudioPlaybackDevice : AudioPlaybackDevice
         {
             ArrayPool<float>.Shared.Return(tempBuffer);
         }
-    }
-    
-    /// <summary>
-    /// Fills the provided buffer with audio by processing the master mixer or a soloed component.
-    /// </summary>
-    /// <param name="buffer">The buffer to fill with audio data.</param>
-    /// <param name="channels">The number of channels to process.</param>
-    private void ProcessAndFillBuffer(Span<float> buffer, int channels)
-    {
-        buffer.Clear();
-
-        var soloedComponent = Engine.GetSoloedComponent();
-        if (soloedComponent != null)
-            soloedComponent.Process(buffer, channels);
-        else
-            MasterMixer.Process(buffer, channels);
     }
 }

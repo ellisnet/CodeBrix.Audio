@@ -2547,7 +2547,7 @@ policy - there is nothing special about this code that should discourage
 modifying it going forward.
 
 DELIBERATE DIVERGENCES FROM UPSTREAM SOUNDFLOW - nine changes made during the
-vendoring, recorded here for provenance:
+vendoring and one since, recorded here for provenance:
 
   1. Namespace rename SoundFlow.* -> CodeBrix.Audio.Engine.*, with the
      `//was previously:` provenance comment on each namespace line.
@@ -2644,6 +2644,24 @@ vendoring, recorded here for provenance:
      tests/CodeBrix.Audio.Engine.Tests/ProviderLengthFallbackTests.cs pins both,
      forcing the path with a test codec that decodes normally but reports a
      length of 0 (LengthlessCodec.cs).
+
+ 10. MiniAudioEngine runs ma_context_init and ma_context_uninit on one dedicated
+     thread on Windows (MiniAudioContextThread.cs); other platforms run them
+     inline as before. miniaudio's Win32 context init calls CoInitializeEx on the
+     CALLING thread and its uninit calls CoUninitialize on ITS calling thread
+     whenever the init succeeded - its own source marks this a TODO until 0.12. So
+     an engine created on one thread and disposed on another unbalanced COM on the
+     disposing thread. That is exactly SharedAudioOutput's lifecycle in a game: the
+     first sound played from a game-loop thread starts the output, and the UI
+     thread later calls Shutdown. On an STA UI thread the stray CoUninitialize
+     tears the apartment down, and every COM-based component in the process breaks
+     from then on - found as WebView2 never starting again after a Doom.Brix game
+     session. Only the context pair moved; device init, enumeration and teardown
+     still run on the caller's thread and do not depend on it (miniaudio balances
+     its own COM per call there, and .NET threads are MTA by default).
+     tests/CodeBrix.Audio.Engine.Tests/MiniAudioEngineTests.cs pins it: an engine
+     created on one thread and disposed on an STA thread must leave that thread's
+     apartment initialized.
 
 
 WHAT MAY BE READ WHEN PORTING, AND WHAT MAY BE TAKEN

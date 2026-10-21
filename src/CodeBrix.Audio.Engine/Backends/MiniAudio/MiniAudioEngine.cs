@@ -162,8 +162,9 @@ public class MiniAudioEngine : AudioEngine
 
         try
         {
-            // Use the marshaled pointer and count in the native call.
-            var result = Native.ContextInit(pBackends, backendCount, nint.Zero, _context);
+            // Use the marshaled pointer and count in the native call. On the context thread, so the
+            // COM initialization it makes on Windows is undone on the same thread (see CleanupBackend).
+            var result = MiniAudioContextThread.Invoke(() => Native.ContextInit(pBackends, backendCount, nint.Zero, _context));
             if (result != MiniAudioResult.Success)
                 throw new InvalidOperationException($"Unable to init MiniAudio context. Result: {result}");
 
@@ -191,7 +192,9 @@ public class MiniAudioEngine : AudioEngine
 
         _activeDevices.Clear();
 
-        Native.ContextUninit(_context);
+        // Must run on the thread that ran ContextInit: on Windows it calls CoUninitialize, and on any
+        // other thread that would strip that thread's own COM apartment.
+        MiniAudioContextThread.Invoke(() => Native.ContextUninit(_context));
         Native.Free(_context);
     }
 

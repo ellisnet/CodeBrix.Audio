@@ -1215,6 +1215,9 @@ Playback (cross-platform, via the bundled engine):
                             PacketAudioPlayer mix into. Optional: Configure(sampleRate
                             [, channels]) once at start to pin the format; Shutdown() to
                             release it.
+                            The first sound may start it on any thread (a game loop, say)
+                            and Shutdown may run on another (the UI thread): neither
+                            changes the calling thread's COM state on Windows.
 
 BACKGROUND FILE PLAYBACK
   AudioFilePlayer keeps its ordinary Load/Play/Pause/Stop/Seek/IsLooping API.
@@ -1248,6 +1251,26 @@ BACKGROUND FILE PLAYBACK
   later decode errors reach the backend's render-error handling. No codec is
   silently replaced and corrupt audio is not treated as successful EOF.
   AudioFilePlayer.Load(stream, leaveOpen: true) leaves the caller's stream open.
+
+SILENT OUTPUT (TESTS, CI)
+  Turn on the AppContext switch "CodeBrix.Audio.Muted" and every playback device
+  created from then on writes silence. Nothing else changes: players advance,
+  events fire, a game's music keeps its timing, and the device still opens and
+  runs - only the speakers hear nothing.
+
+    AppContext.SetSwitch("CodeBrix.Audio.Muted", true);   // before audio starts
+
+  or, without code, in the test project:
+
+    <ItemGroup>
+      <RuntimeHostConfigurationOption Include="CodeBrix.Audio.Muted" Value="true" />
+    </ItemGroup>
+
+  The switch is read when a device is created, so set it before the first sound
+  (for SharedAudioOutput, before it starts or after a Shutdown). The name is also
+  the constant AudioPlaybackDevice.MutedSwitchName, and a device reports what it
+  read as AudioPlaybackDevice.IsOutputMuted. CodeBrix.Platform PlayTests turn the
+  switch on for every test run unless the run opts into sound.
 
 CONFIGURING AND OBSERVING THE ACTUAL SHARED OUTPUT
   SharedAudioOutput has optional, platform-neutral startup hooks. Register
